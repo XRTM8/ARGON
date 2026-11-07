@@ -1,24 +1,25 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Otium Downloader",
-  "version": "1.5.0",
+  "productName": "ARGON",
+  "mainBinaryName": "ARGON",
+  "version": "2.0.0",
   "identifier": "com.otium.downloader",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5174",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run prepare:tools && npm run dev",
+    "beforeBuildCommand": "npm run prepare:tools && npm run build"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "Otium Downloader",
+        "title": "ARGON",
         "url": "index.html",
-        "width": 980,
-        "height": 720,
-        "minWidth": 460,
-        "minHeight": 500,
+        "width": 1180,
+        "height": 820,
+        "minWidth": 360,
+        "minHeight": 600,
         "center": true,
         "resizable": true,
         "fullscreen": false
@@ -53,13 +54,17 @@
         "installMode": "currentUser"
       }
     },
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": false,
+    "resources": {
+      "../browser-extension/": "browser-extension/",
+      "tools/": "tools/"
+    }
   },
   "plugins": {
     "opener": {},
     "updater": {
       "endpoints": [
-        "https://github.com/XRTM8/Otium-Downloader/releases/latest/download/latest.json"
+        "https://github.com/XRTM8/ARGON/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY0MjQ2RTRENjMyMDE4RUMKUldUc0dDQmpUVzRrWkNnc3J5VS9mVTFIdVlMMVpUU2hUZWRlSHRaRE5BVnJoeG13aCtkUGNtOHEK",
       "windows": {

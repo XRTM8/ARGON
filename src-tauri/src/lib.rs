@@ -1,34 +1,34 @@
-use futures_util::StreamExt;
+mod bridge;
+mod flow;
+#[cfg(target_os = "android")]
+mod flow_mobile;
+mod media;
+mod transfer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
 pub const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 OtiumDownloader/1.2 (+https://github.com/XRTM8/Otium-Downloader)";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 ARGON/1.5 (+https://github.com/XRTM8/ARGON)";
 
 #[derive(Default)]
 pub struct TaskManager {
     cancellations: RwLock<HashMap<String, Arc<AtomicBool>>>,
     speed_limit_bytes_per_sec: AtomicU64,
+    frontend_ready: AtomicBool,
+    next_transfer: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl TaskManager {
     pub async fn get_or_create_token(&self, task_id: &str) -> Arc<AtomicBool> {
         let mut map = self.cancellations.write().await;
         if let Some(token) = map.get(task_id) {
-            if token.load(Ordering::Relaxed) {
-                let new_token = Arc::new(AtomicBool::new(false));
-                map.insert(task_id.to_string(), new_token.clone());
-                return new_token;
-            }
             token.clone()
         } else {
             let token = Arc::new(AtomicBool::new(false));
@@ -38,10 +38,10 @@ impl TaskManager {
     }
 
     pub async fn cancel(&self, task_id: &str) {
-        let map = self.cancellations.read().await;
-        if let Some(token) = map.get(task_id) {
-            token.store(true, Ordering::Relaxed);
-        }
+        let mut map = self.cancellations.write().await;
+        map.entry(task_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(true)))
+            .store(true, Ordering::Relaxed);
     }
 
     pub async fn remove(&self, task_id: &str) {
@@ -49,8 +49,25 @@ impl TaskManager {
         map.remove(task_id);
     }
 
+    pub async fn throttle(&self, bytes: u64) {
+        let limit = self.get_speed_limit();
+        if limit == 0 {
+            return;
+        }
+        let until = {
+            let mut next = self.next_transfer.lock().await;
+            let now = tokio::time::Instant::now();
+            let until = next.unwrap_or(now).max(now)
+                + std::time::Duration::from_secs_f64(bytes as f64 / limit as f64);
+            *next = Some(until);
+            until
+        };
+        tokio::time::sleep_until(until).await;
+    }
+
     pub fn set_speed_limit(&self, bytes: u64) {
-        self.speed_limit_bytes_per_sec.store(bytes, Ordering::Relaxed);
+        self.speed_limit_bytes_per_sec
+            .store(bytes, Ordering::Relaxed);
     }
 
     pub fn get_speed_limit(&self) -> u64 {
@@ -72,7 +89,10 @@ pub fn sanitize_filename(raw: &str) -> String {
     let mut sanitized: String = clean_name
         .chars()
         .map(|c| {
-            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') {
+            if matches!(
+                c,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f'
+            ) {
                 '_'
             } else {
                 c
@@ -88,12 +108,35 @@ pub fn sanitize_filename(raw: &str) -> String {
     sanitized = trimmed.to_string();
 
     // 4. Guard against Windows reserved names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
-    let stem = sanitized.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let stem = sanitized
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
     let is_reserved = matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     );
 
     if is_reserved {
@@ -173,6 +216,8 @@ pub struct UrlProbeResult {
     pub accept_ranges: bool,
     pub content_type: Option<String>,
     pub suggested_filename: Option<String>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,100 +235,88 @@ async fn probe_url(
     url: String,
     custom_headers: Option<HashMap<String, String>>,
 ) -> Result<UrlProbeResult, String> {
-    let trimmed_url = url.trim();
-    if !trimmed_url.starts_with("http://") && !trimmed_url.starts_with("https://") {
-        return Err("Only HTTP and HTTPS URLs are allowed".to_string());
+    probe_resource(&url, &custom_headers).await
+}
+
+async fn probe_resource(
+    url: &str,
+    custom: &Option<HashMap<String, String>>,
+) -> Result<UrlProbeResult, String> {
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "Invalid URL")?;
+    if !["http", "https"].contains(&parsed.scheme()) {
+        return Err("Only HTTP and HTTPS URLs are allowed".into());
     }
-
-    let client = reqwest::Client::builder()
-        .user_agent(DEFAULT_USER_AGENT)
-        .redirect(reqwest::redirect::Policy::limited(15))
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .timeout(std::time::Duration::from_secs(10))
-        .tcp_keepalive(Some(std::time::Duration::from_secs(15)))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let mut head_req = client.head(trimmed_url);
-    let mut get_req = client.get(trimmed_url).header(reqwest::header::RANGE, "bytes=0-0");
-
-    if let Some(ref map) = custom_headers {
-        for (k, v) in map {
-            if let (Ok(hname), Ok(hval)) = (
-                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                reqwest::header::HeaderValue::from_str(v),
-            ) {
-                head_req = head_req.header(hname.clone(), hval.clone());
-                get_req = get_req.header(hname, hval);
-            }
-        }
+    let client = transfer::client()?;
+    let headers = transfer::headers(custom)?;
+    // Verify range support with GET; Accept-Ranges on HEAD is often inaccurate.
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        client
+            .get(parsed)
+            .headers(headers)
+            .header(reqwest::header::RANGE, "bytes=0-0")
+            .send(),
+    )
+    .await
+    .map_err(|_| "URL probe timed out")?
+    .map_err(|e| format!("URL probe failed: {e}"))?;
+    let empty = response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+        && response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            == Some("bytes */0");
+    if !response.status().is_success() && !empty {
+        return Err(format!("Server returned HTTP {}", response.status()));
     }
-
-    let response = match head_req.send().await {
-        Ok(res) if res.status().is_success() => res,
-        _ => match get_req.send().await {
-            Ok(res) if res.status().is_success() => res,
-            _ => {
-                let mut fallback_get = client.get(trimmed_url);
-                if let Some(ref map) = custom_headers {
-                    for (k, v) in map {
-                        if let (Ok(hname), Ok(hval)) = (
-                            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                            reqwest::header::HeaderValue::from_str(v),
-                        ) {
-                            fallback_get = fallback_get.header(hname, hval);
-                        }
-                    }
-                }
-                fallback_get.send().await.map_err(|e| e.to_string())?
-            }
-        },
-    };
-
-    let final_url = response.url().clone();
-    let headers = response.headers();
-
-    let accept_ranges = headers
-        .get(reqwest::header::ACCEPT_RANGES)
+    let h = response.headers();
+    let range = h
+        .get(reqwest::header::CONTENT_RANGE)
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_ascii_lowercase().contains("bytes"))
-        .unwrap_or(false)
-        || headers.contains_key(reqwest::header::CONTENT_RANGE);
-
-    let content_length = if let Some(cr) = headers.get(reqwest::header::CONTENT_RANGE) {
-        cr.to_str()
-            .ok()
-            .and_then(|s| s.split('/').last())
-            .and_then(|s| s.parse::<u64>().ok())
+        .and_then(transfer::content_range);
+    let accept_ranges = response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        && range.is_some_and(|(start, end, _)| start == 0 && end == 0);
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT && !accept_ranges {
+        return Err("Invalid probe Content-Range".into());
+    }
+    let content_length = if empty {
+        Some(0)
+    } else if accept_ranges {
+        range.map(|(_, _, total)| total)
     } else {
         response.content_length()
     };
-
-    let content_type = headers
+    let content_type = h
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(String::from);
-
-    let mut suggested_filename = headers
+        .map(str::to_owned);
+    let suggested_filename = h
         .get(reqwest::header::CONTENT_DISPOSITION)
         .and_then(|v| v.to_str().ok())
-        .and_then(parse_content_disposition_filename);
-
-    // Fallback: If no Content-Disposition header, inspect the final redirected URL path
-    if suggested_filename.is_none() {
-        let path = final_url.path();
-        let last_seg = path.split('/').filter(|s| !s.is_empty()).last().unwrap_or("");
-        if !last_seg.is_empty() && last_seg.contains('.') {
-            let decoded = percent_decode(last_seg);
-            suggested_filename = Some(sanitize_filename(&decoded));
-        }
-    }
-
+        .and_then(parse_content_disposition_filename)
+        .or_else(|| {
+            response
+                .url()
+                .path_segments()?
+                .filter(|s| !s.is_empty())
+                .next_back()
+                .filter(|s| s.contains('.'))
+                .map(|s| sanitize_filename(&percent_decode(s)))
+        });
     Ok(UrlProbeResult {
         content_length,
         accept_ranges,
         content_type,
         suggested_filename,
+        etag: h
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.starts_with("W/"))
+            .map(str::to_owned),
+        last_modified: h
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned),
     })
 }
 
@@ -300,7 +333,9 @@ pub fn get_resolved_download_dir(app: &AppHandle) -> std::path::PathBuf {
     #[cfg(target_os = "android")]
     {
         // 1. Android external files directory: always writable without MANAGE_EXTERNAL_STORAGE
-        let ext_dir = std::path::PathBuf::from("/storage/emulated/0/Android/data/com.otium.downloader/files/Download");
+        let ext_dir = std::path::PathBuf::from(
+            "/storage/emulated/0/Android/data/com.otium.downloader/files/Download",
+        );
         if std::fs::create_dir_all(&ext_dir).is_ok() {
             let test_probe = ext_dir.join(".otium_write_probe");
             if std::fs::write(&test_probe, b"ok").is_ok() {
@@ -362,7 +397,9 @@ pub fn resolve_destination_path(app: &AppHandle, dest: &str) -> std::path::PathB
     #[cfg(target_os = "android")]
     {
         // On Android, always extract the leaf file name and place inside the verified writable base!
-        let fname = p.file_name().unwrap_or_else(|| std::ffi::OsStr::new("download.bin"));
+        let fname = p
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("download.bin"));
         base.join(fname)
     }
 
@@ -380,8 +417,46 @@ pub fn resolve_destination_path(app: &AppHandle, dest: &str) -> std::path::PathB
 #[tauri::command]
 async fn get_default_download_directory(app: AppHandle) -> Result<String, String> {
     let path = get_resolved_download_dir(&app);
-    let _ = tokio::fs::create_dir_all(&path).await;
+    tokio::fs::create_dir_all(&path)
+        .await
+        .map_err(|e| format!("Download folder unavailable: {e}"))?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn validate_download_directory(directory: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(directory.trim());
+    if !path.is_absolute() {
+        return Err("أدخل مسار مجلد كاملًا، مثل C:\\Downloads".into());
+    }
+    #[cfg(target_os = "android")]
+    {
+        return Err("تغيير مجلد الحفظ غير متاح على Android في هذا الإصدار".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        tokio::fs::create_dir_all(&path)
+            .await
+            .map_err(|e| format!("Cannot create directory: {e}"))?;
+        let test = path.join(format!(
+            ".argon-write-check-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&test)
+            .await
+            .map_err(|e| format!("Download directory is not writable: {e}"))?;
+        drop(file);
+        tokio::fs::remove_file(&test)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    }
 }
 
 #[tauri::command]
@@ -389,33 +464,73 @@ async fn prepare_download_file(
     app: AppHandle,
     destination_path: String,
     total_bytes: u64,
+    fresh: bool,
+    reset: bool,
 ) -> Result<String, String> {
-    let target = resolve_destination_path(&app, &destination_path);
+    let mut target = resolve_destination_path(&app, &destination_path);
     if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Cannot create download folder: {e}"))?;
+    }
+    let file = if fresh {
+        let original = target.clone();
+        let stem = original.file_stem().unwrap_or_default().to_string_lossy();
+        let ext = original
+            .extension()
+            .map(|v| format!(".{}", v.to_string_lossy()))
+            .unwrap_or_default();
+        let mut attempt = 0;
+        loop {
+            match tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
                 .await
-                .map_err(|e| format!("Failed to create folder structure: {}", e))?;
+            {
+                Ok(file) => break file,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    attempt += 1;
+                    target = original.with_file_name(format!("{stem} ({attempt}){ext}"));
+                }
+                Err(e) => return Err(format!("Cannot create destination: {e}")),
+            }
         }
+    } else {
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .await
+            .map_err(|e| format!("Cannot resume destination (restart the download): {e}"))?
+    };
+    if fresh || reset {
+        file.set_len(total_bytes)
+            .await
+            .map_err(|e| format!("Cannot allocate download file: {e}"))?;
+    } else if file.metadata().await.map_err(|e| e.to_string())?.len() != total_bytes {
+        return Err("Local file size changed; restart the download".into());
     }
+    Ok(target.to_string_lossy().into_owned())
+}
 
-    let mut std_opts = std::fs::OpenOptions::new();
-    std_opts.create(true).write(true).truncate(false);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        std_opts.share_mode(1 | 2 | 4);
+#[tauri::command]
+async fn validate_download_file(file_path: String, expected_bytes: u64) -> Result<(), String> {
+    let size = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|e| e.to_string())?
+        .len();
+    if size != expected_bytes {
+        return Err(format!(
+            "Incomplete file: expected {expected_bytes} bytes, saved {size}"
+        ));
     }
-    let std_file = std_opts
-        .open(&target)
-        .map_err(|e| format!("Failed to open or create file: {}", e))?;
-    let file = tokio::fs::File::from_std(std_file);
+    Ok(())
+}
 
-    if total_bytes > 0 {
-        let _ = file.set_len(total_bytes).await;
-    }
-
-    Ok(target.to_string_lossy().to_string())
+#[tauri::command]
+async fn set_browser_bridge_ready(state: tauri::State<'_, Arc<TaskManager>>) -> Result<(), String> {
+    state.frontend_ready.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -448,273 +563,33 @@ async fn download_segment(
     current_downloaded: u64,
     segment_index: u32,
     custom_headers: Option<HashMap<String, String>>,
-) -> Result<(), String> {
+    use_range: bool,
+    expected_total: Option<u64>,
+    validator: Option<String>,
+) -> Result<transfer::TransferResult, String> {
     let token = state.get_or_create_token(&task_id).await;
-    let target_path = resolve_destination_path(&app, &destination_path);
-
-    if let Some(parent) = target_path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    let is_open_stream = (start_byte == 0 && end_byte == 0) || end_byte <= start_byte;
-    let total_segment_bytes = if is_open_stream {
-        0
-    } else {
-        end_byte.saturating_sub(start_byte) + 1
-    };
-
-    let mut downloaded = current_downloaded;
-
-    // If bounded and already completely downloaded
-    if !is_open_stream && total_segment_bytes > 0 && downloaded >= total_segment_bytes {
-        let _ = app.emit(
-            "download-progress",
-            SegmentProgressEvent {
-                task_id,
-                segment_index,
-                delta_bytes: 0,
-                downloaded_bytes: total_segment_bytes,
-                total_bytes: total_segment_bytes,
-                is_finished: true,
-            },
-        );
-        return Ok(());
-    }
-
-    let trimmed_url = url.trim();
-    if !trimmed_url.starts_with("http://") && !trimmed_url.starts_with("https://") {
-        return Err("Only HTTP and HTTPS URLs are allowed".to_string());
-    }
-
-    let client = reqwest::Client::builder()
-        .user_agent(DEFAULT_USER_AGENT)
-        .redirect(reqwest::redirect::Policy::limited(15))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(60))
-        .tcp_keepalive(Some(std::time::Duration::from_secs(15)))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let mut std_opts = std::fs::OpenOptions::new();
-    std_opts.create(true).write(true).truncate(false);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        std_opts.share_mode(1 | 2 | 4);
-    }
-    let std_file = std_opts
-        .open(&target_path)
-        .map_err(|e| format!("Failed to open destination: {}", e))?;
-    let mut file = tokio::fs::File::from_std(std_file);
-
-    let mut retries = 0;
-    const MAX_RETRIES: u32 = 5;
-    let mut last_emit = std::time::Instant::now();
-    let mut last_emitted_downloaded = downloaded;
-    let mut known_total_bytes = total_segment_bytes;
-
-    while is_open_stream || downloaded < total_segment_bytes {
-        if token.load(Ordering::Relaxed) {
-            let _ = file.flush().await;
-            return Ok(());
-        }
-
-        let actual_start = start_byte + downloaded;
-        let mut req = client.get(&url);
-
-        if !is_open_stream {
-            let range_header = format!("bytes={}-{}", actual_start, end_byte);
-            req = req.header(reqwest::header::RANGE, range_header);
-        } else if downloaded > 0 {
-            let range_header = format!("bytes={}-", downloaded);
-            req = req.header(reqwest::header::RANGE, range_header);
-        }
-
-        if let Some(ref map) = custom_headers {
-            for (k, v) in map {
-                if let (Ok(hname), Ok(hval)) = (
-                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                    reqwest::header::HeaderValue::from_str(v),
-                ) {
-                    req = req.header(hname, hval);
-                }
-            }
-        }
-
-        let res = req.send().await;
-
-        let response = match res {
-            Ok(resp) => resp,
-            Err(e) => {
-                retries += 1;
-                if retries > MAX_RETRIES || token.load(Ordering::Relaxed) {
-                    return Err(format!("Network connect failed after {} retries: {}", retries - 1, e));
-                }
-                let backoff_ms = 500 * (1u64 << retries.min(5));
-                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                continue;
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            // If segment > 0 returns 416 (file smaller than chunk count), it's completed
-            if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && segment_index > 0 {
-                return Ok(());
-            }
-            return Err(format!("Server returned HTTP {}", status));
-        }
-
-        // If server returns 200 OK (no range support or full file returned)
-        let is_status_200 = status == reqwest::StatusCode::OK;
-        if is_status_200 {
-            if segment_index > 0 {
-                // Segment 0 will download the full body, secondary segments simply exit cleanly
-                return Ok(());
-            }
-            // Segment 0: seek to 0 and stream entire file
-            let _ = file.seek(SeekFrom::Start(0)).await;
-            downloaded = 0;
-            if let Some(cl) = response.content_length() {
-                known_total_bytes = cl;
-            }
-        } else {
-            // Seek to resume offset
-            if let Err(e) = file.seek(SeekFrom::Start(actual_start)).await {
-                return Err(format!("Failed to seek offset: {}", e));
-            }
-            if known_total_bytes == 0 {
-                if let Some(cl) = response.content_length() {
-                    known_total_bytes = downloaded + cl;
-                }
-            }
-        }
-
-        let mut stream = response.bytes_stream();
-        let mut stream_error = false;
-
-        loop {
-            if token.load(Ordering::Relaxed) {
-                let _ = file.flush().await;
-                return Ok(());
-            }
-
-            let next_step = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next()).await;
-            let chunk_result = match next_step {
-                Ok(Some(item)) => item,
-                Ok(None) => break, // Clean EOF
-                Err(_) => {
-                    log::warn!("Stream stalled on segment {} (no data for 30s)", segment_index);
-                    stream_error = true;
-                    break;
-                }
-            };
-
-            match chunk_result {
-                Ok(chunk) => {
-                    let chunk_len = chunk.len() as u64;
-                    let bytes_to_write = if !is_open_stream && !is_status_200 {
-                        let remaining = total_segment_bytes.saturating_sub(downloaded);
-                        if remaining == 0 {
-                            break;
-                        }
-                        (chunk_len.min(remaining)) as usize
-                    } else {
-                        chunk_len as usize
-                    };
-
-                    if bytes_to_write > 0 {
-                        if let Err(e) = file.write_all(&chunk[..bytes_to_write]).await {
-                            return Err(format!("Disk write error: {}", e));
-                        }
-                        downloaded += bytes_to_write as u64;
-                    }
-
-                    // Speed limit pacing if configured
-                    let limit = state.get_speed_limit();
-                    if limit > 0 {
-                        let delay_ms = ((bytes_to_write as u64) * 1000) / limit;
-                        if delay_ms > 0 {
-                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms.min(300))).await;
-                        }
-                    }
-
-                    // Throttle IPC events to at most once every 100ms
-                    if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
-                        let delta = downloaded.saturating_sub(last_emitted_downloaded);
-                        last_emitted_downloaded = downloaded;
-                        last_emit = std::time::Instant::now();
-
-                        let emit_total = if known_total_bytes > 0 {
-                            known_total_bytes
-                        } else if total_segment_bytes > 0 {
-                            total_segment_bytes
-                        } else {
-                            downloaded
-                        };
-
-                        let _ = app.emit(
-                            "download-progress",
-                            SegmentProgressEvent {
-                                task_id: task_id.clone(),
-                                segment_index,
-                                delta_bytes: delta,
-                                downloaded_bytes: downloaded,
-                                total_bytes: emit_total,
-                                is_finished: false,
-                            },
-                        );
-                    }
-
-                    if !is_open_stream && !is_status_200 && downloaded >= total_segment_bytes {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Stream interrupted on segment {}: {}", segment_index, e);
-                    stream_error = true;
-                    break;
-                }
-            }
-        }
-
-        let _ = file.flush().await;
-
-        if stream_error {
-            retries += 1;
-            if retries > MAX_RETRIES || token.load(Ordering::Relaxed) {
-                return Err(format!("Stream aborted on segment {} after {} retries", segment_index, retries));
-            }
-            let backoff_ms = 500 * (1u64 << retries.min(5));
-            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-            continue;
-        }
-
-        break;
-    }
-
-    let final_delta = downloaded.saturating_sub(last_emitted_downloaded);
-    let final_total = if known_total_bytes > 0 {
-        known_total_bytes
-    } else if total_segment_bytes > 0 {
-        total_segment_bytes
-    } else {
-        downloaded
-    };
-
-    let _ = app.emit(
-        "download-progress",
-        SegmentProgressEvent {
-            task_id,
+    let path = resolve_destination_path(&app, &destination_path);
+    transfer::download(
+        transfer::Transfer {
+            task_id: &task_id,
+            url: &url,
+            path: &path,
+            start: start_byte,
+            end: end_byte,
+            downloaded: current_downloaded,
             segment_index,
-            delta_bytes: final_delta,
-            downloaded_bytes: downloaded,
-            total_bytes: final_total,
-            is_finished: true,
+            use_range,
+            expected_total,
+            validator: validator.as_deref(),
+            custom_headers: &custom_headers,
         },
-    );
-
-    Ok(())
+        &state,
+        token,
+        |payload| {
+            let _ = app.emit("download-progress", payload);
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -766,9 +641,22 @@ async fn open_file_item(app: AppHandle, file_path: String) -> Result<(), String>
         return Err("File does not exist on disk".to_string());
     }
     let target_str = target.to_string_lossy().to_string();
-    app.opener()
-        .open_path(&target_str, None::<&str>)
-        .map_err(|e| e.to_string())
+    #[cfg(not(target_os = "android"))]
+    {
+        app.opener()
+            .open_path(&target_str, None::<&str>)
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "android")]
+    {
+        flow_mobile::call::<serde_json::Value>(
+            app,
+            "openFile",
+            serde_json::json!({"path":target_str}),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -808,18 +696,26 @@ async fn delete_file_item(app: AppHandle, file_path: String) -> Result<(), Strin
     }
 
     // Must be in download dir or user home directory
-    let is_in_download = app.path().download_dir().ok()
+    let is_in_download = app
+        .path()
+        .download_dir()
+        .ok()
         .and_then(|d| d.canonicalize().ok())
         .map(|d| canonical_target.starts_with(&d))
         .unwrap_or(false);
 
-    let is_in_home = app.path().home_dir().ok()
+    let is_in_home = app
+        .path()
+        .home_dir()
+        .ok()
         .and_then(|h| h.canonicalize().ok())
         .map(|h| canonical_target.starts_with(&h))
         .unwrap_or(false);
 
     if !is_in_download && !is_in_home {
-        return Err("Security violation: target file is outside user allowed directories".to_string());
+        return Err(
+            "Security violation: target file is outside user allowed directories".to_string(),
+        );
     }
 
     tokio::fs::remove_file(canonical_target)
@@ -858,15 +754,16 @@ fn start_browser_bridge(app_handle: AppHandle) {
 
             let app = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                let mut buf = vec![0u8; 8192];
-                let n = match socket.read(&mut buf).await {
-                    Ok(n) if n > 0 => n,
-                    _ => return,
+                use tokio::io::AsyncWriteExt;
+                let request = match bridge::read_request(&mut socket).await {
+                    Ok(request) => request,
+                    Err(_) => {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                            .await;
+                        return;
+                    }
                 };
-
-                let request = String::from_utf8_lossy(&buf[..n]);
-
                 // Extract Origin and Client headers
                 let origin_header = request
                     .lines()
@@ -876,7 +773,10 @@ fn start_browser_bridge(app_handle: AppHandle) {
                 let client_header = request
                     .lines()
                     .find(|line| line.to_ascii_lowercase().starts_with("x-otium-client:"))
-                    .map(|line| line[16..].trim().to_string());
+                    .and_then(|line| {
+                        line.split_once(':')
+                            .map(|(_, value)| value.trim().to_owned())
+                    });
 
                 // Reject all web origins (Anti-CSRF / Drive-by download prevention)
                 if let Some(ref orig) = origin_header {
@@ -898,9 +798,13 @@ fn start_browser_bridge(app_handle: AppHandle) {
                 // Handle CORS preflight
                 if request.starts_with("OPTIONS") {
                     let allowed_origin = match origin_header.as_deref() {
-                        Some(orig) if orig.starts_with("chrome-extension://")
-                            || orig.starts_with("moz-extension://")
-                            || orig.starts_with("safari-web-extension://") => orig,
+                        Some(orig)
+                            if orig.starts_with("chrome-extension://")
+                                || orig.starts_with("moz-extension://")
+                                || orig.starts_with("safari-web-extension://") =>
+                        {
+                            orig
+                        }
                         _ => {
                             let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
                             let _ = socket.write_all(response.as_bytes()).await;
@@ -923,9 +827,11 @@ fn start_browser_bridge(app_handle: AppHandle) {
 
                 // Echo origin if it is an extension, or omit if none
                 let cors_origin_str = match origin_header.as_deref() {
-                    Some(orig) if orig.starts_with("chrome-extension://")
-                        || orig.starts_with("moz-extension://")
-                        || orig.starts_with("safari-web-extension://") => {
+                    Some(orig)
+                        if orig.starts_with("chrome-extension://")
+                            || orig.starts_with("moz-extension://")
+                            || orig.starts_with("safari-web-extension://") =>
+                    {
                         format!("Access-Control-Allow-Origin: {}\r\n", orig)
                     }
                     _ => String::new(),
@@ -933,7 +839,19 @@ fn start_browser_bridge(app_handle: AppHandle) {
 
                 // Handle GET /ping or GET /status
                 if request.starts_with("GET /ping") || request.starts_with("GET /status") {
-                    let body = r#"{"status":"ok","app":"Otium Downloader","version":"1.3.1"}"#;
+                    if !app
+                        .state::<Arc<TaskManager>>()
+                        .frontend_ready
+                        .load(Ordering::Relaxed)
+                    {
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+                            )
+                            .await;
+                        return;
+                    }
+                    let body = serde_json::json!({"status": "ok", "app": "ARGON", "version": env!("CARGO_PKG_VERSION")}).to_string();
                     let response = format!(
                         "HTTP/1.1 200 OK\r\n\
                         {}Content-Type: application/json\r\n\
@@ -947,12 +865,27 @@ fn start_browser_bridge(app_handle: AppHandle) {
                 }
 
                 // Handle POST /add
-                if request.starts_with("POST /add") {
-                    let is_extension_origin = origin_header.as_deref().map(|o| {
-                        o.starts_with("chrome-extension://")
-                            || o.starts_with("moz-extension://")
-                            || o.starts_with("safari-web-extension://")
-                    }).unwrap_or(false);
+                if request.starts_with("POST /add ") {
+                    if !app
+                        .state::<Arc<TaskManager>>()
+                        .frontend_ready
+                        .load(Ordering::Relaxed)
+                    {
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+                            )
+                            .await;
+                        return;
+                    }
+                    let is_extension_origin = origin_header
+                        .as_deref()
+                        .map(|o| {
+                            o.starts_with("chrome-extension://")
+                                || o.starts_with("moz-extension://")
+                                || o.starts_with("safari-web-extension://")
+                        })
+                        .unwrap_or(false);
 
                     let is_extension_client = client_header.as_deref() == Some("browser-extension");
 
@@ -972,7 +905,9 @@ fn start_browser_bridge(app_handle: AppHandle) {
 
                     if let Some(body_start) = request.find("\r\n\r\n") {
                         let json_part = &request[body_start + 4..];
-                        if let Ok(mut payload) = serde_json::from_str::<BrowserDownloadPayload>(json_part.trim()) {
+                        if let Ok(mut payload) =
+                            serde_json::from_str::<BrowserDownloadPayload>(json_part.trim())
+                        {
                             let url_trim = payload.url.trim();
                             // Validate protocol to prevent file:// or internal protocol abuse
                             if !url_trim.starts_with("http://")
@@ -996,8 +931,12 @@ fn start_browser_bridge(app_handle: AppHandle) {
                                 payload.filename = Some(sanitize_filename(fname));
                             }
 
-                            let _ = app.emit("browser-add-download", payload);
-                            let body = r#"{"status":"accepted","message":"Download queued in Otium"}"#;
+                            if app.emit("browser-add-download", payload).is_err() {
+                                let _ = socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await;
+                                return;
+                            }
+                            let body =
+                                r#"{"status":"accepted","message":"Download queued in ARGON"}"#;
                             let response = format!(
                                 "HTTP/1.1 200 OK\r\n\
                                 {}Content-Type: application/json\r\n\
@@ -1048,7 +987,7 @@ async fn system_shutdown(_cancel: bool) -> Result<(), String> {
             let _ = Command::new("shutdown").args(["/a"]).status();
         } else {
             let _ = Command::new("shutdown")
-                .args(["/s", "/t", "60", "/c", "Otium Downloader: Scheduled shutdown in 60s"])
+                .args(["/s", "/t", "60", "/c", "ARGON: Scheduled shutdown in 60s"])
                 .status();
         }
     }
@@ -1057,10 +996,15 @@ async fn system_shutdown(_cancel: bool) -> Result<(), String> {
 
 #[tauri::command]
 async fn open_browser_extension_dir(app: AppHandle) -> Result<(), String> {
-    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-    let ext_dir = current_dir.join("browser-extension");
+    let ext_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("browser-extension");
     if ext_dir.exists() {
-        app.opener().open_path(ext_dir.to_string_lossy().to_string(), None::<&str>).map_err(|e| e.to_string())
+        app.opener()
+            .open_path(ext_dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| e.to_string())
     } else {
         Err("Browser extension folder not found".to_string())
     }
@@ -1072,8 +1016,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(task_manager)
+        .manage(flow::FlowRuntime::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
+            #[cfg(target_os = "android")]
+            _app.handle().plugin(flow_mobile::init())?;
             #[cfg(desktop)]
             {
                 start_browser_bridge(_app.handle().clone());
@@ -1081,11 +1028,32 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            flow::flow_snapshot,
+            flow::flow_start,
+            flow::flow_stop,
+            flow::flow_connect,
+            flow::flow_pair_peer,
+            flow::flow_confirm_pairing,
+            flow::flow_respond_incoming,
+            flow::flow_revoke_peer,
+            flow::flow_cancel_transfer,
+            flow::flow_send_files,
+            flow::flow_send_text,
+            flow::flow_choose_files,
+            flow::flow_choose_receive_directory,
+            flow::flow_read_clipboard,
+            flow::flow_clean_text,
+            flow::flow_open_received,
+            flow::flow_copy_received,
             probe_url,
             set_global_speed_limit,
             get_default_download_directory,
+            validate_download_directory,
             prepare_download_file,
+            validate_download_file,
+            media::resolve_media,
             cancel_task,
+            set_browser_bridge_ready,
             cleanup_task,
             download_segment,
             verify_file_sha256,
@@ -1095,8 +1063,18 @@ pub fn run() {
             open_browser_extension_dir,
             system_shutdown
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running otium downloader application");
+        .build(tauri::generate_context!())
+        .expect("error while building ARGON")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                tauri::async_runtime::block_on(async {
+                    let engine = app.state::<flow::FlowRuntime>().engine.lock().await.clone();
+                    if let Some(engine) = engine {
+                        engine.stop().await;
+                    }
+                });
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1106,7 +1084,10 @@ mod tests {
     #[test]
     fn test_sanitize_filename_traversal() {
         assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_filename("..\\..\\Windows\\System32\\cmd.exe"), "cmd.exe");
+        assert_eq!(
+            sanitize_filename("..\\..\\Windows\\System32\\cmd.exe"),
+            "cmd.exe"
+        );
         assert_eq!(sanitize_filename("/var/log/syslog"), "syslog");
         assert_eq!(sanitize_filename(".."), "download");
         assert_eq!(sanitize_filename("."), "download");
@@ -1202,9 +1183,9 @@ mod tests {
         tm.cancel("t1").await;
         assert!(t1.load(Ordering::Relaxed));
 
-        // Re-acquiring a cancelled token creates a fresh uncancelled one
+        // A late segment in the same attempt must remain cancelled.
         let t1_fresh = tm.get_or_create_token("t1").await;
-        assert!(!t1_fresh.load(Ordering::Relaxed));
+        assert!(t1_fresh.load(Ordering::Relaxed));
 
         // Cleanup
         tm.remove("t1").await;
@@ -1220,7 +1201,10 @@ mod tests {
         let p = payload.unwrap();
         assert_eq!(p.url, "https://example.com/app.exe");
         assert_eq!(p.filename, Some("app.exe".to_string()));
-        assert_eq!(p.headers.unwrap().get("Referer").unwrap(), "https://example.com/");
+        assert_eq!(
+            p.headers.unwrap().get("Referer").unwrap(),
+            "https://example.com/"
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Otium Downloader Integration",
-  "version": "1.4.3",
-  "description": "Lightning-fast download interception and context-menu accelerator for Otium Downloader.",
+  "name": "ARGON Integration",
+  "version": "2.0.0",
+  "description": "Lightning-fast download interception and context-menu accelerator for ARGON.",
   "author": "XRTM8",
   "permissions": [
     "contextMenus",
@@ -21,7 +21,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Otium Downloader",
+    "default_title": "ARGON",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

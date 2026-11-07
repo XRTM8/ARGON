@@ -1,396 +1,458 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  Globe,
+  Wifi,
+  AlertCircle,
   X,
   ArrowDownToLine,
+  ArrowUpRight,
+  ArrowDownLeft,
+  FolderOpen,
   CheckCircle2,
-  Sliders,
-  } from 'lucide-react';
+  Power,
+  ShieldCheck,
+  Pause,
+  Play,
+  Trash2,
+  Search
+} from 'lucide-react';
 import { Header, CURRENT_VERSION, type MainViewTab } from './components/Header';
 import { QuickAddBar } from './components/QuickAddBar';
 import { TaskList } from './components/TaskList';
 import { SettingsView } from './components/SettingsView';
-import { OtiumLogo } from './components/OtiumLogo';
+import { SharingView, ClipboardView, FlowDialogs, SharingSettings, flowStatus } from './components/FlowPanels';
 import { downloadManager } from './core/downloadManager';
-import { resolveUniversalLink } from './core/linkResolver';
-import { fetchReleaseInfo, isNewerVersion, type ReleaseInfo } from './core/updates/releaseFeed';
-import type { DownloadTask, DownloadStats } from './types/downloader';
+import { useFlow } from './core/useFlow';
+import { nativeRuntime } from './core/flowClient';
+import { formatBytes, formatSpeed } from './core/segmentation';
+import type { DownloadTask } from './types/downloader';
 
 export function App() {
-  const [lang, setLang] = useState<'ar' | 'en'>('ar');
-  const [tasks, setTasks] = useState<DownloadTask[]>([]);
-  const [stats, setStats] = useState<DownloadStats>({
-    activeCount: 0,
-    queuedCount: 0,
-    completedCount: 0,
-    totalBytesDownloaded: 0,
-    currentTotalSpeed: 0,
-    speedLimitBytesPerSec: 0
+  const [lang, setLang] = useState<'ar' | 'en'>(() => {
+    try {
+      return localStorage.getItem('argon_language') === 'en' ? 'en' : 'ar';
+    } catch {
+      return 'ar';
+    }
   });
+
   const [activeView, setActiveView] = useState<MainViewTab>('downloads');
-  const [autoUpdateState, setAutoUpdateState] = useState<{
-    version: string;
-    percent: number;
-    status: 'downloading' | 'ready';
-    filePath?: string;
-  } | null>(null);
-  const [speedHistory, setSpeedHistory] = useState<number[]>([]);
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [detectedClipboardUrl, setDetectedClipboardUrl] = useState<string | null>(null);
+  const [tasks, setTasks] = useState(downloadManager.getTasks());
+  const [stats, setStats] = useState(downloadManager.getStats());
+  const [finished, setFinished] = useState(false);
+  const [clipboardUrl, setClipboardUrl] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const flow = useFlow();
+  const ar = lang === 'ar';
+
+  const viewNames: Record<MainViewTab, string> = {
+    downloads: ar ? 'التنزيلات' : 'Downloads',
+    sharing: ar ? 'المشاركة المحلية' : 'Local Sharing',
+    clipboard: ar ? 'الحافظة المشفرة' : 'Secure Clipboard',
+    history: ar ? 'سجل العمليات' : 'Activity Log',
+    settings: ar ? 'الإعدادات' : 'Settings'
+  };
 
   useEffect(() => {
-    // Initial data fetch
-    setTasks(downloadManager.getTasks());
-    setStats(downloadManager.getStats());
-    setSpeedHistory(downloadManager.getSpeedHistory());
-
-    // Subscribe to state changes
-    const unsubscribe = downloadManager.subscribe(() => {
+    return downloadManager.subscribe(() => {
       setTasks([...downloadManager.getTasks()]);
-      setStats(downloadManager.getStats());
-      setSpeedHistory([...downloadManager.getSpeedHistory()]);
+      setStats({ ...downloadManager.getStats() });
     });
+  }, []);
 
-    // Global Paste Listener (Ctrl+V / Cmd+V outside input fields)
-    const handleGlobalPaste = (e: ClipboardEvent) => {
-      const activeTag = document.activeElement?.tagName;
-      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    document.documentElement.dir = ar ? 'rtl' : 'ltr';
+    try {
+      localStorage.setItem('argon_language', lang);
+    } catch {}
+  }, [lang, ar]);
 
-      const pasted = e.clipboardData?.getData('text/plain');
-      if (!pasted || !pasted.trim()) return;
-
-      const lines = pasted
-        .split(/[\r\n]+/)
-        .map((l) => l.trim())
-        .filter((l) => /^https?:\/\/.+/i.test(l));
-
-      if (lines.length > 0) {
-        e.preventDefault();
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => {
+      if ((event.target as HTMLElement)?.closest('input,textarea,[contenteditable="true"]')) return;
+      const text = event.clipboardData?.getData('text/plain')?.trim();
+      if (text && /^https?:\/\//i.test(text)) {
+        event.preventDefault();
+        setClipboardUrl(text.split(/\s+/)[0]);
         setActiveView('downloads');
-        setDetectedClipboardUrl(lines[0]);
+        setFinished(false);
       }
     };
 
-    // Drag and Drop URLs or files onto window
-    const handleDragOver = (e: DragEvent) => {
-      e.preventDefault();
-      setIsDraggingOver(true);
-    };
-
-    const handleDragLeave = () => {
-      setIsDraggingOver(false);
-    };
-
-    const handleDrop = (e: DragEvent) => {
-      e.preventDefault();
-      setIsDraggingOver(false);
-      const text = e.dataTransfer?.getData('text/plain') || e.dataTransfer?.getData('text/uri-list');
-      if (text && /^https?:\/\/.+/i.test(text.trim())) {
-        const resolved = resolveUniversalLink(text.trim());
-        downloadManager.addTask(
-          resolved.resolvedUrl,
-          undefined,
-          16,
-          undefined,
-          resolved.suggestedHeaders
-        );
-        setActiveView('downloads');
+    const handleDragOver = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes('text/plain') || event.dataTransfer?.types.includes('text/uri-list')) {
+        event.preventDefault();
+        setDragging(true);
       }
     };
 
-    window.addEventListener('paste', handleGlobalPaste);
+    const handleDragLeave = (event: DragEvent) => {
+      if (!event.relatedTarget) setDragging(false);
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      event.preventDefault();
+      setDragging(false);
+      const url = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '')
+        .trim()
+        .split(/\r?\n/)
+        .find((line) => /^https?:\/\//i.test(line));
+      if (url) {
+        downloadManager.addTask(url);
+        setActiveView('downloads');
+        setFinished(false);
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
     window.addEventListener('dragover', handleDragOver);
     window.addEventListener('dragleave', handleDragLeave);
     window.addEventListener('drop', handleDrop);
 
-    // Smart Clipboard Link Sniffer
-    const checkClipboardForUrl = async () => {
-      try {
-        const text = await navigator.clipboard?.readText?.();
-        if (text && /^https?:\/\/.+/i.test(text.trim())) {
-          const trimmed = text.trim();
-          const current = downloadManager.getTasks();
-          const alreadyExists = current.some((t) => t.url === trimmed);
-          if (!alreadyExists) {
-            setDetectedClipboardUrl(trimmed);
-          }
-        }
-      } catch {}
-    };
-
-    checkClipboardForUrl();
-    window.addEventListener('focus', checkClipboardForUrl);
-
-    // Background Autonomous Direct Update Check
-    const updateTimer = setTimeout(() => {
-      fetchReleaseInfo()
-        .then((info) => {
-          if (info && isNewerVersion(info.version, CURRENT_VERSION)) {
-            startAutonomousDirectUpdate(info);
-          }
-        })
-        .catch(() => {});
-    }, 2000);
-
     return () => {
-      unsubscribe();
-      clearTimeout(updateTimer);
-      window.removeEventListener('focus', checkClipboardForUrl);
-      window.removeEventListener('paste', handleGlobalPaste);
+      window.removeEventListener('paste', handlePaste);
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('dragleave', handleDragLeave);
       window.removeEventListener('drop', handleDrop);
     };
   }, []);
 
-  const handleToggleLang = () => {
-    const next = lang === 'ar' ? 'en' : 'ar';
-    setLang(next);
-    document.documentElement.setAttribute('lang', next);
-    document.documentElement.setAttribute('dir', next === 'ar' ? 'rtl' : 'ltr');
-  };
-
-  const handleAddTask = (url: string, filename?: string, segmentCount: number = 16) => {
-    const resolved = resolveUniversalLink(url);
-    downloadManager.addTask(
-      resolved.resolvedUrl,
-      filename,
-      segmentCount,
-      undefined,
-      resolved.suggestedHeaders
-    );
+  const add = (url: string, filename?: string, segments?: number) => {
+    downloadManager.addTask(url, filename, segments);
+    setFinished(false);
     setActiveView('downloads');
   };
 
-  const startAutonomousDirectUpdate = (info: ReleaseInfo) => {
-    if (!info || !isNewerVersion(info.version, CURRENT_VERSION)) return;
-    const existing = downloadManager.getTasks().some((t) => t.filename.includes(info.version));
-    if (existing) return;
-    const isAndroid =
-      /android/i.test(navigator.userAgent) ||
-      (typeof window !== 'undefined' && (window as any).__TAURI_METADATA__?.currentPlatform === 'android');
-    const version = info.version;
-    const downloadUrl = isAndroid
-      ? info.assets?.androidApk?.url ||
-        `https://github.com/XRTM8/Otium-Downloader/releases/download/v${version}/Otium_Downloader_${version}_arm64.apk`
-      : info.assets?.windowsInstaller?.url ||
-        `https://github.com/XRTM8/Otium-Downloader/releases/download/v${version}/Otium_Downloader_${version}_x64-setup.exe`;
-    const filename = isAndroid
-      ? `Otium_Downloader_${version}_arm64.apk`
-      : `Otium_Downloader_${version}_x64-setup.exe`;
-
-    const taskId = downloadManager.addTask(downloadUrl, filename, 16);
-    setAutoUpdateState({
-      version,
-      percent: 0,
-      status: 'downloading'
-    });
-
-    const unsub = downloadManager.subscribe(() => {
-      const task = downloadManager.getTasks().find((t) => t.id === taskId);
-      if (!task) return;
-
-      const pct =
-        task.totalBytes > 0
-          ? Math.min(100, Math.round((task.downloadedBytes / task.totalBytes) * 100))
-          : 0;
-
-      if (task.status === 'completed') {
-        unsub();
-        setAutoUpdateState({
-          version,
-          percent: 100,
-          status: 'ready',
-          filePath: task.savePath
-        });
-        downloadManager.openFile(task.savePath);
-      } else {
-        setAutoUpdateState((prev) => (prev ? { ...prev, percent: pct } : null));
-      }
-    });
+  const share = (task: DownloadTask) => {
+    setActiveView('sharing');
+    void flow.client.chooseFiles(task.savePath).catch(() => {});
   };
 
+  const taskProps = {
+    tasks,
+    lang,
+    onPause: (id: string) => downloadManager.pauseTask(id),
+    onResume: (id: string) => downloadManager.resumeTask(id),
+    onStartImmediately: (id: string) => downloadManager.startTaskImmediately(id),
+    onRestart: (id: string) => downloadManager.restartTask(id),
+    onRemove: (id: string, disk?: boolean) => downloadManager.removeTask(id, disk),
+    onClearCompleted: () => downloadManager.clearCompleted(),
+    onPauseAll: () => downloadManager.pauseAll(),
+    onResumeAll: () => downloadManager.resumeAll(),
+    onShare: share
+  };
+
+  const activeTasksCount = tasks.filter((t) => t.status !== 'completed').length;
+
   return (
-    <div className="min-h-screen bg-[#060709] text-zinc-100 flex flex-col selection:bg-[#00e599]/30 selection:text-[#00e599] relative">
-      {/* Drag & Drop Visual Overlay */}
-      {isDraggingOver && (
-        <div className="fixed inset-0 z-50 bg-[#00e599]/10 border-2 border-dashed border-[#00e599] backdrop-blur-md flex items-center justify-center pointer-events-none animate-in-fade">
-          <div className="p-6 rounded-2xl bg-[#0f1118]/95 border border-[#00e599]/40 text-center shadow-2xl backdrop-blur-xl">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto mb-3 text-[#00e599] shadow-[0_0_16px_rgba(0,229,153,0.25)]">
-              <OtiumLogo className="w-6 h-6" glow />
-            </div>
-            <span className="text-[#00e599] font-bold text-sm block mb-1">
-              {lang === 'ar' ? 'أفلت الرابط هنا للتنزيل الفوري' : 'Drop link here to download'}
-            </span>
-            <span className="text-zinc-400 text-xs font-mono">
-              {lang === 'ar' ? 'سيتم تسريع التنزيل بـ 16 مساراً متوازياً' : 'Accelerated with 16 parallel streams'}
-            </span>
+    <div className="argon-app">
+      <Header lang={lang} activeTab={activeView} onTabChange={setActiveView} stats={stats} />
+
+      <div className="argon-content">
+        {/* Topbar */}
+        <header className="argon-topbar">
+          <div className="breadcrumb">
+            <span>ARGON</span>
+            <span>/</span>
+            <strong>{viewNames[activeView]}</strong>
           </div>
+
+          <div className="topbar-actions">
+            {stats.currentTotalSpeed > 0 && (
+              <span className="download-speed" dir="ltr">
+                <ArrowDownToLine size={13} />
+                {formatSpeed(stats.currentTotalSpeed)}
+              </span>
+            )}
+
+            <button
+              className={`sharing-indicator ${flow.snapshot?.enabled ? 'is-enabled' : ''}`}
+              disabled={
+                !nativeRuntime() ||
+                flow.pending.includes('flow_start') ||
+                flow.pending.includes('flow_stop')
+              }
+              onClick={() => {
+                void flow.client.execute(flow.snapshot?.enabled ? 'flow_stop' : 'flow_start').catch(() => {});
+              }}
+              title={ar ? 'مفتاح المشاركة المحلية' : 'Local Sharing Switch'}
+            >
+              <span className="presence" />
+              <span>
+                {flow.snapshot?.enabled
+                  ? ar
+                    ? 'المشاركة مفعّلة'
+                    : 'Sharing active'
+                  : ar
+                    ? 'المشاركة متوقفة'
+                    : 'Sharing inactive'}
+              </span>
+              <Power size={12} />
+            </button>
+
+            <button
+              className="language-button"
+              onClick={() => setLang(ar ? 'en' : 'ar')}
+              aria-label={ar ? 'Switch to English' : 'التبديل إلى العربية'}
+            >
+              <Globe size={14} />
+              <span>{ar ? 'EN' : 'عربي'}</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Global Error Banner */}
+        {flow.error && (
+          <div className="global-error" role="alert">
+            <AlertCircle size={16} />
+            <span dir="auto">{flow.error}</span>
+            <button
+              className="icon-button"
+              aria-label={ar ? 'إغلاق التنبيه' : 'Dismiss notice'}
+              onClick={flow.client.clearError}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Main Content Workspace */}
+        <main className="argon-main">
+          {activeView === 'downloads' && (
+            <>
+              {/* Functional View Header */}
+              <div className="view-header">
+                <div className="view-header-title">
+                  <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
+                  <span className="count-badge" dir="ltr">
+                    {activeTasksCount} {ar ? 'نشطة' : 'active'} · {stats.completedCount} {ar ? 'مكتملة' : 'done'}
+                  </span>
+                </div>
+
+                <div className="view-header-actions">
+                  {stats.activeCount > 0 ? (
+                    <button
+                      className="action-button"
+                      onClick={() => downloadManager.pauseAll()}
+                      title={ar ? 'إيقاف مؤقت للكل' : 'Pause all downloads'}
+                    >
+                      <Pause size={13} />
+                      <span>{ar ? 'إيقاف الكل' : 'Pause All'}</span>
+                    </button>
+                  ) : (
+                    tasks.some((t) => t.status === 'paused') && (
+                      <button
+                        className="action-button"
+                        onClick={() => downloadManager.resumeAll()}
+                        title={ar ? 'استئناف الكل' : 'Resume all downloads'}
+                      >
+                        <Play size={13} />
+                        <span>{ar ? 'استئناف الكل' : 'Resume All'}</span>
+                      </button>
+                    )
+                  )}
+
+                  {stats.completedCount > 0 && (
+                    <button
+                      className="action-button"
+                      onClick={() => downloadManager.clearCompleted()}
+                      title={ar ? 'مسح التنزيلات المكتملة من القائمة' : 'Clear completed from list'}
+                    >
+                      <Trash2 size={13} />
+                      <span>{ar ? 'مسح المكتملة' : 'Clear Completed'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Add Bar */}
+              <QuickAddBar
+                lang={lang}
+                onAdd={add}
+                detectedClipboardUrl={clipboardUrl}
+                onClearClipboardUrl={() => setClipboardUrl(null)}
+              />
+
+              {/* Tabs */}
+              <div className="download-toolbar">
+                <div className="download-tabs">
+                  <button aria-pressed={!finished} onClick={() => setFinished(false)}>
+                    <span>{ar ? 'قيد التنزيل' : 'Active'}</span>
+                    <span>{activeTasksCount}</span>
+                  </button>
+                  <button aria-pressed={finished} onClick={() => setFinished(true)}>
+                    <span>{ar ? 'المكتملة' : 'Completed'}</span>
+                    <span>{stats.completedCount}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Task List */}
+              <TaskList
+                {...taskProps}
+                mode={finished ? 'finished' : 'downloads'}
+                onSwitchToDownloads={() => setFinished(false)}
+              />
+            </>
+          )}
+
+          {activeView === 'sharing' && <SharingView lang={lang} />}
+          {activeView === 'clipboard' && <ClipboardView lang={lang} onDownload={(url) => add(url)} />}
+          {activeView === 'history' && <UnifiedHistory lang={lang} tasks={tasks} />}
+          {activeView === 'settings' && (
+            <div className="settings-layout">
+              <SettingsView lang={lang} />
+              <SharingSettings lang={lang} />
+            </div>
+          )}
+        </main>
+
+        {/* Clean Footer Status Bar */}
+        <footer className="workspace-footer">
+          <span>
+            <ShieldCheck size={13} />
+            <span>{ar ? 'وضع محلي مشفّر 100% · بدون خوادم سحابية' : '100% Local & Encrypted · Zero Cloud Telemetry'}</span>
+          </span>
+          <span dir="ltr">ARGON ENGINE v{CURRENT_VERSION}</span>
+        </footer>
+      </div>
+
+      <FlowDialogs lang={lang} />
+
+      {dragging && (
+        <div className="url-drop-overlay">
+          <ArrowDownToLine size={32} />
+          <strong>{ar ? 'أفلت الرابط لبدء التنزيل الفوري' : 'Drop link to start accelerated download'}</strong>
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Unified Minimal Header */}
-      <Header
-        stats={stats}
-        lang={lang}
-        activeTab={activeView}
-        onTabChange={setActiveView}
-        speedHistory={speedHistory}
-        onToggleLang={handleToggleLang}
-      />
+function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTask[] }) {
+  const { snapshot } = useFlow();
+  const ar = lang === 'ar';
+  const [filter, setFilter] = useState('');
 
-      {/* Autonomous Update Banner if downloading */}
-      {autoUpdateState && (
-        <div className="max-w-5xl w-full mx-auto px-4 sm:px-6 pt-3 animate-in-fade">
-          <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-emerald-900/30 to-[#060709] border border-emerald-500/30 flex items-center justify-between gap-3 shadow-lg">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <span className="relative flex h-2.5 w-2.5 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00e599] opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#00e599]" />
-              </span>
-              <div className="flex flex-col sm:flex-row sm:items-center sm:gap-2 truncate">
-                <span className="text-xs font-bold text-[#00e599] font-mono">
-                  ⚡ v{autoUpdateState.version} {lang === 'ar' ? 'تحديث تلقائي فوري' : 'Direct Auto-Update'}
-                </span>
-                <span className="text-[11px] text-zinc-300 truncate">
-                  {autoUpdateState.status === 'ready'
-                    ? (lang === 'ar' ? 'اكتمل التنزيل! جاري فتح التثبيت...' : 'Downloaded! Opening installer...')
-                    : (lang === 'ar'
-                        ? `جاري التنزيل فائق السرعة (${autoUpdateState.percent}%)...`
-                        : `Downloading update in background (${autoUpdateState.percent}%)...`)}
+  const entries = [
+    ...tasks.map((task) => ({
+      id: task.id,
+      name: task.filename,
+      date: task.createdAt,
+      kind: 'download' as const,
+      peer: '',
+      status: task.status,
+      path: task.savePath,
+      size: task.totalBytes
+    })),
+    ...(snapshot?.transfers || []).map((transfer) => ({
+      id: `flow-${transfer.id}`,
+      name: transfer.kind === 'text' ? (ar ? 'نص الحافظة' : 'Clipboard text') : transfer.name,
+      date: transfer.createdAt,
+      kind: transfer.direction as 'send' | 'receive',
+      peer: transfer.peerName,
+      status: transfer.status,
+      path: transfer.path || undefined,
+      size: transfer.total
+    }))
+  ]
+    .sort((a, b) => b.date - a.date)
+    .filter((e) => !filter.trim() || e.name.toLowerCase().includes(filter.toLowerCase()));
+
+  return (
+    <div>
+      <div className="view-header">
+        <div className="view-header-title">
+          <h1>{ar ? 'سجل العمليات' : 'Activity Log'}</h1>
+          <span className="count-badge" dir="ltr">
+            {entries.length} {ar ? 'عنصر' : 'items'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 rtl:right-2.5 rtl:left-auto top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={ar ? 'بحث في السجل...' : 'Filter activity...'}
+              className="text-xs bg-zinc-900 border border-white/[0.08] rounded-lg pl-8 pr-3 rtl:pr-8 rtl:pl-3 py-1.5 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500 w-44 sm:w-56"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="glass-panel">
+        {entries.length > 0 ? (
+          entries.map((entry) => (
+            <article key={entry.id} className="history-row">
+              <div className="file-symbol">
+                {entry.kind === 'download' ? (
+                  <ArrowDownToLine size={16} />
+                ) : entry.kind === 'send' ? (
+                  <ArrowUpRight size={16} />
+                ) : (
+                  <ArrowDownLeft size={16} />
+                )}
+              </div>
+
+              <div>
+                <strong dir="auto">{entry.name}</strong>
+                <span>
+                  {entry.kind === 'download'
+                    ? ar
+                      ? 'تنزيل'
+                      : 'Download'
+                    : `${entry.kind === 'send' ? (ar ? 'إلى' : 'To') : ar ? 'من' : 'From'} ${entry.peer}`}{' '}
+                  · {formatBytes(entry.size)} ·{' '}
+                  {new Date(entry.date).toLocaleString(ar ? 'ar-IQ' : 'en', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
                 </span>
               </div>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {autoUpdateState.status === 'ready' && autoUpdateState.filePath && (
+
+              <small className={entry.status === 'error' ? 'text-rose-400' : ''}>
+                {entry.kind === 'download'
+                  ? {
+                      downloading: ar ? 'جارٍ التنزيل' : 'Downloading',
+                      paused: ar ? 'متوقف' : 'Paused',
+                      queued: ar ? 'في الانتظار' : 'Queued',
+                      completed: ar ? 'مكتمل' : 'Complete',
+                      error: ar ? 'خطأ' : 'Error'
+                    }[entry.status] || entry.status
+                  : flowStatus(entry.status, lang)}
+              </small>
+
+              {entry.status === 'completed' && entry.path ? (
                 <button
-                  onClick={() => downloadManager.openFile(autoUpdateState.filePath!)}
-                  className="px-3 py-1.5 rounded-lg bg-[#00e599] text-[#060709] font-bold text-xs active:scale-95 transition-transform"
+                  className="icon-button"
+                  onClick={() => {
+                    void downloadManager.openFolder(entry.path);
+                  }}
+                  aria-label={ar ? 'فتح المجلد' : 'Open folder'}
                 >
-                  {lang === 'ar' ? 'تثبيت الآن' : 'Install Now'}
+                  <FolderOpen size={15} />
                 </button>
+              ) : entry.status === 'completed' ? (
+                <CheckCircle2 size={15} className="text-emerald-400" />
+              ) : (
+                <span />
               )}
-              <button
-                onClick={() => setAutoUpdateState(null)}
-                className="p-1 text-zinc-400 hover:text-white rounded-lg"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            </article>
+          ))
+        ) : (
+          <div className="quiet-empty">
+            <Wifi size={22} />
+            <p>{ar ? 'لا توجد عمليات مسجلة حتى الآن.' : 'No recorded activity yet.'}</p>
           </div>
-        </div>
-      )}
-
-      {/* Main Single-View Container */}
-      <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 pb-28 sm:pb-12 space-y-4">
-        {activeView === 'downloads' && (
-          <>
-            {/* Integrated Quick-Add Hero Bar (Zero Modals!) */}
-            <QuickAddBar
-              lang={lang}
-              onAdd={handleAddTask}
-              detectedClipboardUrl={detectedClipboardUrl}
-              onClearClipboardUrl={() => setDetectedClipboardUrl(null)}
-            />
-
-            {/* Active & Pending Downloads */}
-            <TaskList
-              tasks={tasks}
-              lang={lang}
-              mode="downloads"
-              onPause={(id) => downloadManager.pauseTask(id)}
-              onResume={(id) => downloadManager.resumeTask(id)}
-              onStartImmediately={(id) => downloadManager.startTaskImmediately(id)}
-              onRestart={(id) => downloadManager.restartTask(id)}
-              onRemove={(id, deleteDisk) => downloadManager.removeTask(id, deleteDisk)}
-              onClearCompleted={() => downloadManager.clearCompleted()}
-              onPauseAll={() => downloadManager.pauseAll()}
-              onResumeAll={() => downloadManager.resumeAll()}
-            />
-          </>
         )}
-
-        {activeView === 'finished' && (
-          <TaskList
-            tasks={tasks}
-            lang={lang}
-            mode="finished"
-            onPause={(id) => downloadManager.pauseTask(id)}
-            onResume={(id) => downloadManager.resumeTask(id)}
-            onRemove={(id, deleteDisk) => downloadManager.removeTask(id, deleteDisk)}
-            onClearCompleted={() => downloadManager.clearCompleted()}
-            onRestart={(id) => downloadManager.restartTask(id)}
-            onSwitchToDownloads={() => setActiveView('downloads')}
-          />
-        )}
-
-        {activeView === 'settings' && (
-          <SettingsView lang={lang} />
-        )}
-      </main>
-
-      {/* Mobile Bottom Navigation Bar (Thumb Ergonomics) */}
-      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-30 bg-[#07080a]/95 backdrop-blur-2xl border-t border-white/[0.06] pb-safe px-4 py-2">
-        <div className="flex items-center justify-around max-w-md mx-auto">
-          {/* Active Downloads Tab */}
-          <button
-            onClick={() => setActiveView('downloads')}
-            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all relative ${
-              activeView === 'downloads'
-                ? 'text-[#00e599] font-bold'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <div className="relative">
-              <ArrowDownToLine className="w-5 h-5" />
-              {stats.activeCount > 0 && (
-                <span className="absolute -top-1 -right-2 bg-[#00e599] text-[#060709] text-[9px] font-bold font-mono px-1 rounded-full animate-pulse">
-                  {stats.activeCount}
-                </span>
-              )}
-            </div>
-            <span className="text-[11px] tracking-tight">
-              {lang === 'ar' ? 'التنزيلات' : 'Downloads'}
-            </span>
-          </button>
-
-          {/* Finished Library Tab */}
-          <button
-            onClick={() => setActiveView('finished')}
-            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all relative ${
-              activeView === 'finished'
-                ? 'text-[#00e599] font-bold'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <div className="relative">
-              <CheckCircle2 className="w-5 h-5" />
-              {stats.completedCount > 0 && (
-                <span className="absolute -top-1 -right-2 bg-white/10 text-zinc-300 text-[9px] font-mono px-1 rounded-full">
-                  {stats.completedCount}
-                </span>
-              )}
-            </div>
-            <span className="text-[11px] tracking-tight">
-              {lang === 'ar' ? 'المكتملة' : 'Finished'}
-            </span>
-          </button>
-
-          {/* Settings Tab */}
-          <button
-            onClick={() => setActiveView('settings')}
-            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
-              activeView === 'settings'
-                ? 'text-[#00e599] font-bold'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Sliders className="w-5 h-5" />
-            <span className="text-[11px] tracking-tight">
-              {lang === 'ar' ? 'الإعدادات' : 'Settings'}
-            </span>
-          </button>
-        </div>
-      </nav>
+      </div>
     </div>
   );
 }

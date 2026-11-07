@@ -1,6 +1,6 @@
 /**
- * Otium Downloader Extension - Background Service Worker
- * Intercepts downloads and routes context-menu clicks to Otium's native loopback bridge (127.0.0.1:41523)
+ * ARGON Extension - Background Service Worker
+ * Intercepts downloads and routes context-menu clicks to ARGON's native loopback bridge (127.0.0.1:41523)
  */
 
 const OTIUM_BRIDGE_URL = 'http://127.0.0.1:41523';
@@ -13,19 +13,19 @@ const MEDIA_REGEX = /\.(m3u8|mpd|mp4|webm|flv|mkv)(\?.*)?$/i;
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'otium-download-link',
-    title: 'تنزيل بواسطة Otium Downloader ⚡',
+    title: 'تنزيل بواسطة ARGON ⚡',
     contexts: ['link']
   });
 
   chrome.contextMenus.create({
     id: 'otium-download-media',
-    title: 'تنزيل الوسائط بواسطة Otium ⚡',
+    title: 'تنزيل الوسائط بواسطة ARGON ⚡',
     contexts: ['image', 'video', 'audio']
   });
 
   chrome.contextMenus.create({
     id: 'otium-download-selection',
-    title: 'تنزيل الرابط المحدد بـ Otium ⚡',
+    title: 'تنزيل الرابط المحدد بـ ARGON ⚡',
     contexts: ['selection']
   });
 });
@@ -48,7 +48,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const referer = tab?.url || '';
     const success = await sendToOtium(targetUrl, undefined, referer);
     if (!success) {
-      showNotification('تنبيه Otium', 'تأكد من تشغيل تطبيق Otium Downloader على حاسوبك للبدء.');
+      showNotification('تنبيه ARGON', 'تأكد من تشغيل تطبيق ARGON على حاسوبك للبدء.');
     }
   }
 });
@@ -63,19 +63,11 @@ chrome.downloads.onCreated.addListener(async (item) => {
     return;
   }
 
-  // Ping Otium Desktop bridge
+  // Ping ARGON bridge
   const isOnline = await checkOtiumOnline();
   if (!isOnline) {
     // Otium is not open, let the browser download proceed untouched
     return;
-  }
-
-  // Cancel native browser download
-  try {
-    await chrome.downloads.cancel(item.id);
-    await chrome.downloads.erase({ id: item.id });
-  } catch {
-    // Download may have completed or already canceled
   }
 
   const referer = item.referrer || '';
@@ -83,6 +75,7 @@ chrome.downloads.onCreated.addListener(async (item) => {
 
   const sent = await sendToOtium(url, filename, referer);
   if (sent) {
+    try { await chrome.downloads.cancel(item.id); await chrome.downloads.erase({ id: item.id }); } catch { /* Download may have already completed. */ }
     showNotification('تم التقاط التنزيل ⚡', filename || url);
   }
 });
@@ -97,7 +90,8 @@ chrome.webRequest.onBeforeRequest.addListener(
         let list = tabMedia.get(details.tabId) || [];
         if (!list.some((m) => m.url === details.url)) {
           const rawName = details.url.split('?')[0].split('/').pop() || `stream.${ext}`;
-          let cleanName = decodeURIComponent(rawName);
+          let cleanName = rawName;
+          try { cleanName = decodeURIComponent(rawName); } catch { /* Keep malformed escaped names readable. */ }
           list.push({
             url: details.url,
             ext,
@@ -143,7 +137,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 /**
- * Checks if Otium Desktop local bridge is listening.
+ * Checks if ARGON local bridge is listening.
  */
 async function checkOtiumOnline() {
   try {
@@ -164,7 +158,7 @@ async function checkOtiumOnline() {
 }
 
 /**
- * Dispatches a download link to Otium Desktop.
+ * Dispatches a download link to ARGON.
  */
 async function sendToOtium(url, filename, referer) {
   try {
@@ -190,7 +184,7 @@ async function sendToOtium(url, filename, referer) {
 
     return res.ok;
   } catch (err) {
-    console.warn('Failed to communicate with Otium Desktop:', err);
+    console.warn('Failed to communicate with ARGON:', err);
     return false;
   }
 }

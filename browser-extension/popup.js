@@ -29,7 +29,7 @@ async function checkStatus() {
 
     if (res.ok) {
       statusDot.className = 'status-dot online';
-      statusText.textContent = 'متصل بـ Otium';
+      statusText.textContent = 'متصل بـ ARGON';
       statusText.style.color = '#00e599';
       sendBtn.disabled = false;
     } else {
@@ -37,7 +37,7 @@ async function checkStatus() {
     }
   } catch {
     statusDot.className = 'status-dot offline';
-    statusText.textContent = 'غير متصل (شغّل Otium)';
+    statusText.textContent = 'غير متصل (شغّل ARGON)';
     statusText.style.color = '#ef4444';
     sendBtn.disabled = true;
   }
@@ -63,13 +63,13 @@ sendBtn.addEventListener('click', async () => {
       manualUrl.value = '';
       sendBtn.textContent = 'تم الإرسال بنجاح ⚡';
       setTimeout(() => {
-        sendBtn.textContent = 'إرسال للتنزيل بـ Otium ⚡';
+        sendBtn.textContent = 'إرسال للتنزيل بـ ARGON ⚡';
       }, 1500);
     } else {
       sendBtn.textContent = 'فشل الإرسال';
     }
   } catch {
-    sendBtn.textContent = 'تعذر الاتصال بـ Otium';
+    sendBtn.textContent = 'تعذر الاتصال بـ ARGON';
   }
 });
 

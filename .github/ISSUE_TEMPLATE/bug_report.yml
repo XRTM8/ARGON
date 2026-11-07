@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for reporting an issue in **Otium Downloader**.
+        Thank you for reporting an issue in **ARGON**.
   - type: input
     id: version
     attributes:

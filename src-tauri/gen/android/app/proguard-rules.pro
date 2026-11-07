@@ -19,3 +19,6 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# The native sharing adapter is loaded by the Rust plugin registry.
+-keep class com.otium.downloader.FlowFilesPlugin { *; }

@@ -10,3 +10,9 @@ src-tauri/gen/android/.gradle/
 *.key
 .DS_Store
 Thumbs.db
+
+src-tauri/tools/*.exe
+src-tauri/tools/extractor.json
+src-tauri/tools/*LICENSE.txt
+flow-core/target/
+flow-core/.test-tmp/

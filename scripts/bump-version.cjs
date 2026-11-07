@@ -27,4 +27,12 @@ let cargoToml = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
 cargoToml = cargoToml.replace(/^version\s*=\s*"[^"]+"/m, `version = "${targetVersion}"`);
 fs.writeFileSync('src-tauri/Cargo.toml', cargoToml, 'utf8');
 
-console.log(`Bumped Otium Downloader to ${targetVersion}`);
+// 5. Visible version and browser integration
+const headerPath = 'src/components/Header.tsx';
+fs.writeFileSync(headerPath, fs.readFileSync(headerPath, 'utf8').replace(/CURRENT_VERSION\s*=\s*'[^']+'/, `CURRENT_VERSION = '${targetVersion}'`));
+const manifestPath = 'browser-extension/manifest.json';
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+manifest.version = targetVersion;
+fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+
+console.log(`Bumped ARGON to ${targetVersion}`);

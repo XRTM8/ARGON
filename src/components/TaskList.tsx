@@ -25,6 +25,7 @@ interface TaskListProps {
   onPauseAll?: () => void;
   onResumeAll?: () => void;
   onSwitchToDownloads?: () => void;
+  onShare?: (task: DownloadTask) => void;
 }
 
 export const TaskList: React.FC<TaskListProps> = ({
@@ -39,7 +40,8 @@ export const TaskList: React.FC<TaskListProps> = ({
   onRestart,
   onPauseAll,
   onResumeAll,
-  onSwitchToDownloads
+  onSwitchToDownloads,
+  onShare
 }) => {
   const isAr = lang === 'ar';
   const [searchQuery, setSearchQuery] = useState('');
@@ -77,7 +79,7 @@ export const TaskList: React.FC<TaskListProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={isAr ? 'بحث في القائمة...' : 'Search in list...'}
-              className="w-full bg-[#0b0d13] border border-white/[0.06] focus:border-[#00e599]/40 rounded-xl pl-8 rtl:pr-8 rtl:pl-7 pr-7 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none font-mono transition-all"
+              className="w-full bg-[#121212] border border-white/[0.06] focus:border-[#00e5ff]/40 rounded-xl pl-8 rtl:pr-8 rtl:pl-7 pr-7 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none font-mono transition-all"
             />
             {searchQuery && (
               <button
@@ -105,7 +107,7 @@ export const TaskList: React.FC<TaskListProps> = ({
             {isDownloadsMode && hasPaused && onResumeAll && (
               <button
                 onClick={onResumeAll}
-                className="px-2.5 py-1.5 rounded-xl border border-emerald-500/20 text-[#00e599] hover:bg-emerald-500/10 transition-all flex items-center gap-1.5 active:scale-95"
+                className="px-2.5 py-1.5 rounded-xl border border-emerald-500/20 text-[#00e5ff] hover:bg-emerald-500/10 transition-all flex items-center gap-1.5 active:scale-95"
                 title={isAr ? 'استئناف الكل' : 'Resume All'}
               >
                 <Play className="w-3 h-3 fill-current" />
@@ -129,12 +131,12 @@ export const TaskList: React.FC<TaskListProps> = ({
 
       {/* Task List / Empty States */}
       {filteredTasks.length === 0 ? (
-        <div className="text-center py-12 sm:py-16 px-4 border border-white/[0.04] rounded-3xl bg-[#0b0d13]/60 backdrop-blur-md relative overflow-hidden">
+        <div className="text-center py-12 sm:py-16 px-4 border border-white/[0.04] rounded-3xl bg-[#121212]/60 backdrop-blur-md relative overflow-hidden">
           {/* Subtle Ambient Glow */}
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-20 bg-[#00e599]/5 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-20 bg-[#00e5ff]/5 rounded-full blur-3xl pointer-events-none" />
 
           {/* Icon Badge */}
-          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3.5 text-[#00e599] shadow-[0_0_24px_rgba(0,229,153,0.15)]">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3.5 text-[#00e5ff] shadow-[0_0_24px_rgba(0,229,255,0.15)]">
             {isDownloadsMode ? <OtiumLogo className="w-6 h-6" glow /> : <CheckCircle2 className="w-6 h-6" />}
           </div>
 
@@ -151,8 +153,8 @@ export const TaskList: React.FC<TaskListProps> = ({
               ? isAr ? 'جرّب كلمة مفتاحية أخرى' : 'Try searching for something else'
               : isDownloadsMode
               ? isAr
-                ? 'الصق أي رابط مباشر بالأعلى لبدء التنزيل فائق السرعة بـ 16 مساراً'
-                : 'Paste any direct link above to accelerate download with 16 streams'
+                ? 'أضف رابط ملف أو رابط منصة مدعومة من الشريط بالأعلى.'
+                : 'Add a file URL or supported media link above.'
               : isAr
               ? 'الملفات المكتملة ستظهر هنا لتشغيلها والوصول إليها بلمسة واحدة'
               : 'Finished downloads will appear here for 1-tap playback'}
@@ -163,7 +165,7 @@ export const TaskList: React.FC<TaskListProps> = ({
               onClick={onSwitchToDownloads}
               className="px-4 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs font-mono text-zinc-300 hover:text-white transition-all inline-flex items-center gap-1.5"
             >
-              <ArrowDownToLine className="w-3.5 h-3.5 text-[#00e599]" />
+              <ArrowDownToLine className="w-3.5 h-3.5 text-[#00e5ff]" />
               <span>{isAr ? 'الذهاب إلى قائمة التنزيلات' : 'Go to Downloads'}</span>
             </button>
           )}
@@ -180,6 +182,7 @@ export const TaskList: React.FC<TaskListProps> = ({
               onRemove={onRemove}
               onStartImmediately={onStartImmediately}
               onRestart={onRestart}
+              onShare={onShare}
             />
           ))}
         </div>

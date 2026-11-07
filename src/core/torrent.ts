@@ -1,5 +1,5 @@
 /**
- * Sovereign BitTorrent & Magnet Protocol Engine for Otium Downloader
+ * Sovereign BitTorrent & Magnet Protocol Engine for ARGON
  * Implements BEP 0003 (Bencode & .torrent) and BEP 0009 (Magnet URI with BTIH)
  */
 

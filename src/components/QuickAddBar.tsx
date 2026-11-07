@@ -8,7 +8,6 @@ import {
   AlertCircle,
   Loader2
 } from 'lucide-react';
-import { resolveMediaDownloadUrl, detectPlatform } from '../core/mediaResolver';
 
 interface QuickAddBarProps {
   lang: 'ar' | 'en';
@@ -31,7 +30,6 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
   const [isResolving, setIsResolving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // If a clipboard URL was sniffed externally
   useEffect(() => {
     if (detectedClipboardUrl && !url) {
       setUrl(detectedClipboardUrl);
@@ -58,7 +56,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('magnet:')) {
       setErrorMessage(
         isAr
-          ? 'يرجى إدخال رابط يبدأ بـ http:// أو https:// أو magnet:'
+          ? 'يرجى إدخال رابط صالح يبدأ بـ http:// أو https:// أو magnet:'
           : 'Please enter a valid HTTP, HTTPS, or magnet URL'
       );
       return;
@@ -68,29 +66,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
     setIsResolving(true);
 
     try {
-      const platform = detectPlatform(cleanUrl);
-      let targetDownloadUrl = cleanUrl;
-      let targetFilename = customFilename.trim() || undefined;
-
-      // If social platform, attempt resolution
-      if (platform !== 'direct' && platform !== 'other' && !cleanUrl.startsWith('magnet:')) {
-        try {
-          const res = await resolveMediaDownloadUrl(cleanUrl);
-          if (res.downloadUrl) {
-            targetDownloadUrl = res.downloadUrl;
-            if (res.suggestedFilename && !targetFilename) {
-              targetFilename = res.suggestedFilename;
-            }
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          setErrorMessage(msg);
-          setIsResolving(false);
-          return;
-        }
-      }
-
-      onAdd(targetDownloadUrl, targetFilename, segments);
+      onAdd(cleanUrl, customFilename.trim() || undefined, segments);
       setUrl('');
       setCustomFilename('');
       setShowAdvanced(false);
@@ -103,7 +79,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
   };
 
   return (
-    <div className="w-full bg-[#0b0d13] border border-white/[0.08] hover:border-white/[0.12] rounded-2xl p-3 sm:p-4 shadow-xl transition-all">
+    <div className="w-full bg-[#111116] border border-white/[0.08] hover:border-white/[0.14] rounded-2xl p-3 sm:p-4 shadow-xl transition-all">
       <form onSubmit={handleSubmit} className="space-y-3">
         {/* Main Input Row */}
         <div className="flex flex-col sm:flex-row items-stretch gap-2">
@@ -119,19 +95,19 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
               placeholder={
                 isAr
                   ? 'الصق رابط التحميل المباشر هنا (ملفات، وسائط، تيك توك، روابط مضغوطة)...'
-                  : 'Paste direct download link here (files, media, TikTok, archives)...'
+                  : 'Paste direct download link here (files, media, streams, archives)...'
               }
-              className="w-full bg-[#06070a] border border-white/[0.08] focus:border-[#00e599]/60 rounded-xl pl-9 rtl:pr-9 rtl:pl-24 pr-24 py-2.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#00e599]/30 transition-all font-mono"
+              className="w-full bg-[#09090d] border border-white/[0.08] focus:border-cyan-400/60 rounded-xl pl-9 rtl:pr-9 rtl:pl-24 pr-24 py-2.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-cyan-400/30 transition-all font-mono"
             />
 
             {/* Quick Paste inside Input button */}
             <button
               type="button"
               onClick={handlePasteClipboard}
-              className="absolute right-2 rtl:left-2 rtl:right-auto top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-zinc-200 text-xs font-mono flex items-center gap-1 transition-all border border-white/[0.05]"
+              className="absolute right-2 rtl:left-2 rtl:right-auto top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-cyan-300 text-xs font-mono flex items-center gap-1 transition-all border border-white/[0.05]"
               title={isAr ? 'لصق من الحافظة' : 'Paste from clipboard'}
             >
-              <Clipboard className="w-3 h-3 text-[#00e599]" />
+              <Clipboard className="w-3 h-3 text-cyan-400" />
               <span className="hidden sm:inline text-[11px]">{isAr ? 'لصق' : 'Paste'}</span>
             </button>
           </div>
@@ -140,7 +116,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
           <button
             type="submit"
             disabled={!url.trim() || isResolving}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-[#00e599] text-[#060709] font-bold text-xs sm:text-sm flex items-center justify-center gap-2 hover:opacity-95 active:scale-95 transition-all shadow-[0_0_20px_rgba(0,229,153,0.3)] disabled:opacity-40 disabled:pointer-events-none shrink-0"
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-400 to-cyan-500 text-zinc-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 hover:from-cyan-300 hover:to-cyan-400 active:scale-95 transition-all shadow-[0_0_20px_rgba(0,229,255,0.25)] disabled:opacity-40 disabled:pointer-events-none shrink-0"
           >
             {isResolving ? (
               <>
@@ -150,7 +126,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
             ) : (
               <>
                 <ArrowDownToLine className="w-4 h-4 stroke-[2.5]" />
-                <span>{isAr ? 'بدء التنزيل ⚡' : 'Download ⚡'}</span>
+                <span>{isAr ? 'بدء التنزيل' : 'Download'}</span>
               </>
             )}
           </button>
@@ -169,14 +145,14 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
           <button
             type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="text-[11px] font-mono text-zinc-400 hover:text-zinc-200 flex items-center gap-1 transition-colors"
+            className="text-[11px] font-mono text-zinc-400 hover:text-cyan-300 flex items-center gap-1 transition-colors"
           >
             <span>{isAr ? 'خيارات متقدمة (اسم الملف، المسارات)' : 'Advanced (filename, threads)'}</span>
             {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
-          <span className="text-[10px] font-mono text-zinc-400">
-            {isAr ? 'تسريع فائق x16' : '16x Parallel Streams'}
+          <span className="text-[10px] font-mono text-zinc-500">
+            {isAr ? `${segments} اتصالات متوازية` : `${segments} parallel streams`}
           </span>
         </div>
 
@@ -192,7 +168,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
                 value={customFilename}
                 onChange={(e) => setCustomFilename(e.target.value)}
                 placeholder="myfile.ext"
-                className="w-full bg-[#06070a] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-[#00e599]/40"
+                className="w-full bg-[#09090d] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-400/40"
               />
             </div>
 
@@ -208,7 +184,7 @@ export const QuickAddBar: React.FC<QuickAddBarProps> = ({
                     onClick={() => setSegments(s)}
                     className={`py-1.5 rounded-lg border text-center font-bold text-xs transition-all ${
                       segments === s
-                        ? 'border-[#00e599] text-[#060709] bg-[#00e599]'
+                        ? 'border-cyan-400 text-zinc-950 bg-cyan-400 shadow-[0_0_12px_rgba(0,229,255,0.3)]'
                         : 'border-white/[0.06] text-zinc-400 hover:text-zinc-200 bg-white/[0.02]'
                     }`}
                   >

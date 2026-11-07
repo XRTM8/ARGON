@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Builds the release feed consumed by the Otium updater runtime and in-app feeds.
+ * Builds the release feed consumed by the ARGON updater runtime and in-app feeds.
  *
  * The Windows updater reads `platforms.windows-x86_64` (Tauri's signed installer).
- * The updater UI also reads `assets` to locate the portable EXE.
+ * The updater UI also reads `assets` to locate the portable ZIP and Android APK.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -65,7 +65,7 @@ const args = parseArgs(process.argv.slice(2));
 const pkg = readJson('package.json');
 const version = pkg.version;
 const tag = args.get('tag') || `v${version}`;
-const repository = 'XRTM8/Otium-Downloader';
+const repository = 'XRTM8/ARGON';
 
 const outDir = path.resolve(root, args.get('out-dir') || 'release');
 mkdirSync(outDir, { recursive: true });
@@ -73,10 +73,11 @@ mkdirSync(outDir, { recursive: true });
 const installerPath = args.get('installer');
 const signaturePath = args.get('signature');
 const portablePath = args.get('portable');
+const apkPath = args.get('apk');
 
 const feed = {
   version,
-  notes: args.get('notes') || `Otium Downloader ${version} release.`,
+  notes: args.get('notes') || `ARGON ${version} release.`,
   pub_date: new Date().toISOString(),
   platforms: {},
   assets: []
@@ -84,7 +85,7 @@ const feed = {
 
 // 1. Windows NSIS Installer + Signature
 if (installerPath && existsSync(installerPath)) {
-  const installerName = `Otium_Downloader_${version}_x64-setup.exe`;
+  const installerName = `ARGON_${version}_x64-setup.exe`;
   const stagedInstaller = path.join(outDir, installerName);
   if (path.resolve(installerPath) !== path.resolve(stagedInstaller)) {
     copyFileSync(installerPath, stagedInstaller);
@@ -114,9 +115,9 @@ if (installerPath && existsSync(installerPath)) {
   });
 }
 
-// 2. Windows Portable Executable
+// 2. Windows Portable ZIP
 if (portablePath && existsSync(portablePath)) {
-  const portableName = `otium-downloader-${version}-portable.exe`;
+  const portableName = `argon-${version}-portable.zip`;
   const stagedPortable = path.join(outDir, portableName);
   if (path.resolve(portablePath) !== path.resolve(stagedPortable)) {
     copyFileSync(portablePath, stagedPortable);
@@ -130,6 +131,27 @@ if (portablePath && existsSync(portablePath)) {
     kind: 'windows-portable',
     arch: 'x86_64',
     url: `https://github.com/${repository}/releases/download/${tag}/${portableName}`,
+    size: stat.size,
+    sha256: hash
+  });
+}
+
+// 3. Android APK
+if (apkPath && existsSync(apkPath)) {
+  const apkName = `ARGON_${version}_arm64.apk`;
+  const stagedApk = path.join(outDir, apkName);
+  if (path.resolve(apkPath) !== path.resolve(stagedApk)) {
+    copyFileSync(apkPath, stagedApk);
+  }
+
+  const stat = statSync(stagedApk);
+  const hash = sha256(stagedApk);
+
+  feed.assets.push({
+    name: apkName,
+    kind: 'android-apk',
+    arch: 'arm64',
+    url: `https://github.com/${repository}/releases/download/${tag}/${apkName}`,
     size: stat.size,
     sha256: hash
   });

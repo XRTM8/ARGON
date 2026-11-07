@@ -48,6 +48,14 @@ export interface DownloadTask {
   category?: TaskCategory;
   torrentInfo?: TorrentMetadata;
   mediaInfo?: MediaMetadata;
+  originalUrl?: string;
+  requestedSegments?: number;
+  customFilename?: boolean;
+  filePrepared?: boolean;
+  acceptRanges?: boolean;
+  etag?: string;
+  lastModified?: string;
+  probed?: boolean;
 }
 
 export interface DownloadStats {

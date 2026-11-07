@@ -15,7 +15,7 @@ export const OtiumLogo: React.FC<OtiumLogoProps> = ({
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={`${className} ${
-        glow ? 'drop-shadow-[0_0_8px_rgba(0,229,153,0.45)]' : ''
+        glow ? 'drop-shadow-[0_0_8px_rgba(208,202,192,0.45)]' : ''
       }`}
     >
       {/* Precision Geometric Squircle */}

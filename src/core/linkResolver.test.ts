@@ -24,9 +24,9 @@ describe('linkResolver', () => {
   });
 
   it('resolves GitHub blob URLs to raw user content', () => {
-    const raw = 'https://github.com/XRTM8/Otium-Downloader/blob/main/package.json';
+    const raw = 'https://github.com/XRTM8/ARGON/blob/main/package.json';
     const res = resolveUniversalLink(raw);
-    expect(res.resolvedUrl).toBe('https://raw.githubusercontent.com/XRTM8/Otium-Downloader/main/package.json');
+    expect(res.resolvedUrl).toBe('https://raw.githubusercontent.com/XRTM8/ARGON/main/package.json');
   });
 
   it('injects default origin referer for normal URLs', () => {

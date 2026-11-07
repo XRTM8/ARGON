@@ -1,6 +1,6 @@
-# Contributing to Otium Downloader
+# Contributing to ARGON
 
-Thank you for your interest in contributing to **Otium Downloader**. We welcome contributions that maintain our high bar for performance, security, zero-telemetry privacy, and minimalist design.
+Thank you for your interest in contributing to **ARGON**. We welcome contributions that maintain our high bar for performance, security, zero-telemetry privacy, and minimalist design.
 
 ---
 
@@ -34,7 +34,7 @@ Thank you for your interest in contributing to **Otium Downloader**. We welcome 
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/XRTM8/Otium-Downloader.git
+git clone https://github.com/XRTM8/ARGON.git
 cd Otium-Downloader
 
 # 2. Install Node dependencies

@@ -13,6 +13,7 @@ import {
   ExternalLink,
   RotateCcw,
   X
+  ,Send
 } from 'lucide-react';
 import type { DownloadTask } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
@@ -29,6 +30,7 @@ interface TaskCardProps {
   isSelected?: boolean;
   selectionMode?: boolean;
   onToggleSelect?: (id: string) => void;
+  onShare?: (task: DownloadTask) => void;
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({
@@ -41,7 +43,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   onRestart,
   isSelected = false,
   selectionMode = false,
-  onToggleSelect
+  onToggleSelect,
+  onShare
 }) => {
   const [copiedLink, setCopiedLink] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
@@ -112,9 +115,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         };
       case 'documents':
         return {
-          bg: 'bg-emerald-500/15',
-          border: 'border-emerald-500/30',
-          text: 'text-emerald-400'
+          bg: 'bg-[#00e5ff]/15',
+          border: 'border-[#00e5ff]/30',
+          text: 'text-[#00e5ff]'
         };
       case 'torrents':
         return {
@@ -146,13 +149,13 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       case 'soundcloud':
         return { label: 'SoundCloud', short: 'SC', color: 'bg-orange-500/15 text-orange-400 border-orange-500/25' };
       default:
-        return { label: 'Direct', short: 'DIR', color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25' };
+        return { label: 'Direct', short: 'DIR', color: 'bg-[#00e5ff]/15 text-[#00e5ff] border-[#00e5ff]/25' };
     }
   };
 
 
   return (
-    <div className="bg-[#0b0d13] border border-white/[0.06] hover:border-white/[0.12] rounded-2xl p-3.5 sm:p-4 transition-all duration-200 shadow-sm relative overflow-hidden">
+    <div className="bg-[#121212] border border-white/[0.06] hover:border-white/[0.12] rounded-2xl p-3.5 sm:p-4 transition-all duration-200 shadow-sm relative overflow-hidden">
       {/* Top Row: Icon + Title + Selection */}
       <div className="flex items-start gap-3">
         {selectionMode && (
@@ -161,7 +164,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             onClick={() => onToggleSelect?.(task.id)}
             className={`w-5 h-5 mt-1 rounded-lg border flex items-center justify-center cursor-pointer transition-all shrink-0 ${
               isSelected
-                ? 'bg-[#00e599] border-[#00e599] text-[#07080a]'
+                ? 'bg-[#00e5ff] border-[#00e5ff] text-zinc-950'
                 : 'border-white/[0.2] bg-white/[0.04] hover:border-white/[0.4]'
             }`}
           >
@@ -188,7 +191,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
               )}
             </div>
           ) : task.status === 'completed' ? (
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center text-[#00e599] shadow-[0_0_12px_rgba(0,229,153,0.15)]">
+            <div className="w-10 h-10 rounded-xl bg-[#00e5ff]/15 border border-[#00e5ff]/25 flex items-center justify-center text-[#00e5ff] shadow-[0_0_12px_rgba(0,229,255,0.15)]">
               <CheckCircle2 className="w-5 h-5" />
             </div>
           ) : task.status === 'error' ? (
@@ -212,7 +215,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <h3
-              className="font-semibold text-xs sm:text-sm text-zinc-100 line-clamp-2 break-all leading-snug cursor-pointer hover:text-[#00e599] transition-colors"
+              className="font-semibold text-xs sm:text-sm text-zinc-100 line-clamp-2 break-all leading-snug cursor-pointer hover:text-[#00e5ff] transition-colors"
               onClick={task.status === 'completed' ? handleOpenFile : undefined}
               title={task.filename}
             >
@@ -220,7 +223,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             </h3>
             <div className="flex items-center gap-1 shrink-0">
               {task.mediaInfo?.quality && (
-                <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-[#00e599] border border-emerald-500/25 font-bold">
+                <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded-md bg-[#00e5ff]/15 text-[#00e5ff] border border-[#00e5ff]/25 font-bold">
                   {task.mediaInfo.quality}
                 </span>
               )}
@@ -265,12 +268,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           <div
             className={`h-full transition-all duration-200 relative overflow-hidden rounded-full ${
               task.status === 'completed'
-                ? 'bg-[#00e599]'
+                ? 'bg-[#00e5ff]'
                 : task.status === 'paused'
                 ? 'bg-amber-400'
                 : task.status === 'queued'
                 ? 'bg-zinc-600'
-                : 'bg-gradient-to-r from-emerald-500 to-[#00e599] shadow-[0_0_12px_rgba(0,229,153,0.35)]'
+                : 'bg-gradient-to-r from-[#00e5ff] to-[#00e5ff] shadow-[0_0_12px_rgba(0,229,255,0.35)]'
             }`}
             style={{ width: `${progressPercent}%` }}
           >
@@ -298,7 +301,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
               >
                 <div
                   className={`h-full transition-all duration-150 ${
-                    chunk.status === 'completed' ? 'bg-[#00e599]' : 'bg-[#00e599]/60'
+                    chunk.status === 'completed' ? 'bg-[#00e5ff]' : 'bg-[#00e5ff]/60'
                   }`}
                   style={{ width: `${pct}%` }}
                 />
@@ -314,14 +317,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         <div className="flex items-center gap-2 text-[11px] font-mono min-w-0">
           <span className={`font-semibold shrink-0 ${
             task.status === 'completed'
-              ? 'text-[#00e599]'
+              ? 'text-[#00e5ff]'
               : task.status === 'paused'
               ? 'text-amber-400'
               : task.status === 'queued'
               ? 'text-zinc-400'
               : task.status === 'error'
               ? 'text-rose-400'
-              : 'text-[#00e599]'
+              : 'text-[#00e5ff]'
           }`}>
             {task.status === 'completed'
               ? (isAr ? 'مكتمل ✓' : 'Done ✓')
@@ -359,6 +362,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
         {/* Thumb Action Buttons (40px touch ergonomics) */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {task.status === 'completed' && onShare && task.savePath && (
+            <button onClick={()=>onShare(task)} className="px-3 py-1.5 rounded-xl bg-white/[0.06] text-zinc-200 text-xs flex items-center gap-1.5" title={isAr?'إرسال إلى جهاز':'Send to device'}><Send className="w-3.5 h-3.5"/><span className="hidden sm:inline">{isAr?'إرسال إلى جهاز':'Send to device'}</span></button>
+          )}
           {task.status === 'queued' && onStartImmediately && (
             <button
               onClick={() => onStartImmediately(task.id)}
@@ -381,7 +387,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           {(task.status === 'paused' || task.status === 'error') && (
             <button
               onClick={() => onResume(task.id)}
-              className="w-8 h-8 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-[#00e599] flex items-center justify-center transition-all active:scale-90 shadow-sm"
+              className="w-8 h-8 rounded-xl bg-[#00e5ff]/15 hover:bg-[#00e5ff]/25 text-[#00e5ff] flex items-center justify-center transition-all active:scale-90 shadow-sm"
               title={isAr ? 'استئناف' : 'Resume'}
             >
               <Play className="w-4 h-4 fill-current ml-0.5 rtl:mr-0.5 rtl:ml-0" />
@@ -392,7 +398,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             <>
               <button
                 onClick={handleOpenFile}
-                className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-[#00e599] font-semibold text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-[0_0_12px_rgba(0,229,153,0.15)]"
+                className="px-3 py-1.5 rounded-xl bg-[#00e5ff]/15 hover:bg-[#00e5ff]/25 border border-[#00e5ff]/30 text-[#00e5ff] font-semibold text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-[0_0_12px_rgba(0,229,255,0.15)]"
                 title={isAr ? 'تشغيل / فتح الملف' : 'Open File'}
               >
                 <ExternalLink className="w-3.5 h-3.5" />
@@ -411,7 +417,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           {(task.status === 'completed' || task.status === 'error') && onRestart && (
             <button
               onClick={() => onRestart(task.id)}
-              className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-[#00e599] flex items-center justify-center transition-all active:scale-90"
+              className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-[#00e5ff] flex items-center justify-center transition-all active:scale-90"
               title={isAr ? 'إعادة التنزيل' : 'Restart'}
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -423,7 +429,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-zinc-200 flex items-center justify-center transition-all active:scale-90"
             title={isAr ? 'نسخ الرابط' : 'Copy URL'}
           >
-            {copiedLink ? <Check className="w-3.5 h-3.5 text-[#00e599]" /> : <Copy className="w-3.5 h-3.5" />}
+            {copiedLink ? <Check className="w-3.5 h-3.5 text-[#00e5ff]" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
 
           {isConfirmingDelete ? (
@@ -473,7 +479,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           <div className="flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
             {task.checksum?.verified ? (
-              <span className="text-[#00e599] font-medium flex items-center gap-1">
+              <span className="text-[#00e5ff] font-medium flex items-center gap-1">
                 <Check className="w-3 h-3" />
                 <span>{isAr ? 'تم التحقق من مطابقة SHA-256 بنجاح ✓' : 'SHA-256 Verified ✓'}</span>
               </span>
@@ -492,7 +498,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             <button
               onClick={handleVerifyHash}
               disabled={isVerifying}
-              className="text-[#00e599] hover:underline disabled:opacity-50 text-[10px]"
+              className="text-[#00e5ff] hover:underline disabled:opacity-50 text-[10px]"
             >
               {isVerifying ? (isAr ? 'جاري الفحص...' : 'Verifying...') : (isAr ? 'فحص SHA-256' : 'Verify SHA-256')}
             </button>
@@ -525,7 +531,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             <button
               type="button"
               onClick={confirmRunExecutable}
-              className="px-3 py-1 rounded-lg bg-amber-500 text-[#07080a] font-bold transition-all active:scale-95 text-[11px]"
+              className="px-3 py-1 rounded-lg bg-amber-500 text-zinc-950 font-bold transition-all active:scale-95 text-[11px]"
             >
               {isAr ? 'تشغيل على مسؤوليتي' : 'Run Anyway'}
             </button>

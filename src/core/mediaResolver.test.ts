@@ -32,11 +32,12 @@ describe('mediaResolver', () => {
     expect(preview.availableFormats[0].ext).toBe('mp4');
   });
 
-  it('generates fallback preview for YouTube links if offline', async () => {
-    const preview = await fetchMediaMetadata('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-    expect(preview.platform).toBe('youtube');
-    expect(preview.availableFormats.length).toBe(5);
-    expect(preview.availableFormats.some((f) => f.isAudioOnly)).toBe(true);
-    expect(preview.availableFormats.some((f) => f.resolution === '1080p')).toBe(true);
+  it('reports missing native extraction instead of inventing formats', async () => {
+    await expect(fetchMediaMetadata('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).rejects.toThrow('ARGON');
+  });
+  it('detects platforms by hostname rather than substrings in URLs', () => {
+    expect(detectPlatform('https://example.com/?url=https://x.com/123')).toBe('other');
+    expect(detectPlatform('https://notyoutube.com/file.mp4')).toBe('direct');
+    expect(detectPlatform('https://youtube.com.evil.example/watch')).toBe('other');
   });
 });

@@ -33,16 +33,16 @@ export const ThroughputSparkline: React.FC<ThroughputSparklineProps> = ({
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        <linearGradient id="otium-sparkline-grad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#00e599" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#00e599" stopOpacity="0.0" />
+        <linearGradient id="argon-sparkline-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#00e5ff" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#00e5ff" stopOpacity="0.0" />
         </linearGradient>
       </defs>
-      <path d={areaD} fill="url(#otium-sparkline-grad)" />
+      <path d={areaD} fill="url(#argon-sparkline-grad)" />
       <path
         d={pathD}
-        stroke="#00e599"
-        strokeWidth="1.4"
+        stroke="#00e5ff"
+        strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
       />

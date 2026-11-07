@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Single-version guard for Otium Downloader.
+ * Single-version guard for ARGON.
  *
  * Ensures package.json is the single source of truth and enforces that
  * Cargo.toml, Cargo.lock, and tauri.conf.json match the same version string.
@@ -90,7 +90,7 @@ if (tagArg) {
   check('Release git tag argument', tagArg, expectedTag);
 }
 
-console.log(`Otium Downloader Version Guard: v${canonicalVersion}`);
+console.log(`ARGON Version Guard: v${canonicalVersion}`);
 for (const c of checks) {
   console.log(`  ${c.ok ? '✓' : '✗'} ${c.label} (${c.actual})`);
 }

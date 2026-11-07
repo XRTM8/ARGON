@@ -1,0 +1,1 @@
+ARGON bundles yt-dlp and Node.js for Windows media extraction. Run `npm run prepare:tools` to prepare verified resources before packaging. Upstream licenses are included beside the tools. On Linux/macOS install yt-dlp and Node.js on PATH. Android currently supports direct HTTP/HTTPS files only.

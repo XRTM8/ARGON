@@ -52,7 +52,7 @@ export function resolveUniversalLink(rawUrl: string): ResolvedLink {
     }
 
     // 1. Google Drive direct export resolver
-    if (url.hostname.includes('drive.google.com')) {
+    if ((url.hostname === 'drive.google.com' || url.hostname.endsWith('.drive.google.com'))) {
       // Matches /file/d/{id}/...
       const fileMatch = url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
       if (fileMatch && fileMatch[1]) {
@@ -78,7 +78,7 @@ export function resolveUniversalLink(rawUrl: string): ResolvedLink {
     }
 
     // 2. Dropbox Direct Download Resolver (?dl=1)
-    if (url.hostname.includes('dropbox.com')) {
+    if ((url.hostname === 'dropbox.com' || url.hostname.endsWith('.dropbox.com'))) {
       url.searchParams.set('dl', '1');
       return {
         resolvedUrl: url.toString(),
@@ -91,7 +91,9 @@ export function resolveUniversalLink(rawUrl: string): ResolvedLink {
 
     // 3. GitHub Blob to Raw Resolver
     if (url.hostname === 'github.com' && url.pathname.includes('/blob/')) {
-      const rawUrl = trimmed.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/');
+      url.hostname = 'raw.githubusercontent.com';
+      url.pathname = url.pathname.replace('/blob/', '/');
+      const rawUrl = url.toString();
       return {
         resolvedUrl: rawUrl,
         originalUrl: trimmed,
@@ -102,7 +104,7 @@ export function resolveUniversalLink(rawUrl: string): ResolvedLink {
     }
 
     // 4. Hugging Face Model / Dataset Weights (/blob/ -> /resolve/)
-    if (url.hostname.includes('huggingface.co') && url.pathname.includes('/blob/')) {
+    if ((url.hostname === 'huggingface.co' || url.hostname.endsWith('.huggingface.co')) && url.pathname.includes('/blob/')) {
       const resolved = url.toString().replace('/blob/', '/resolve/');
       return {
         resolvedUrl: resolved,
@@ -114,7 +116,7 @@ export function resolveUniversalLink(rawUrl: string): ResolvedLink {
     }
 
     // 5. Internet Archive Details to Direct Download (/details/ -> /download/)
-    if (url.hostname.includes('archive.org') && url.pathname.includes('/details/')) {
+    if ((url.hostname === 'archive.org' || url.hostname.endsWith('.archive.org')) && url.pathname.includes('/details/')) {
       const resolved = url.toString().replace('/details/', '/download/');
       return {
         resolvedUrl: resolved,

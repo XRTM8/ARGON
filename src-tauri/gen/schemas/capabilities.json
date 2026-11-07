@@ -1,1 +1,1 @@
-{}
+{"main":{"identifier":"main","description":"Allow the local ARGON window to receive native transfer and browser bridge events.","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten"]}}

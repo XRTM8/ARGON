@@ -1,191 +1,82 @@
-# Otium Downloader
+# ARGON
 
-<div align="center">
+**BY Otium** · Downloads, encrypted local sharing and clipboard delivery in one Arabic/English workspace.
 
-```
-   ██████╗ ████████╗██╗██╗   ██╗███╗   ███╗
-  ██╔═══██╗╚══██╔══╝██║██║   ██║████╗ ████║
-  ██║   ██║   ██║   ██║██║   ██║██╔████╔██║
-  ██║   ██║   ██║   ██║██║   ██║██║╚██╔╝██║
-  ╚██████╔╝   ██║   ██║╚██████╔╝██║ ╚═╝ ██║
-   ╚═════╝    ╚═╝   ╚═╝ ╚═════╝ ╚═╝     ╚═╝
-```
+## ARGON 2
 
-**Sovereign, High-Throughput Multi-Segment Download Accelerator**  
-*Desktop & Mobile • Zero Telemetry • Local-First Architecture*
+The unified interface uses AMOLED black, frosted dark panels and titanium text. Downloads, Sharing, Clipboard, Activity and Settings share one navigation panel, with a compact layout on phones.
 
-[![Release](https://img.shields.io/badge/Release-v1.3.1-00e599.svg?style=flat-square)](https://github.com/XRTM8/Otium-Downloader/releases/latest)
-[![CI Status](https://img.shields.io/github/actions/workflow/status/XRTM8/Otium-Downloader/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/XRTM8/Otium-Downloader/actions)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0)
-[![Tauri v2](https://img.shields.io/badge/Tauri-v2.12-purple.svg?style=flat-square)](https://v2.tauri.app)
-[![Rust 2021](https://img.shields.io/badge/Rust-1.80+-orange.svg?style=flat-square)](https://www.rust-lang.org)
-[![Privacy](https://img.shields.io/badge/Telemetry-0%25%20(None)-emerald.svg?style=flat-square)](#security--privacy)
+- Native file selection and encrypted device-to-device transfers, with a six-digit pairing code confirmed on both screens.
+- Explicit acceptance for every received file or text; no unattended clipboard synchronization.
+- SHA-256 verification for every file, verified partial-file resume after restarting, collision-safe saves and receiver acknowledgements.
+- A completed download can be selected for local sharing. Received links can be added to the downloader explicitly.
+- Link cleaning is previewed on request. Signed/authenticated URLs are preserved.
 
-</div>
+Both devices need **ARGON 2**. The new `argon-flow/2` protocol does not communicate with the older Flow application. See [protocol, usage and validation details](docs/FLOW-V2.md) and the original [integration study](research/ARGON-FLOW-STUDY.md).
 
----
+## Downloads
 
-## Overview
+- HTTP/HTTPS files, redirects, custom request headers and URLs with Basic authentication.
+- Parallel ranges verified using a real GET probe. Servers that ignore ranges fall back to a single stream after all other writers have stopped.
+- Resume when the remote size and ETag/Last-Modified still match. Otherwise restart safely from zero.
+- Unknown-length streams and empty/one-byte files.
+- Collision-safe file creation; existing unrelated files are not overwritten.
+- Files become complete only after transfer results, disk length and an optional SHA-256 check succeed.
+- A shared global speed limit and bounded concurrent download queue.
+- Chrome/Edge browser extension, included in installers and portable ZIPs.
+- Native social-video URL extraction through bundled yt-dlp and Node.js on Windows. The extractor selects an available combined HTTP/HTTPS format and preserves CDN request headers. Available quality depends on the source.
 
-**Otium Downloader** is a sovereign, lightweight download accelerator engineered for maximum throughput, low memory footprint, and complete privacy. Built on **Tauri v2** and **Rust (Tokio)**, it divides single-file downloads into parallel byte-range streams, tracks live velocity on an oscilloscope waveform, resolves specialized cloud sources, and integrates seamlessly with web browsers through a local loopback bridge.
+Browser-only Vite previews do **not** download or simulate progress. Run the native app for downloads.
 
----
+Private, expired or restricted links may require authentication or a fresh direct URL. Webpages and HLS/DASH manifests are reported as unsupported rather than saved as completed media. Magnet/torrent metadata parsing is present; a P2P transfer engine is not included. Android currently supports direct files only; platform video extraction requires desktop tools.
 
-## Technical Specifications
+## Build and run on Windows
 
-| Dimension | Otium Downloader | Traditional Downloaders (IDM / FDM) |
-| :--- | :--- | :--- |
-| **Runtime & Memory** | Rust + Tauri v2 native binary (< 40MB RAM) | Heavy C++ or Electron wrappers (150MB - 400MB RAM) |
-| **Telemetry & Tracking** | **0% (Zero)** — strictly local execution | Ad networks, user analytics, tracking beacons |
-| **Concurrency Engine** | Tokio async multi-range with pre-allocated disk writes | Multi-process temporary file stitching |
-| **Throughput Visualizer** | Live 20-tick SVG oscilloscope (0 re-renders) | Static progress bars or heavyweight graphs |
-| **P2P & Magnet Support** | Native BEP 0003 & BEP 0009 parser with BTIH | External daemon or heavy torrent engine |
-| **Browser Integration** | Localhost HTTP bridge (`127.0.0.1:41523`) + Manifest V3 | Proprietary NPAPI / closed binaries |
-| **Audio Feedback** | Web Audio API pure tone synthesis (0 assets) | Bundled WAV/MP3 files |
+Prerequisites: Node.js, a current stable Rust toolchain, Visual Studio C++ Build Tools and WebView2.
 
----
-
-## Core Capabilities
-
-### 1. Dynamic Multi-Part Concurrency
-- **1x, 4x, 8x, and 16x Connections:** Slices files into byte chunks (`Range: bytes=start-end`) to bypass server-side single-connection throttling.
-- **Concurrent Disk Streaming:** Direct-to-disk write offsets using Tokio asynchronous I/O and Windows `FILE_SHARE_READ | FILE_SHARE_WRITE` pre-allocation to prevent disk fragmentation.
-- **Automatic Fallback:** Gracefully falls back to single-stream downloading if the host server rejects partial byte ranges (HTTP 200 vs 206).
-
-### 2. Live Throughput Oscilloscope
-- **Hardware-Accelerated Waveform:** Real-time SVG throughput monitor sampling network velocity over 20 consecutive ticks.
-- **Zero React Re-render Penalty:** Rendered with lightweight DOM updates and CSS hardware transforms.
-
-### 3. Sovereign BitTorrent & Magnet Engine
-- **BEP 0009 Magnet Parser:** Detects and extracts 40-character Hex and 32-character Base32 BitTorrent Info Hashes (BTIH), display names (`dn`), trackers (`tr`), and payload size.
-- **BEP 0003 Bencode Parser:** Parses `.torrent` files, inspects multi-file hierarchies, and calculates SHA-1 info hashes locally.
-
-### 4. Universal Link Resolver & Redirect Chaser
-- **Hugging Face Resolver:** Converts model and dataset web URLs (`/blob/` -> `/resolve/`) into direct weight streams.
-- **Internet Archive Resolver:** Translates detail pages (`/details/` -> `/download/`) into direct media downloads.
-- **Cloud Storage Exporters:** Direct export resolvers for Google Drive (`/file/d/` -> `uc?export=download`), Dropbox (`?dl=1`), and GitHub raw user content.
-- **Basic Auth Extraction:** Safely extracts embedded URL credentials (`http://user:pass@host/`) into sanitized `Authorization: Basic` headers.
-
-### 5. Native Browser Extension (Manifest V3)
-- Located in `browser-extension/`, compatible with Chrome, Edge, Brave, Opera, and Firefox.
-- **Auto-Interception:** Automatically detects and forwards browser downloads to Otium's local loopback bridge.
-- **Context Menu:** Right-click any link, video, audio, or image to dispatch to Otium instantly.
-- **Offline Tolerance:** Falls back to default browser downloading if Otium is not running.
-
-### 6. Security & Localhost Defensive Architecture
-- **Path Traversal Shield:** Strict directory traversal mitigation (`sanitize_filename`) stripping `..`, `/`, `\`, and control characters.
-- **Windows Device Name Guard:** Automatically escapes reserved device stems (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`).
-- **Command Injection Prevention:** Uses native OS APIs for folder reveals (`tauri-plugin-opener`), avoiding shell interpreter invocation.
-- **Localhost Loopback Isolation:** The browser bridge binds strictly to `127.0.0.1:41523` and rejects external network requests.
-- **Storage Compaction:** LocalStorage task histories are bounded and auto-compacted to prevent storage quota exhaustion.
-
-### 7. 120Hz Mobile Interface
-- Independent mobile layout (`MobileApp.tsx`) with tactile haptic feedback and swipeable bottom sheets.
-
-### 8. Synthesized Sound Engine & Global Hotkeys
-- Audio alerts generated on-the-fly via the Web Audio API without bundled media files.
-- Full keyboard control:
-  - `?`: Toggle Keyboard Shortcuts Cheatsheet
-  - `⌘N` / `Ctrl+N`: New Download Modal
-  - `⌘,` / `Ctrl+,`: Toggle Settings
-  - `/`: Focus Search Filter
-  - `Esc`: Close Modals / Exit Selection Mode
-  - `⌘V` / `Ctrl+V`: Quick Paste Download Link
-
----
-
-## Architecture
-
-```
-otium-downloader/
-├── browser-extension/     # Manifest V3 browser integration (Chrome, Edge, Firefox)
-├── src-tauri/             # Native Rust core (Tokio, reqwest, local HTTP bridge)
-│   ├── src/
-│   │   ├── lib.rs         # Range downloader, loopback server, path security
-│   │   └── main.rs        # Native entrypoint
-│   └── Cargo.toml         # Rust dependency specifications
-├── src/
-│   ├── components/        # Obsidian minimalist React components
-│   │   ├── AddTaskModal.tsx       # Single, batch & torrent link modal
-│   │   ├── Header.tsx             # Controls, speed monitor & settings
-│   │   ├── OtiumLogo.tsx          # Custom vector monogram SVG
-│   │   ├── ShortcutsModal.tsx     # Keyboard cheatsheet modal
-│   │   ├── TaskCard.tsx           # Telemetry card with dynamic chunk tracks
-│   │   ├── TaskList.tsx           # Multi-select, filtering & bulk controls
-│   │   └── ThroughputSparkline.tsx# Real-time velocity oscilloscope
-│   ├── core/              # TypeScript core domain logic
-│   │   ├── downloadManager.ts     # Task queue, IPC events & state machine
-│   │   ├── linkResolver.ts        # Universal resolver & redirect chaser
-│   │   ├── segmentation.ts        # Range math, categorization & sanitization
-│   │   ├── sound.ts               # Web Audio API pure tone synthesizer
-│   │   ├── storage.ts             # Quota-safe LocalStorage compaction
-│   │   └── torrent.ts             # BEP 0003 bencode & BEP 0009 magnet engine
-│   └── types/             # Domain TypeScript type definitions
-└── scripts/
-    └── check-version.mjs  # Automated cross-file version parity guard
-```
-
----
-
-## Installation
-
-### Windows (`winget`)
-```bash
-winget install XRTM8.OtiumDownloader
-```
-
-### Prebuilt Installers
-Download signed installers (`.exe`, `.msi`) or portable binaries from [GitHub Releases](https://github.com/XRTM8/Otium-Downloader/releases/latest).
-
----
-
-## Building from Source
-
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v20 or v22)
-- [Rust](https://www.rust-lang.org/) (stable toolchain)
-- C++ Build Tools & WebView2 (Windows)
-
-### Build Steps
-
-```bash
-# 1. Clone repository
-git clone https://github.com/XRTM8/Otium-Downloader.git
-cd Otium-Downloader
-
-# 2. Install dependencies
+```powershell
 npm ci
+npm run tauri:dev
+```
 
-# 3. Verify cross-platform version consistency
-npm run version:check
+`tauri:dev` and `tauri:build` prepare the Windows media resources automatically. The first preparation downloads yt-dlp from its official release and verifies SHA-256 before use. The build's Node.js runtime and third-party licenses travel with the app. Subsequent builds reuse the verified extractor. To refresh it, remove `src-tauri/tools/extractor.json` and run `npm run prepare:tools`.
 
-# 4. Run test suites
+```powershell
 npm test
 cargo test --manifest-path src-tauri/Cargo.toml
-
-# 5. Build desktop release package
-npm run tauri:build
+cargo test --manifest-path flow-core/Cargo.toml -- --test-threads=1
+npm run version:check
+npm run tauri:build -- --bundles nsis
 ```
 
----
+An optional live HTTPS smoke test is available:
 
-## Browser Extension Setup
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml public_https_download -- --ignored
+```
 
-1. Open your browser and navigate to `chrome://extensions` or `edge://extensions`.
-2. Enable **Developer mode** in the top right corner.
-3. Click **Load unpacked** and select the `browser-extension` folder inside this repository (or click "Open Extension Folder" directly in Otium Settings).
-4. Otium Downloader is now integrated with your browser.
+The installer is generated under `src-tauri/target/release/bundle/nsis/`. A portable distribution must include `ARGON.exe`, `tools/` and `browser-extension/` together. Do not distribute only the executable if video extraction and extension installation are needed. Linux/macOS development requires yt-dlp and a supported JavaScript runtime on PATH.
 
----
+## Browser extension
 
-## Contributing & Security
+Open Chrome/Edge's extension manager, enable Developer mode, choose **Load unpacked**, and select `browser-extension/`. The folder is also accessible from ARGON Settings. The extension uses the native bridge on `127.0.0.1:41523`. A browser download is cancelled only after the bridge accepts its task; failed handoffs leave the browser download running.
 
-- Contributions are welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) for code quality standards and testing workflows.
-- For vulnerability disclosures, review our [SECURITY.md](SECURITY.md).
+## Android preview
 
----
+With the Android SDK/NDK, Java 17 and the Rust Android target installed:
+
+```powershell
+npm run tauri:android:build -- --target aarch64 --ci
+```
+
+The build produces an unsigned release APK. Sign it with your existing release certificate for an upgrade, or a development certificate for testing. The local `arm64-preview.apk` artifact is development-signed and has not been validated on a physical phone. Android receives files into app storage, opens accepted files through FileProvider, and selects outgoing files through the system document picker. Keep the app open during transfers; background transfer execution is not implemented.
+
+## Settings and updates
+
+Settings display **ARGON** and **BY Otium**, and allow saving a writable download directory. Release checks use [ARGON releases](https://github.com/XRTM8/ARGON/releases). Download an available update explicitly from Settings, then open its installer from the completed downloads list. An unavailable update service is shown as an error, not as proof that the app is current.
+
+The application identifier, storage keys and browser bridge header retain their legacy Otium values for compatibility with existing data and integrations. Historical winget manifests describe the original releases.
 
 ## License
 
-Licensed under the **GNU General Public License v3.0 (GPL-3.0)**.  
-See [LICENSE](LICENSE) for full details.
+GPL-3.0-or-later. Bundled media components retain their upstream licenses, included in `tools/`.
