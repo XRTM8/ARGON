@@ -22,6 +22,9 @@ pub struct TaskManager {
     cancellations: RwLock<HashMap<String, Arc<AtomicBool>>>,
     speed_limit_bytes_per_sec: AtomicU64,
     frontend_ready: AtomicBool,
+    bridge_listening: AtomicBool,
+    bridge_sequence: AtomicU64,
+    bridge_acks: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     next_transfer: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
@@ -534,6 +537,26 @@ async fn set_browser_bridge_ready(state: tauri::State<'_, Arc<TaskManager>>) -> 
 }
 
 #[tauri::command]
+async fn acknowledge_browser_download(
+    state: tauri::State<'_, Arc<TaskManager>>,
+    request_id: String,
+    accepted: bool,
+) -> Result<(), String> {
+    let sender = state.bridge_acks.lock().await.remove(&request_id)
+        .ok_or("Browser handoff expired; the browser will keep its download")?;
+    sender.send(accepted).map_err(|_| "Browser handoff closed".to_string())
+}
+
+#[tauri::command]
+async fn browser_bridge_status(state: tauri::State<'_, Arc<TaskManager>>) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "listening": state.bridge_listening.load(Ordering::Relaxed),
+        "ready": state.frontend_ready.load(Ordering::Relaxed),
+        "port": 41523
+    }))
+}
+
+#[tauri::command]
 async fn cancel_task(
     state: tauri::State<'_, Arc<TaskManager>>,
     task_id: String,
@@ -729,6 +752,8 @@ pub struct BrowserDownloadPayload {
     pub url: String,
     pub filename: Option<String>,
     pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 #[cfg(desktop)]
@@ -737,6 +762,7 @@ fn start_browser_bridge(app_handle: AppHandle) {
         let addr = "127.0.0.1:41523";
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => {
+                app_handle.state::<Arc<TaskManager>>().bridge_listening.store(true, Ordering::Relaxed);
                 log::info!("Otium Browser Bridge listening on http://{}", addr);
                 l
             }
@@ -765,12 +791,13 @@ fn start_browser_bridge(app_handle: AppHandle) {
                     }
                 };
                 // Extract Origin and Client headers
-                let origin_header = request
+                let request_head = request.split("\r\n\r\n").next().unwrap_or("");
+                let origin_header = request_head
                     .lines()
                     .find(|line| line.to_ascii_lowercase().starts_with("origin:"))
                     .map(|line| line[7..].trim().to_string());
 
-                let client_header = request
+                let client_header = request_head
                     .lines()
                     .find(|line| line.to_ascii_lowercase().starts_with("x-otium-client:"))
                     .and_then(|line| {
@@ -838,7 +865,7 @@ fn start_browser_bridge(app_handle: AppHandle) {
                 };
 
                 // Handle GET /ping or GET /status
-                if request.starts_with("GET /ping") || request.starts_with("GET /status") {
+                if request.starts_with("GET /ping ") || request.starts_with("GET /status ") {
                     if !app
                         .state::<Arc<TaskManager>>()
                         .frontend_ready
@@ -851,7 +878,7 @@ fn start_browser_bridge(app_handle: AppHandle) {
                             .await;
                         return;
                     }
-                    let body = serde_json::json!({"status": "ok", "app": "ARGON", "version": env!("CARGO_PKG_VERSION")}).to_string();
+                    let body = serde_json::json!({"status": "ok", "app": "ARGON", "version": env!("CARGO_PKG_VERSION"), "capabilities": ["persisted-handoff", "direct-files"]}).to_string();
                     let response = format!(
                         "HTTP/1.1 200 OK\r\n\
                         {}Content-Type: application/json\r\n\
@@ -909,12 +936,13 @@ fn start_browser_bridge(app_handle: AppHandle) {
                             serde_json::from_str::<BrowserDownloadPayload>(json_part.trim())
                         {
                             let url_trim = payload.url.trim();
-                            // Validate protocol to prevent file:// or internal protocol abuse
-                            if !url_trim.starts_with("http://")
-                                && !url_trim.starts_with("https://")
-                                && !url_trim.starts_with("magnet:?")
-                            {
-                                let body = r#"{"error":"invalid_protocol","message":"Only http, https, and magnet URIs are permitted"}"#;
+                            let valid_url = reqwest::Url::parse(url_trim).ok().filter(|url| {
+                                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+                                    && !url.path().to_ascii_lowercase().ends_with(".m3u8")
+                                    && !url.path().to_ascii_lowercase().ends_with(".mpd")
+                            });
+                            if valid_url.is_none() {
+                                let body = r#"{"error":"unsupported_url","message":"Use a direct HTTP/HTTPS file URL; magnet and HLS/DASH streams are unsupported"}"#;
                                 let response = format!(
                                     "HTTP/1.1 400 Bad Request\r\n\
                                     {}Content-Type: application/json\r\n\
@@ -931,8 +959,22 @@ fn start_browser_bridge(app_handle: AppHandle) {
                                 payload.filename = Some(sanitize_filename(fname));
                             }
 
+                            let state = app.state::<Arc<TaskManager>>();
+                            let request_id = format!("bridge-{}", state.bridge_sequence.fetch_add(1, Ordering::Relaxed));
+                            let (sender, receiver) = tokio::sync::oneshot::channel();
+                            state.bridge_acks.lock().await.insert(request_id.clone(), sender);
+                            payload.request_id = Some(request_id.clone());
                             if app.emit("browser-add-download", payload).is_err() {
+                                state.bridge_acks.lock().await.remove(&request_id);
                                 let _ = socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await;
+                                return;
+                            }
+                            let accepted = matches!(tokio::time::timeout(std::time::Duration::from_secs(4), receiver).await, Ok(Ok(true)));
+                            state.bridge_acks.lock().await.remove(&request_id);
+                            if !accepted {
+                                let body = r#"{"error":"handoff_not_saved","message":"ARGON could not save the task; keep the browser download"}"#;
+                                let response = format!("HTTP/1.1 503 Service Unavailable\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", cors_origin_str, body.len(), body);
+                                let _ = socket.write_all(response.as_bytes()).await;
                                 return;
                             }
                             let body =
@@ -1054,6 +1096,8 @@ pub fn run() {
             media::resolve_media,
             cancel_task,
             set_browser_bridge_ready,
+            acknowledge_browser_download,
+            browser_bridge_status,
             cleanup_task,
             download_segment,
             verify_file_sha256,

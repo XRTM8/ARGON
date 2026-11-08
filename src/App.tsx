@@ -10,7 +10,8 @@ import {
   FolderOpen,
   CheckCircle2,
   Power,
-  ShieldCheck,
+  HardDrive,
+  Puzzle,
   Pause,
   Play,
   Trash2,
@@ -20,6 +21,7 @@ import { Header, CURRENT_VERSION, type MainViewTab } from './components/Header';
 import { QuickAddBar } from './components/QuickAddBar';
 import { TaskList } from './components/TaskList';
 import { SettingsView } from './components/SettingsView';
+import { BrowserView } from './components/BrowserView';
 import { SharingView, ClipboardView, FlowDialogs, SharingSettings, flowStatus } from './components/FlowPanels';
 import { downloadManager } from './core/downloadManager';
 import { useFlow } from './core/useFlow';
@@ -40,8 +42,9 @@ export function App() {
   const [tasks, setTasks] = useState(downloadManager.getTasks());
   const [stats, setStats] = useState(downloadManager.getStats());
   const [finished, setFinished] = useState(false);
-  const [clipboardUrl, setClipboardUrl] = useState<string | null>(null);
+  const [clipboardUrl, setClipboardUrl] = useState<{ text: string; key: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [runtime, setRuntime] = useState(downloadManager.getRuntimeStatus());
 
   const flow = useFlow();
   const ar = lang === 'ar';
@@ -51,6 +54,7 @@ export function App() {
     sharing: ar ? 'المشاركة المحلية' : 'Local Sharing',
     clipboard: ar ? 'الحافظة المشفرة' : 'Secure Clipboard',
     history: ar ? 'سجل العمليات' : 'Activity Log',
+    browser: ar ? 'إضافة المتصفح' : 'Browser extension',
     settings: ar ? 'الإعدادات' : 'Settings'
   };
 
@@ -58,8 +62,19 @@ export function App() {
     return downloadManager.subscribe(() => {
       setTasks([...downloadManager.getTasks()]);
       setStats({ ...downloadManager.getStats() });
+      setRuntime(downloadManager.getRuntimeStatus());
     });
   }, []);
+
+  useEffect(() => {
+    const search = (event: KeyboardEvent) => {
+      if (activeView === 'downloads' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault(); document.getElementById('download-search')?.focus();
+      }
+    };
+    window.addEventListener('keydown', search);
+    return () => window.removeEventListener('keydown', search);
+  }, [activeView]);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -75,7 +90,7 @@ export function App() {
       const text = event.clipboardData?.getData('text/plain')?.trim();
       if (text && /^https?:\/\//i.test(text)) {
         event.preventDefault();
-        setClipboardUrl(text.split(/\s+/)[0]);
+        setClipboardUrl({ text, key: performance.now() });
         setActiveView('downloads');
         setFinished(false);
       }
@@ -95,12 +110,12 @@ export function App() {
     const handleDrop = (event: DragEvent) => {
       event.preventDefault();
       setDragging(false);
-      const url = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '')
+      const urls = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '')
         .trim()
         .split(/\r?\n/)
-        .find((line) => /^https?:\/\//i.test(line));
-      if (url) {
-        downloadManager.addTask(url);
+        .filter((line) => /^https?:\/\//i.test(line)).join('\n');
+      if (urls) {
+        setClipboardUrl({ text: urls, key: performance.now() });
         setActiveView('downloads');
         setFinished(false);
       }
@@ -148,7 +163,7 @@ export function App() {
 
   return (
     <div className="argon-app">
-      <Header lang={lang} activeTab={activeView} onTabChange={setActiveView} stats={stats} />
+      <Header lang={lang} activeTab={activeView} onTabChange={setActiveView} stats={stats} runtime={runtime} />
 
       <div className="argon-content">
         {/* Topbar */}
@@ -219,16 +234,20 @@ export function App() {
         )}
 
         {/* Main Content Workspace */}
-        <main className="argon-main">
+        <main className="argon-main" id="main-content">
           {activeView === 'downloads' && (
             <>
               {/* Functional View Header */}
               <div className="view-header">
+                <div className="view-heading">
+                <span className="eyebrow">{ar ? 'مساحة العمل' : 'YOUR WORKSPACE'}</span>
                 <div className="view-header-title">
                   <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
                   <span className="count-badge" dir="ltr">
-                    {activeTasksCount} {ar ? 'نشطة' : 'active'} · {stats.completedCount} {ar ? 'مكتملة' : 'done'}
+                    {tasks.length}
                   </span>
+                </div>
+                <p className="view-description">{ar ? 'ملفاتك، من أول رابط لآخر بايت.' : 'Your files, from the first link to the last byte.'}</p>
                 </div>
 
                 <div className="view-header-actions">
@@ -267,11 +286,18 @@ export function App() {
                 </div>
               </div>
 
-              {/* Quick Add Bar */}
+              {runtime !== 'ready' && <div className="runtime-notice" role="status"><AlertCircle size={16} /><span>{runtime === 'preview' ? (ar ? 'هذه معاينة للواجهة. افتح تطبيق ARGON لتنزيل الملفات والاتصال بإضافة المتصفح.' : 'Interface preview. Open the ARGON desktop app to download files and connect your browser.') : runtime === 'error' ? (ar ? 'تعذّرت تهيئة المحرك. أعد فتح التطبيق وتحقق من مجلد الحفظ.' : 'The engine could not start. Reopen the app and check the download directory.') : (ar ? 'جارٍ تهيئة المحرك ومجلد الحفظ…' : 'Preparing the engine and download folder…')}</span></div>}
+              <div className="transfer-overview" aria-label={ar ? 'ملخص التنزيلات' : 'Transfer overview'}>
+                <div><span>{ar ? 'السرعة الحالية' : 'TRANSFER SPEED'}</span><strong dir="ltr">{formatSpeed(stats.currentTotalSpeed)}</strong></div>
+                <div><span>{ar ? 'جارٍ التنزيل' : 'DOWNLOADING'}</span><strong>{stats.activeCount}<small>{ar ? 'ملفات' : 'files'}</small></strong></div>
+                <div><span>{ar ? 'في الانتظار' : 'IN QUEUE'}</span><strong>{stats.queuedCount}<small>{ar ? 'ملفات' : 'files'}</small></strong></div>
+                <div><span>{ar ? 'البيانات المحمّلة' : 'DATA DOWNLOADED'}</span><strong dir="ltr">{formatBytes(stats.totalBytesDownloaded)}</strong></div>
+              </div>
               <QuickAddBar
                 lang={lang}
                 onAdd={add}
-                detectedClipboardUrl={clipboardUrl}
+                detectedClipboardUrl={clipboardUrl?.text}
+                intakeKey={clipboardUrl?.key}
                 onClearClipboardUrl={() => setClipboardUrl(null)}
               />
 
@@ -279,7 +305,7 @@ export function App() {
               <div className="download-toolbar">
                 <div className="download-tabs">
                   <button aria-pressed={!finished} onClick={() => setFinished(false)}>
-                    <span>{ar ? 'قيد التنزيل' : 'Active'}</span>
+                    <span>{ar ? 'قائمة التنزيل' : 'In progress'}</span>
                     <span>{activeTasksCount}</span>
                   </button>
                   <button aria-pressed={finished} onClick={() => setFinished(true)}>
@@ -287,6 +313,7 @@ export function App() {
                     <span>{stats.completedCount}</span>
                   </button>
                 </div>
+                <button className="text-button" onClick={() => setActiveView('browser')}><Puzzle size={14} />{ar ? 'ربط المتصفح' : 'Connect browser'}<ArrowUpRight size={13} /></button>
               </div>
 
               {/* Task List */}
@@ -301,6 +328,7 @@ export function App() {
           {activeView === 'sharing' && <SharingView lang={lang} />}
           {activeView === 'clipboard' && <ClipboardView lang={lang} onDownload={(url) => add(url)} />}
           {activeView === 'history' && <UnifiedHistory lang={lang} tasks={tasks} />}
+          {activeView === 'browser' && <BrowserView lang={lang} />}
           {activeView === 'settings' && (
             <div className="settings-layout">
               <SettingsView lang={lang} />
@@ -312,8 +340,8 @@ export function App() {
         {/* Clean Footer Status Bar */}
         <footer className="workspace-footer">
           <span>
-            <ShieldCheck size={13} />
-            <span>{ar ? 'وضع محلي مشفّر 100% · بدون خوادم سحابية' : '100% Local & Encrypted · Zero Cloud Telemetry'}</span>
+            <HardDrive size={13} />
+            <span>{ar ? 'الملفات تُحفظ على جهازك' : 'Files are saved on your device'}</span>
           </span>
           <span dir="ltr">ARGON ENGINE v{CURRENT_VERSION}</span>
         </footer>
@@ -324,7 +352,7 @@ export function App() {
       {dragging && (
         <div className="url-drop-overlay">
           <ArrowDownToLine size={32} />
-          <strong>{ar ? 'أفلت الرابط لبدء التنزيل الفوري' : 'Drop link to start accelerated download'}</strong>
+          <strong>{ar ? 'أفلت الروابط لمراجعتها وإضافتها' : 'Drop links to review and add them'}</strong>
         </div>
       )}
     </div>
@@ -335,6 +363,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
   const { snapshot } = useFlow();
   const ar = lang === 'ar';
   const [filter, setFilter] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const entries = [
     ...tasks.map((task) => ({
@@ -385,6 +414,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
         </div>
       </div>
 
+      {actionError && <p className="inline-error" role="alert">{actionError}</p>}
       <div className="glass-panel">
         {entries.length > 0 ? (
           entries.map((entry) => (
@@ -433,7 +463,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
                 <button
                   className="icon-button"
                   onClick={() => {
-                    void downloadManager.openFolder(entry.path);
+                    void downloadManager.openFolder(entry.path).catch((error) => setActionError(String(error)));
                   }}
                   aria-label={ar ? 'فتح المجلد' : 'Open folder'}
                 >

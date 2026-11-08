@@ -1,192 +1,58 @@
-import React, { useState } from 'react';
-import {
-  Trash2,
-  Search,
-  Pause,
-  Play,
-  X,
-  ArrowDownToLine,
-  CheckCircle2,
-  } from 'lucide-react';
-import { OtiumLogo } from './OtiumLogo';
+import { useState } from 'react';
+import { Search, X, ArrowDownToLine, CheckCircle2, Pause, Play, Trash2, Filter } from 'lucide-react';
 import type { DownloadTask } from '../types/downloader';
 import { TaskCard } from './TaskCard';
 
-interface TaskListProps {
-  tasks: DownloadTask[];
-  lang: 'ar' | 'en';
-  mode: 'downloads' | 'finished';
-  onPause: (id: string) => void;
-  onResume: (id: string) => void;
-  onRemove: (id: string, deleteFileFromDisk?: boolean) => void;
-  onClearCompleted: () => void;
-  onStartImmediately?: (id: string) => void;
-  onRestart?: (id: string) => void;
-  onPauseAll?: () => void;
-  onResumeAll?: () => void;
-  onSwitchToDownloads?: () => void;
-  onShare?: (task: DownloadTask) => void;
+interface Props {
+  tasks: DownloadTask[]; lang: 'ar' | 'en'; mode: 'downloads' | 'finished';
+  onPause: (id: string) => void; onResume: (id: string) => void; onRemove: (id: string, disk?: boolean) => void;
+  onClearCompleted: () => void; onStartImmediately?: (id: string) => void; onRestart?: (id: string) => void;
+  onPauseAll?: () => void; onResumeAll?: () => void; onSwitchToDownloads?: () => void; onShare?: (task: DownloadTask) => void;
 }
 
-export const TaskList: React.FC<TaskListProps> = ({
-  tasks,
-  lang,
-  mode,
-  onPause,
-  onResume,
-  onRemove,
-  onClearCompleted,
-  onStartImmediately,
-  onRestart,
-  onPauseAll,
-  onResumeAll,
-  onSwitchToDownloads,
-  onShare
-}) => {
-  const isAr = lang === 'ar';
-  const [searchQuery, setSearchQuery] = useState('');
+export function TaskList({ tasks, lang, mode, onPause, onResume, onRemove, onStartImmediately, onRestart, onSwitchToDownloads, onShare }: Props) {
+  const ar = lang === 'ar';
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [category, setCategory] = useState('all');
+  const [sort, setSort] = useState('newest');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const inMode = tasks.filter((task) => (task.status === 'completed') === (mode === 'finished'));
+  const filtered = inMode.filter((task) => (status === 'all' || mode === 'finished' || task.status === status) && (category === 'all' || task.category === category) && (!query.trim() || `${task.filename} ${task.originalUrl || task.url}`.toLowerCase().includes(query.trim().toLowerCase())))
+    .sort((a, b) => sort === 'name' ? a.filename.localeCompare(b.filename, lang) : sort === 'size' ? b.totalBytes - a.totalBytes : sort === 'oldest' ? a.createdAt - b.createdAt : b.createdAt - a.createdAt);
+  const selection = filtered.filter((task) => selected.has(task.id));
+  const allSelected = filtered.length > 0 && selection.length === filtered.length;
+  const toggle = (id: string) => { setConfirmRemove(false); setSelected((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); };
+  const labels: Record<string, string> = ar ? { all: 'كل الحالات', downloading: 'جارٍ التنزيل', queued: 'في الانتظار', paused: 'متوقف مؤقتاً', error: 'يحتاج انتباهك' } : { all: 'All statuses', downloading: 'Downloading', queued: 'Queued', paused: 'Paused', error: 'Needs attention' };
 
-  // Partition tasks by mode
-  const isDownloadsMode = mode === 'downloads';
-  const filteredTasks = tasks.filter((t) => {
-    if (isDownloadsMode) {
-      if (t.status === 'completed') return false;
-    } else {
-      if (t.status !== 'completed') return false;
-    }
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      return t.filename.toLowerCase().includes(q) || t.url.toLowerCase().includes(q);
-    }
-    return true;
-  });
-
-  const hasDownloading = tasks.some((t) => t.status === 'downloading');
-  const hasPaused = tasks.some((t) => t.status === 'paused');
-  const completedCount = tasks.filter((t) => t.status === 'completed').length;
-
-  return (
-    <div className="space-y-3 animate-in-fade">
-      {/* Top Toolbar: Only show if there are tasks or in finished mode */}
-      {(!isDownloadsMode || tasks.some((t) => t.status !== 'completed')) && (
-        <div className="flex items-center justify-between gap-2">
-          {/* Quick Search */}
-          <div className="relative flex-1 max-w-sm">
-            <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 rtl:right-3 rtl:left-auto top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={isAr ? 'بحث في القائمة...' : 'Search in list...'}
-              className="w-full bg-[#121212] border border-white/[0.06] focus:border-[#00e5ff]/40 rounded-xl pl-8 rtl:pr-8 rtl:pl-7 pr-7 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none font-mono transition-all"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 rtl:left-2 rtl:right-auto top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-
-          {/* Quick Batch Control Buttons */}
-          <div className="flex items-center gap-1.5 font-mono text-xs shrink-0">
-            {isDownloadsMode && hasDownloading && onPauseAll && (
-              <button
-                onClick={onPauseAll}
-                className="px-2.5 py-1.5 rounded-xl border border-white/[0.06] text-zinc-400 hover:text-amber-400 hover:bg-white/[0.04] transition-all flex items-center gap-1.5 active:scale-95"
-                title={isAr ? 'إيقاف الكل' : 'Pause All'}
-              >
-                <Pause className="w-3 h-3" />
-                <span className="hidden sm:inline text-[11px]">{isAr ? 'إيقاف الكل' : 'Pause All'}</span>
-              </button>
-            )}
-
-            {isDownloadsMode && hasPaused && onResumeAll && (
-              <button
-                onClick={onResumeAll}
-                className="px-2.5 py-1.5 rounded-xl border border-emerald-500/20 text-[#00e5ff] hover:bg-emerald-500/10 transition-all flex items-center gap-1.5 active:scale-95"
-                title={isAr ? 'استئناف الكل' : 'Resume All'}
-              >
-                <Play className="w-3 h-3 fill-current" />
-                <span className="hidden sm:inline text-[11px]">{isAr ? 'استئناف الكل' : 'Resume All'}</span>
-              </button>
-            )}
-
-            {!isDownloadsMode && completedCount > 0 && (
-              <button
-                onClick={onClearCompleted}
-                className="px-2.5 py-1.5 rounded-xl border border-white/[0.06] text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all flex items-center gap-1.5 active:scale-95"
-                title={isAr ? 'مسح السجل' : 'Clear History'}
-              >
-                <Trash2 className="w-3 h-3" />
-                <span className="text-[11px]">{isAr ? 'مسح السجل' : 'Clear'}</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Task List / Empty States */}
-      {filteredTasks.length === 0 ? (
-        <div className="text-center py-12 sm:py-16 px-4 border border-white/[0.04] rounded-3xl bg-[#121212]/60 backdrop-blur-md relative overflow-hidden">
-          {/* Subtle Ambient Glow */}
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-20 bg-[#00e5ff]/5 rounded-full blur-3xl pointer-events-none" />
-
-          {/* Icon Badge */}
-          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3.5 text-[#00e5ff] shadow-[0_0_24px_rgba(0,229,255,0.15)]">
-            {isDownloadsMode ? <OtiumLogo className="w-6 h-6" glow /> : <CheckCircle2 className="w-6 h-6" />}
-          </div>
-
-          <h3 className="text-sm sm:text-base font-bold text-zinc-100 mb-1 tracking-tight">
-            {searchQuery
-              ? isAr ? 'لا توجد نتائج مطابقة لبحثك' : 'No matching items'
-              : isDownloadsMode
-              ? isAr ? 'لا توجد تنزيلات نشطة حالياً' : 'No active downloads'
-              : isAr ? 'سجل التنزيلات المكتملة فارغ' : 'No completed downloads'}
-          </h3>
-
-          <p className="text-xs text-zinc-400 max-w-sm mx-auto mb-4 leading-relaxed font-normal">
-            {searchQuery
-              ? isAr ? 'جرّب كلمة مفتاحية أخرى' : 'Try searching for something else'
-              : isDownloadsMode
-              ? isAr
-                ? 'أضف رابط ملف أو رابط منصة مدعومة من الشريط بالأعلى.'
-                : 'Add a file URL or supported media link above.'
-              : isAr
-              ? 'الملفات المكتملة ستظهر هنا لتشغيلها والوصول إليها بلمسة واحدة'
-              : 'Finished downloads will appear here for 1-tap playback'}
-          </p>
-
-          {!isDownloadsMode && onSwitchToDownloads && (
-            <button
-              onClick={onSwitchToDownloads}
-              className="px-4 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs font-mono text-zinc-300 hover:text-white transition-all inline-flex items-center gap-1.5"
-            >
-              <ArrowDownToLine className="w-3.5 h-3.5 text-[#00e5ff]" />
-              <span>{isAr ? 'الذهاب إلى قائمة التنزيلات' : 'Go to Downloads'}</span>
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="grid gap-2.5">
-          {filteredTasks.map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              lang={lang}
-              onPause={onPause}
-              onResume={onResume}
-              onRemove={onRemove}
-              onStartImmediately={onStartImmediately}
-              onRestart={onRestart}
-              onShare={onShare}
-            />
-          ))}
-        </div>
-      )}
+  return <section className="download-list" aria-label={ar ? 'قائمة التنزيلات' : 'Download list'}>
+    <div className="list-tools">
+      <div className="search-field"><Search size={16} /><input id="download-search" aria-label={ar ? 'بحث في التنزيلات' : 'Search downloads'} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={ar ? 'بحث باسم الملف أو الموقع…' : 'Search files or websites…'} />{query && <button className="icon-button" onClick={() => setQuery('')} aria-label={ar ? 'مسح البحث' : 'Clear search'}><X size={14} /></button>}</div>
+      <div className="list-filters"><Filter size={14} aria-hidden="true" />
+        {mode === 'downloads' && <select aria-label={ar ? 'تصفية حسب الحالة' : 'Filter by status'} value={status} onChange={(event) => setStatus(event.target.value)}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>}
+        <select aria-label={ar ? 'نوع الملف' : 'File type'} value={category} onChange={(event) => setCategory(event.target.value)}>{[['all', ar ? 'كل الأنواع' : 'All file types'], ['programs', ar ? 'برامج' : 'Applications'], ['archives', ar ? 'أرشيف' : 'Archives'], ['media', ar ? 'وسائط' : 'Media'], ['documents', ar ? 'مستندات' : 'Documents'], ['other', ar ? 'أخرى' : 'Other']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+        <select aria-label={ar ? 'ترتيب التنزيلات' : 'Sort downloads'} value={sort} onChange={(event) => setSort(event.target.value)}>{[['newest', ar ? 'الأحدث' : 'Newest first'], ['oldest', ar ? 'الأقدم' : 'Oldest first'], ['name', ar ? 'الاسم' : 'Filename'], ['size', ar ? 'الحجم' : 'Largest first']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+      </div>
     </div>
-  );
-};
+    {selection.length > 0 && <div className="selection-bar" role="group" aria-label={ar ? 'إجراءات المحددة' : 'Selected download actions'}><span>{selection.length} {ar ? 'محددة' : 'selected'}</span>
+      {selection.some((task) => ['downloading', 'queued'].includes(task.status)) && <button className="text-button" onClick={() => selection.forEach((task) => onPause(task.id))}><Pause size={14} />{ar ? 'إيقاف مؤقت' : 'Pause'}</button>}
+      {selection.some((task) => ['paused', 'error', 'queued'].includes(task.status)) && <button className="text-button" onClick={() => selection.forEach((task) => onResume(task.id))}><Play size={14} />{ar ? 'استئناف' : 'Resume'}</button>}
+      <button className="text-button danger-text" onClick={() => setConfirmRemove(!confirmRemove)}><Trash2 size={14} />{ar ? 'إزالة من القائمة' : 'Remove from list'}</button>
+      <button className="text-button" onClick={() => { setSelected(new Set()); setConfirmRemove(false); }}>{ar ? 'إلغاء التحديد' : 'Deselect'}</button>
+      {confirmRemove && <div className="selection-confirm"><span>{ar ? 'ستبقى الملفات على القرص.' : 'Files will stay on disk.'}</span><button className="action-button" onClick={() => { selection.forEach((task) => onRemove(task.id, false)); setSelected(new Set()); setConfirmRemove(false); }}>{ar ? 'تأكيد الإزالة' : 'Confirm removal'}</button></div>}
+    </div>}
+    {filtered.length > 0 ? <div className="download-table">
+      <div className="list-column-head"><label><input type="checkbox" checked={allSelected} onChange={() => { setSelected(allSelected ? new Set() : new Set(filtered.map((task) => task.id))); setConfirmRemove(false); }} aria-label={ar ? 'تحديد كل النتائج' : 'Select all results'} /><span>{ar ? 'الملف' : 'File'}</span></label><span>{ar ? 'الحالة والحجم' : 'Status & size'}</span><span>{ar ? 'السرعة / التقدم' : 'Speed / progress'}</span><span /></div>
+      {filtered.map((task) => <TaskCard key={task.id} task={task} lang={lang} onPause={onPause} onResume={onResume} onRemove={onRemove} onStartImmediately={onStartImmediately} onRestart={onRestart} onShare={onShare} isSelected={selected.has(task.id)} onToggleSelect={toggle} />)}
+      <div className="list-count">{filtered.length} / {inMode.length} {ar ? 'ملفات' : 'files'}</div>
+    </div> : <div className="download-empty">
+      <div className="empty-file" aria-hidden="true">{mode === 'finished' ? <CheckCircle2 size={27} /> : <ArrowDownToLine size={27} />}</div>
+      <h2>{inMode.length ? (ar ? 'لا توجد نتائج مطابقة' : 'No matching downloads') : mode === 'finished' ? (ar ? 'ملفاتك المكتملة ستظهر هنا' : 'Your finished files will appear here') : (ar ? 'كل شيء جاهز لتنزيلك الأول' : 'Ready for your first download')}</h2>
+      <p>{inMode.length ? (ar ? 'غيّر البحث أو التصفية لعرض المزيد من الملفات.' : 'Change your search or filters to see more files.') : mode === 'finished' ? (ar ? 'افتح الملفات، اعرض مجلدها، أو أرسلها إلى جهاز آخر.' : 'Open a file, find its folder, or send it to another device.') : (ar ? 'أضف رابط ملف بالأعلى. يمكنك إضافة عدة روابط دفعة واحدة.' : 'Add a file link above. You can also add several links at once.')}</p>
+      {inMode.length ? <button className="action-button" onClick={() => { setQuery(''); setStatus('all'); setCategory('all'); }}>{ar ? 'مسح التصفية' : 'Clear filters'}</button> : mode === 'finished' && onSwitchToDownloads ? <button className="action-button" onClick={onSwitchToDownloads}>{ar ? 'إضافة تنزيل' : 'Add a download'}</button> : <button className="action-button" onClick={() => document.getElementById('download-url')?.focus()}><LinkIcon />{ar ? 'إضافة رابط' : 'Add a link'}</button>}
+      {!inMode.length && mode === 'downloads' && <div className="empty-shortcuts"><span><kbd>Ctrl</kbd> + <kbd>V</kbd> {ar ? 'لصق رابط' : 'Paste a link'}</span><span>{ar ? 'أو اسحب الرابط إلى النافذة' : 'Or drop a link into this window'}</span></div>}
+    </div>}
+  </section>;
+}
+function LinkIcon() { return <ArrowDownToLine size={15} />; }

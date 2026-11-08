@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="UTF-8"><base href="/browser-extension/"><link rel="stylesheet" href="popup.css"><title>ARGON extension fixture</title><script src="/scripts/extension-preview.js"></script></head><body><script type="module">
+// Read the current popup markup, so visual tests do not maintain a second copy.
+const source = await (await fetch('/browser-extension/popup.html')).text();
+const parsed = new DOMParser().parseFromString(source, 'text/html');
+const nodes = [...parsed.body.children].filter((element) => element.tagName !== 'SCRIPT');
+document.body.replaceChildren(...nodes);
+const banner = document.createElement('p'); banner.textContent = 'DEVELOPMENT FIXTURE · simulated browser APIs'; banner.style.cssText = 'color:#dfc78f;font-size:10px;margin:0 0 12px'; document.body.prepend(banner);
+await import('/browser-extension/popup.js');
+</script></body></html>

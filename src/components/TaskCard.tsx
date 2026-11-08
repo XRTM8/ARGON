@@ -1,543 +1,105 @@
-import React, { useState } from 'react';
-import {
-  Play,
-  Pause,
-  Trash2,
-  CheckCircle2,
-  AlertCircle,
-  Clock,
-  FolderOpen,
-  Copy,
-  Check,
-  ShieldCheck,
-  ExternalLink,
-  RotateCcw,
-  X
-  ,Send
-} from 'lucide-react';
+import { useState } from 'react';
+import { Play, Pause, Trash2, FolderOpen, Copy, Check, ChevronDown, ExternalLink, RotateCcw, Send, X, AlertCircle, File, ShieldCheck } from 'lucide-react';
 import type { DownloadTask } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
+import { downloadHost } from '../core/downloadInput';
 import { downloadManager } from '../core/downloadManager';
 
-interface TaskCardProps {
-  task: DownloadTask;
-  lang: 'ar' | 'en';
-  onPause: (id: string) => void;
-  onResume: (id: string) => void;
-  onRemove: (id: string, deleteFileFromDisk?: boolean) => void;
-  onStartImmediately?: (id: string) => void;
-  onRestart?: (id: string) => void;
-  isSelected?: boolean;
-  selectionMode?: boolean;
-  onToggleSelect?: (id: string) => void;
+interface Props {
+  task: DownloadTask; lang: 'ar' | 'en';
+  onPause: (id: string) => void; onResume: (id: string) => void;
+  onRemove: (id: string, disk?: boolean) => void;
+  onStartImmediately?: (id: string) => void; onRestart?: (id: string) => void;
+  isSelected?: boolean; selectionMode?: boolean; onToggleSelect?: (id: string) => void;
   onShare?: (task: DownloadTask) => void;
 }
 
-export const TaskCard: React.FC<TaskCardProps> = ({
-  task,
-  lang,
-  onPause,
-  onResume,
-  onRemove,
-  onStartImmediately,
-  onRestart,
-  isSelected = false,
-  selectionMode = false,
-  onToggleSelect,
-  onShare
-}) => {
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
-  const [showExecWarning, setShowExecWarning] = useState(false);
-
-  const isAr = lang === 'ar';
-  const progressPercent =
-    task.totalBytes > 0
-      ? Math.min(100, Math.round((task.downloadedBytes / task.totalBytes) * 100))
-      : 0;
-
-  const EXECUTABLE_EXTS = ['.exe', '.bat', '.cmd', '.msi', '.ps1', '.vbs', '.reg', '.scr', '.com', '.pif', '.jar'];
-  const isExecutable = EXECUTABLE_EXTS.some((e) => task.filename.toLowerCase().endsWith(e));
-
-  const handleOpenFile = () => {
-    if (isExecutable) {
-      setShowExecWarning(true);
-    } else {
-      downloadManager.openFile(task.savePath || task.filename);
-    }
+export function TaskCard({ task, lang, onPause, onResume, onRemove, onStartImmediately, onRestart, isSelected, onToggleSelect, onShare }: Props) {
+  const ar = lang === 'ar';
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [execWarning, setExecWarning] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [replacementUrl, setReplacementUrl] = useState('');
+  const completed = task.status === 'completed';
+  const active = task.status === 'downloading';
+  const known = task.totalBytes > 0;
+  const percent = completed ? 100 : known ? Math.min(100, Math.floor(task.downloadedBytes / task.totalBytes * 100)) : 0;
+  const status = {
+    queued: ar ? 'في الانتظار' : 'Queued', paused: ar ? 'متوقف مؤقتاً' : 'Paused',
+    completed: ar ? 'مكتمل' : 'Completed', error: ar ? 'يحتاج انتباهك' : 'Needs attention',
+    downloading: task.downloadedBytes === 0 ? (ar ? 'جارٍ الاتصال' : 'Connecting') : known && task.downloadedBytes >= task.totalBytes ? (ar ? 'جارٍ التحقق' : 'Finalizing') : (ar ? 'جارٍ التنزيل' : 'Downloading')
+  }[task.status];
+  const extension = task.filename.includes('.') ? task.filename.split('.').pop()!.slice(0, 5).toUpperCase() : '';
+  const action = async (operation: () => Promise<unknown>) => {
+    try { setActionError(''); await operation(); } catch (error) { setActionError(String(error)); }
   };
-
-  const confirmRunExecutable = () => {
-    setShowExecWarning(false);
-    downloadManager.openFile(task.savePath || task.filename);
+  const open = () => {
+    if (/\.(exe|bat|cmd|msi|ps1|vbs|reg|scr|com|pif|jar)$/i.test(task.filename)) setExecWarning(true);
+    else void action(() => downloadManager.openFile(task.savePath));
   };
-
-  const handleCopyLink = () => {
-    navigator.clipboard?.writeText(task.url);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 1600);
-  };
-
-  const handleVerifyHash = async () => {
-    setIsVerifying(true);
-    await downloadManager.verifyHash(task.id);
-    setIsVerifying(false);
-  };
-
-  const handleOpenFolder = () => {
-    downloadManager.openFolder(task.savePath || task.filename);
-  };
-
-  // Determine file extension badge text & color
-  const ext = task.filename.split('.').pop()?.toUpperCase() || 'FILE';
-  const cleanExt = ext.length <= 4 ? ext : ext.slice(0, 3);
-
-  const getCategoryTheme = (cat?: string) => {
-    switch (cat) {
-      case 'programs':
-        return {
-          bg: 'bg-sky-500/15',
-          border: 'border-sky-500/30',
-          text: 'text-sky-400'
-        };
-      case 'media':
-        return {
-          bg: 'bg-purple-500/15',
-          border: 'border-purple-500/30',
-          text: 'text-purple-400'
-        };
-      case 'archives':
-        return {
-          bg: 'bg-amber-500/15',
-          border: 'border-amber-500/30',
-          text: 'text-amber-400'
-        };
-      case 'documents':
-        return {
-          bg: 'bg-[#00e5ff]/15',
-          border: 'border-[#00e5ff]/30',
-          text: 'text-[#00e5ff]'
-        };
-      case 'torrents':
-        return {
-          bg: 'bg-fuchsia-500/15',
-          border: 'border-fuchsia-500/30',
-          text: 'text-fuchsia-400'
-        };
-      default:
-        return {
-          bg: 'bg-white/[0.05]',
-          border: 'border-white/[0.08]',
-          text: 'text-zinc-300'
-        };
-    }
-  };
-
-  const categoryTheme = getCategoryTheme(task.category);
-
-  const getPlatformBadge = (platform?: string) => {
-    switch (platform) {
-      case 'youtube':
-        return { label: 'YouTube', short: 'YT', color: 'bg-red-500/15 text-red-400 border-red-500/25' };
-      case 'tiktok':
-        return { label: 'TikTok', short: 'TT', color: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/25' };
-      case 'instagram':
-        return { label: 'Instagram', short: 'IG', color: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/25' };
-      case 'twitter':
-        return { label: 'X', short: 'X', color: 'bg-sky-500/15 text-sky-400 border-sky-500/25' };
-      case 'soundcloud':
-        return { label: 'SoundCloud', short: 'SC', color: 'bg-orange-500/15 text-orange-400 border-orange-500/25' };
-      default:
-        return { label: 'Direct', short: 'DIR', color: 'bg-[#00e5ff]/15 text-[#00e5ff] border-[#00e5ff]/25' };
-    }
-  };
-
 
   return (
-    <div className="bg-[#121212] border border-white/[0.06] hover:border-white/[0.12] rounded-2xl p-3.5 sm:p-4 transition-all duration-200 shadow-sm relative overflow-hidden">
-      {/* Top Row: Icon + Title + Selection */}
-      <div className="flex items-start gap-3">
-        {selectionMode && (
-          <button
-            type="button"
-            onClick={() => onToggleSelect?.(task.id)}
-            className={`w-5 h-5 mt-1 rounded-lg border flex items-center justify-center cursor-pointer transition-all shrink-0 ${
-              isSelected
-                ? 'bg-[#00e5ff] border-[#00e5ff] text-zinc-950'
-                : 'border-white/[0.2] bg-white/[0.04] hover:border-white/[0.4]'
-            }`}
-          >
-            {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-          </button>
-        )}
-
-        {/* Media Thumbnail or File Type Badge Icon */}
-        <div className="shrink-0 mt-0.5">
-          {task.mediaInfo?.thumbnail ? (
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl overflow-hidden bg-black/80 border border-white/[0.08] relative shrink-0 shadow-md">
-              <img
-                src={task.mediaInfo.thumbnail}
-                alt={task.filename}
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
-              {task.mediaInfo.platform && (
-                <span className={`absolute bottom-1 right-1 rtl:left-1 rtl:right-auto px-1 py-0.2 rounded text-[8px] font-mono font-bold uppercase border backdrop-blur-xs ${getPlatformBadge(task.mediaInfo.platform).color}`}>
-                  {getPlatformBadge(task.mediaInfo.platform).short}
-                </span>
-              )}
-            </div>
-          ) : task.status === 'completed' ? (
-            <div className="w-10 h-10 rounded-xl bg-[#00e5ff]/15 border border-[#00e5ff]/25 flex items-center justify-center text-[#00e5ff] shadow-[0_0_12px_rgba(0,229,255,0.15)]">
-              <CheckCircle2 className="w-5 h-5" />
-            </div>
-          ) : task.status === 'error' ? (
-            <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/25 flex items-center justify-center text-rose-400">
-              <AlertCircle className="w-5 h-5" />
-            </div>
-          ) : task.status === 'queued' ? (
-            <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-zinc-400">
-              <Clock className="w-5 h-5" />
-            </div>
-          ) : (
-            <div className={`w-10 h-10 rounded-xl ${categoryTheme.bg} ${categoryTheme.border} border flex items-center justify-center shadow-sm`}>
-              <span className={`text-xs font-mono font-bold tracking-tight ${categoryTheme.text}`}>
-                {cleanExt}
-              </span>
-            </div>
-          )}
+    <article className={`download-row ${isSelected ? 'is-selected' : ''}`} data-status={task.status}>
+      <div className="download-row-main">
+        <input type="checkbox" className="task-check" checked={!!isSelected} onChange={() => onToggleSelect?.(task.id)} aria-label={`${ar ? 'تحديد' : 'Select'} ${task.filename}`} />
+        <div className="file-tile" aria-hidden="true">{extension || <File size={18} />}</div>
+        <div className="download-identity">
+          <h3 title={task.filename} dir="auto">{task.filename}</h3>
+          <div className="download-source"><span dir="ltr">{downloadHost(task.originalUrl || task.url)}</span>{task.mediaInfo?.quality && <span>{task.mediaInfo.quality}</span>}</div>
         </div>
-
-        {/* Title & Metadata */}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <h3
-              className="font-semibold text-xs sm:text-sm text-zinc-100 line-clamp-2 break-all leading-snug cursor-pointer hover:text-[#00e5ff] transition-colors"
-              onClick={task.status === 'completed' ? handleOpenFile : undefined}
-              title={task.filename}
-            >
-              {task.filename}
-            </h3>
-            <div className="flex items-center gap-1 shrink-0">
-              {task.mediaInfo?.quality && (
-                <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded-md bg-[#00e5ff]/15 text-[#00e5ff] border border-[#00e5ff]/25 font-bold">
-                  {task.mediaInfo.quality}
-                </span>
-              )}
-              {task.category && task.category !== 'other' && (
-                <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded-md bg-white/[0.04] text-zinc-400 border border-white/[0.06]">
-                  {task.category}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Size & Author & Progress Numbers */}
-          <div className="flex items-center gap-1.5 mt-1 text-[11px] font-mono text-zinc-400 flex-wrap">
-            {task.mediaInfo?.author && (
-              <>
-                <span className="text-zinc-300 font-medium truncate max-w-[120px] sm:max-w-[180px]">
-                  {task.mediaInfo.author}
-                </span>
-                <span className="text-zinc-600">•</span>
-              </>
-            )}
-            <span className="text-zinc-300 font-medium">{formatBytes(task.downloadedBytes)}</span>
-            <span className="text-zinc-600">/</span>
-            <span>{formatBytes(task.totalBytes)}</span>
-            {task.totalBytes > 0 && (
-              <span className="text-zinc-500 font-medium">({progressPercent}%)</span>
-            )}
-          </div>
-
-          {task.errorMessage && (
-            <div className="text-rose-400 text-[10px] font-mono mt-1 flex items-center gap-1 truncate" title={task.errorMessage}>
-              <AlertCircle className="w-3 h-3 shrink-0" />
-              <span className="truncate">{humanizeErrorMessage(task.errorMessage, lang)}</span>
-            </div>
-          )}
+        <div className="download-transfer">
+          <span className="task-status"><i />{status}</span>
+          <span className="transfer-numbers" dir="ltr">{formatBytes(task.downloadedBytes)}{known ? ` / ${formatBytes(task.totalBytes)}` : completed ? '' : ` · ${ar ? 'حجم غير معروف' : 'Unknown size'}`}</span>
+          {active && task.speedBytesPerSec > 0 && <span className="compact-rate" dir="ltr">{formatSpeed(task.speedBytesPerSec)}{task.etaSeconds > 0 ? ` · ${formatEta(task.etaSeconds)}` : ''}</span>}
+        </div>
+        <div className="download-rate" dir="ltr">
+          <strong>{active && task.speedBytesPerSec > 0 ? formatSpeed(task.speedBytesPerSec) : completed ? '100%' : known && task.downloadedBytes > 0 ? `${percent}%` : '—'}</strong>
+          <span>{active && task.etaSeconds > 0 ? formatEta(task.etaSeconds) : ''}</span>
+        </div>
+        <div className="row-actions">
+          {active && <button className="icon-button" onClick={() => onPause(task.id)} aria-label={ar ? 'إيقاف مؤقت' : 'Pause'} title={ar ? 'إيقاف مؤقت' : 'Pause'}><Pause size={16} /></button>}
+          {(task.status === 'paused' || task.status === 'error') && <button className="icon-button" onClick={() => onResume(task.id)} aria-label={ar ? 'إعادة المحاولة' : 'Resume or retry'} title={ar ? 'استئناف / إعادة المحاولة' : 'Resume / retry'}><Play size={16} /></button>}
+          {task.status === 'queued' && onStartImmediately && <button className="icon-button" onClick={() => onStartImmediately(task.id)} aria-label={ar ? 'بدء الآن' : 'Start now'} title={ar ? 'بدء الآن' : 'Start now'}><Play size={16} /></button>}
+          {completed && <button className="icon-button" onClick={open} aria-label={ar ? 'فتح الملف' : 'Open file'} title={ar ? 'فتح الملف' : 'Open file'}><ExternalLink size={16} /></button>}
+          <button className="icon-button details-toggle" aria-expanded={expanded} aria-controls={`details-${task.id}`} onClick={() => setExpanded(!expanded)} aria-label={ar ? 'تفاصيل التنزيل' : 'Download details'} title={ar ? 'التفاصيل والإجراءات' : 'Details and actions'}><ChevronDown size={16} className={expanded ? 'rotate-180' : ''} /></button>
         </div>
       </div>
-
-      {/* Progress Bar (High Contrast OLED) */}
-      <div className="mt-3">
-        <div className="w-full h-2 rounded-full bg-black/50 border border-white/[0.05] overflow-hidden relative">
-          <div
-            className={`h-full transition-all duration-200 relative overflow-hidden rounded-full ${
-              task.status === 'completed'
-                ? 'bg-[#00e5ff]'
-                : task.status === 'paused'
-                ? 'bg-amber-400'
-                : task.status === 'queued'
-                ? 'bg-zinc-600'
-                : 'bg-gradient-to-r from-[#00e5ff] to-[#00e5ff] shadow-[0_0_12px_rgba(0,229,255,0.35)]'
-            }`}
-            style={{ width: `${progressPercent}%` }}
-          >
-            {task.status === 'downloading' && (
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer" />
-            )}
-          </div>
+      {!completed && <div className="row-progress" role="progressbar" aria-label={`${task.filename}: ${status}`} aria-valuenow={known ? percent : undefined} aria-valuemin={0} aria-valuemax={100} aria-valuetext={known ? `${percent}%` : status}><span style={{ width: `${percent}%` }} /></div>}
+      {task.errorMessage && <p className="task-error"><AlertCircle size={14} /><span>{humanizeErrorMessage(task.errorMessage, lang)}</span></p>}
+      {expanded && <div className="task-details" id={`details-${task.id}`}>
+        <dl><div><dt>{ar ? 'الرابط' : 'Source'}</dt><dd dir="ltr">{task.originalUrl || task.url}</dd></div>
+          {task.savePath && <div><dt>{ar ? 'المسار' : 'Saved to'}</dt><dd dir="ltr">{task.savePath}</dd></div>}
+          <div><dt>{ar ? 'الاتصالات' : 'Connections'}</dt><dd>{task.probed ? task.chunks.length : (ar ? 'تُحدد بعد الفحص' : 'Determined after probe')}{task.acceptRanges === false ? (ar ? ' · الخادم لا يدعم التقسيم' : ' · Server has no range support') : ''}</dd></div>
+        </dl>
+        {(task.status === 'paused' || task.status === 'error') && <form className="refresh-url" onSubmit={(event) => {
+          event.preventDefault();
+          try { downloadManager.refreshTaskUrl(task.id, replacementUrl); setReplacementUrl(''); setActionError(''); }
+          catch (error) { setActionError(String(error)); }
+        }}><label htmlFor={`refresh-${task.id}`}>{ar ? 'تحديث رابط منتهي الصلاحية' : 'Replace an expired link'}</label><div><input id={`refresh-${task.id}`} value={replacementUrl} onChange={(event) => setReplacementUrl(event.target.value)} type="url" required dir="ltr" placeholder="https://example.com/file.zip?new-token" /><button className="action-button" disabled={!replacementUrl.trim()}>{ar ? 'تحديث واستئناف' : 'Update & resume'}</button></div><p>{ar ? 'يُستأنف الملف فقط إذا تطابق مساره وحجمه وبصمة الخادم. وإلا يبدأ من الصفر. لا تُنقل ترويسات الدخول القديمة.' : 'Resume requires the same resource path, size and server validator. Otherwise the file restarts. Previous authentication headers are cleared.'}</p></form>}
+        {active && task.chunks.length > 1 && <div className="segment-track" aria-label={ar ? 'تقدم أجزاء الملف' : 'Segment progress'}>{task.chunks.map((chunk) => <span key={chunk.index} title={`${chunk.index + 1}`}><i style={{ width: `${Math.min(100, chunk.downloaded / Math.max(1, chunk.endByte - chunk.startByte + 1) * 100)}%` }} /></span>)}</div>}
+        <div className="detail-actions">
+          {completed && task.savePath && <button className="action-button" onClick={() => void action(() => downloadManager.openFolder(task.savePath))}><FolderOpen size={14} />{ar ? 'عرض في المجلد' : 'Show in folder'}</button>}
+          {completed && task.savePath && onShare && <button className="action-button" onClick={() => onShare(task)}><Send size={14} />{ar ? 'إرسال لجهاز' : 'Send to device'}</button>}
+          <button className="action-button" onClick={() => void action(async () => { await navigator.clipboard.writeText(task.originalUrl || task.url); setCopied(true); setTimeout(() => setCopied(false), 1800); })}>{copied ? <Check size={14} /> : <Copy size={14} />}{ar ? (copied ? 'تم النسخ' : 'نسخ الرابط') : (copied ? 'Copied' : 'Copy link')}</button>
+          {(completed || task.status === 'error') && onRestart && <button className="action-button" onClick={() => onRestart(task.id)}><RotateCcw size={14} />{ar ? 'إعادة التنزيل' : 'Download again'}</button>}
+          <button className="action-button danger-text" onClick={() => setConfirmDelete(!confirmDelete)} aria-expanded={confirmDelete}><Trash2 size={14} />{ar ? 'إزالة' : 'Remove'}</button>
         </div>
-      </div>
-
-      {/* Multi-Stream Segment Bars (While downloading) */}
-      {task.chunks && task.chunks.length > 1 && task.status === 'downloading' && (
-        <div
-          className="grid gap-1 mt-1.5"
-          style={{ gridTemplateColumns: `repeat(${task.chunks.length}, minmax(0, 1fr))` }}
-        >
-          {task.chunks.map((chunk) => {
-            const span = chunk.endByte - chunk.startByte + 1;
-            const pct = span > 0 ? Math.round((chunk.downloaded / span) * 100) : 0;
-            return (
-              <div
-                key={chunk.index}
-                className="h-1 rounded-sm bg-black/40 overflow-hidden"
-                title={`Part ${chunk.index + 1}: ${pct}%`}
-              >
-                <div
-                  className={`h-full transition-all duration-150 ${
-                    chunk.status === 'completed' ? 'bg-[#00e5ff]' : 'bg-[#00e5ff]/60'
-                  }`}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Bottom Info & Touch Action Bar */}
-      <div className="mt-3 pt-2 border-t border-white/[0.04] flex items-center justify-between gap-2">
-        {/* Status / Speed / ETA */}
-        <div className="flex items-center gap-2 text-[11px] font-mono min-w-0">
-          <span className={`font-semibold shrink-0 ${
-            task.status === 'completed'
-              ? 'text-[#00e5ff]'
-              : task.status === 'paused'
-              ? 'text-amber-400'
-              : task.status === 'queued'
-              ? 'text-zinc-400'
-              : task.status === 'error'
-              ? 'text-rose-400'
-              : 'text-[#00e5ff]'
-          }`}>
-            {task.status === 'completed'
-              ? (isAr ? 'مكتمل ✓' : 'Done ✓')
-              : task.status === 'paused'
-              ? (isAr ? 'متوقف' : 'Paused')
-              : task.status === 'queued'
-              ? (isAr ? 'في الانتظار' : 'Queued')
-              : task.status === 'error'
-              ? (isAr ? 'خطأ' : 'Error')
-              : (isAr ? 'جاري التنزيل' : 'Downloading')}
-          </span>
-
-          {task.status === 'downloading' && (
-            <>
-              <span className="text-zinc-600">•</span>
-              <span className="text-zinc-100 font-bold tabular-nums shrink-0">{formatSpeed(task.speedBytesPerSec)}</span>
-              {task.etaSeconds > 0 && (
-                <>
-                  <span className="text-zinc-600 hidden sm:inline">•</span>
-                  <span className="text-zinc-400 truncate hidden sm:inline">{formatEta(task.etaSeconds)}</span>
-                </>
-              )}
-            </>
-          )}
-
-          {task.torrentInfo && (
-            <>
-              <span className="text-zinc-600">•</span>
-              <span className="text-fuchsia-400 font-mono text-[10px] truncate" title={`InfoHash: ${task.torrentInfo.infoHash}`}>
-                BTIH: {task.torrentInfo.infoHash.slice(0, 6)}…
-              </span>
-            </>
-          )}
-        </div>
-
-        {/* Thumb Action Buttons (40px touch ergonomics) */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {task.status === 'completed' && onShare && task.savePath && (
-            <button onClick={()=>onShare(task)} className="px-3 py-1.5 rounded-xl bg-white/[0.06] text-zinc-200 text-xs flex items-center gap-1.5" title={isAr?'إرسال إلى جهاز':'Send to device'}><Send className="w-3.5 h-3.5"/><span className="hidden sm:inline">{isAr?'إرسال إلى جهاز':'Send to device'}</span></button>
-          )}
-          {task.status === 'queued' && onStartImmediately && (
-            <button
-              onClick={() => onStartImmediately(task.id)}
-              className="px-3 py-1.5 rounded-xl bg-white/[0.06] text-zinc-200 hover:text-white text-xs font-mono font-medium transition-all active:scale-95"
-            >
-              {isAr ? 'بدء الآن' : 'Start'}
-            </button>
-          )}
-
-          {task.status === 'downloading' && (
-            <button
-              onClick={() => onPause(task.id)}
-              className="w-8 h-8 sm:w-8 sm:h-8 rounded-xl bg-white/[0.05] hover:bg-amber-400/20 text-zinc-300 hover:text-amber-400 flex items-center justify-center transition-all active:scale-90"
-              title={isAr ? 'إيقاف مؤقت' : 'Pause'}
-            >
-              <Pause className="w-4 h-4" />
-            </button>
-          )}
-
-          {(task.status === 'paused' || task.status === 'error') && (
-            <button
-              onClick={() => onResume(task.id)}
-              className="w-8 h-8 rounded-xl bg-[#00e5ff]/15 hover:bg-[#00e5ff]/25 text-[#00e5ff] flex items-center justify-center transition-all active:scale-90 shadow-sm"
-              title={isAr ? 'استئناف' : 'Resume'}
-            >
-              <Play className="w-4 h-4 fill-current ml-0.5 rtl:mr-0.5 rtl:ml-0" />
-            </button>
-          )}
-
-          {task.status === 'completed' && (
-            <>
-              <button
-                onClick={handleOpenFile}
-                className="px-3 py-1.5 rounded-xl bg-[#00e5ff]/15 hover:bg-[#00e5ff]/25 border border-[#00e5ff]/30 text-[#00e5ff] font-semibold text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-[0_0_12px_rgba(0,229,255,0.15)]"
-                title={isAr ? 'تشغيل / فتح الملف' : 'Open File'}
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>{isAr ? 'فتح' : 'Open'}</span>
-              </button>
-              <button
-                onClick={handleOpenFolder}
-                className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center transition-all active:scale-90"
-                title={isAr ? 'عرض في المجلد' : 'Show in Folder'}
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
-
-          {(task.status === 'completed' || task.status === 'error') && onRestart && (
-            <button
-              onClick={() => onRestart(task.id)}
-              className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-[#00e5ff] flex items-center justify-center transition-all active:scale-90"
-              title={isAr ? 'إعادة التنزيل' : 'Restart'}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          )}
-
-          <button
-            onClick={handleCopyLink}
-            className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-zinc-200 flex items-center justify-center transition-all active:scale-90"
-            title={isAr ? 'نسخ الرابط' : 'Copy URL'}
-          >
-            {copiedLink ? <Check className="w-3.5 h-3.5 text-[#00e5ff]" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-
-          {isConfirmingDelete ? (
-            <div className="flex items-center gap-1 animate-in-fade bg-[#141722] p-1 rounded-xl border border-rose-500/30">
-              <button
-                onClick={() => {
-                  onRemove(task.id, false);
-                  setIsConfirmingDelete(false);
-                }}
-                className="px-2 py-1 rounded-lg text-[10px] font-mono text-zinc-300 hover:text-white bg-white/[0.06] transition-colors"
-                title={isAr ? 'حذف من القائمة فقط' : 'Remove from list only'}
-              >
-                {isAr ? 'قائمة' : 'List'}
-              </button>
-              <button
-                onClick={() => {
-                  onRemove(task.id, true);
-                  setIsConfirmingDelete(false);
-                }}
-                className="px-2 py-1 rounded-lg text-[10px] font-mono text-rose-400 hover:text-white bg-rose-500/20 transition-colors"
-                title={isAr ? 'حذف الملف نهائياً من القرص' : 'Delete file permanently from disk'}
-              >
-                {isAr ? 'ملف' : 'File'}
-              </button>
-              <button
-                onClick={() => setIsConfirmingDelete(false)}
-                className="p-1 rounded-lg text-zinc-500 hover:text-zinc-300"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setIsConfirmingDelete(true)}
-              className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 flex items-center justify-center transition-all active:scale-90"
-              title={isAr ? 'حذف' : 'Remove'}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Checksum Status (Completed Tasks) */}
-      {task.status === 'completed' && (
-        <div className="mt-2 pt-2 border-t border-white/[0.04] flex items-center justify-between text-[11px] font-mono text-zinc-400">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-            {task.checksum?.verified ? (
-              <span className="text-[#00e5ff] font-medium flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                <span>{isAr ? 'تم التحقق من مطابقة SHA-256 بنجاح ✓' : 'SHA-256 Verified ✓'}</span>
-              </span>
-            ) : task.checksum?.actual ? (
-              <span className="text-zinc-400 font-mono text-[10px] truncate max-w-[200px]">
-                SHA-256: {task.checksum.actual.slice(0, 12)}...
-              </span>
-            ) : (
-              <span className="text-zinc-500">
-                {isAr ? 'فحص البصمة' : 'Integrity'}
-              </span>
-            )}
-          </div>
-
-          {!task.checksum?.actual && (
-            <button
-              onClick={handleVerifyHash}
-              disabled={isVerifying}
-              className="text-[#00e5ff] hover:underline disabled:opacity-50 text-[10px]"
-            >
-              {isVerifying ? (isAr ? 'جاري الفحص...' : 'Verifying...') : (isAr ? 'فحص SHA-256' : 'Verify SHA-256')}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Executable Security Prompt */}
-      {showExecWarning && (
-        <div className="mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 animate-in-fade">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              {isAr
-                ? 'تحذير: هذا ملف برنامج تنفيذي. هل تود المتابعة؟'
-                : 'Security Warning: Executable binary detected. Continue?'}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-            <button
-              type="button"
-              onClick={() => {
-                setShowExecWarning(false);
-                handleOpenFolder();
-              }}
-              className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-zinc-300 transition-colors font-medium text-[11px]"
-            >
-              {isAr ? 'عرض في المجلد' : 'Show in Folder'}
-            </button>
-            <button
-              type="button"
-              onClick={confirmRunExecutable}
-              className="px-3 py-1 rounded-lg bg-amber-500 text-zinc-950 font-bold transition-all active:scale-95 text-[11px]"
-            >
-              {isAr ? 'تشغيل على مسؤوليتي' : 'Run Anyway'}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+        {completed && <div className="checksum-line"><ShieldCheck size={14} />
+          {task.checksum?.actual ? <span dir="ltr" className="hash-value">SHA-256: {task.checksum.actual}{task.checksum.verified ? ' · ✓' : ''}</span> : <button className="text-button" disabled={verifying} onClick={async () => { setVerifying(true); await action(async () => { if (!await downloadManager.verifyHash(task.id)) throw new Error(ar ? 'تعذّر حساب البصمة. تحقق من وجود الملف وإمكانية قراءته.' : 'Could not calculate the hash. Check that the file exists and can be read.'); }); setVerifying(false); }}>{ar ? (verifying ? 'جارٍ حساب البصمة…' : 'حساب بصمة SHA-256') : (verifying ? 'Calculating…' : 'Calculate SHA-256')}</button>}
+          {task.checksum?.actual && !task.checksum.expected && <span>{ar ? 'محسوبة؛ لا توجد بصمة للمقارنة.' : 'Calculated; no reference hash to compare.'}</span>}
+        </div>}
+      </div>}
+      {confirmDelete && <div className="row-confirm" role="group" aria-label={ar ? 'خيارات الإزالة' : 'Removal options'}>
+        <span>{ar ? 'إزالة من القائمة أم حذف الملف من القرص؟' : 'Remove from the list or delete the file from disk?'}</span>
+        <button className="action-button" onClick={() => onRemove(task.id, false)}>{ar ? 'من القائمة فقط' : 'List only'}</button>
+        {task.savePath && <button className="action-button danger-text" onClick={() => onRemove(task.id, true)}>{ar ? 'حذف الملف نهائياً' : 'Delete file permanently'}</button>}
+        <button className="icon-button" aria-label={ar ? 'إلغاء' : 'Cancel'} onClick={() => setConfirmDelete(false)}><X size={14} /></button>
+      </div>}
+      {execWarning && <div className="row-confirm" role="alert"><AlertCircle size={16} /><span>{ar ? 'هذا ملف تنفيذي. افتحه فقط إذا كنت تثق بمصدره.' : 'This is an executable. Open it only if you trust its source.'}</span><button className="action-button" onClick={() => { setExecWarning(false); void action(() => downloadManager.openFile(task.savePath)); }}>{ar ? 'فتح الملف' : 'Open file'}</button><button className="action-button" onClick={() => setExecWarning(false)}>{ar ? 'إلغاء' : 'Cancel'}</button></div>}
+      {actionError && <p className="inline-error" role="alert">{actionError}</p>}
+    </article>
   );
-};
+}

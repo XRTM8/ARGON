@@ -33,6 +33,64 @@ beforeEach(() => {
 afterEach(async () => { manager.destroy(); await Promise.resolve(); vi.unstubAllGlobals(); });
 
 describe('ARGON real download lifecycle', () => {
+  it('refreshes signed links without forwarding old credentials and revalidates partial data', async () => {
+    const id = manager.addTask('https://example.com/file.zip?token=old'); await settle(id);
+    const current = task(id); current.status = 'paused'; current.downloadedBytes = 512;
+    current.chunks = [{ index: 0, startByte: 0, endByte: 2047, downloaded: 512, status: 'pending' }];
+    current.headers = { Authorization: 'Bearer old-secret', Cookie: 'old-cookie' };
+    manager.refreshTaskUrl(id, 'https://example.com/file.zip?token=new'); await settle(id);
+    expect(task(id).url).toBe('https://example.com/file.zip?token=new');
+    expect(task(id).headers).not.toHaveProperty('Authorization'); expect(task(id).headers).not.toHaveProperty('Cookie');
+    expect(calls('prepare_download_file').at(-1)![1].reset).toBe(false);
+    expect(calls('download_segment').at(-1)![1].currentDownloaded).toBe(512);
+  });
+  it('starts from zero when a replacement link identifies a different resource', async () => {
+    const id = manager.addTask('https://example.com/first.zip'); await settle(id);
+    task(id).status = 'paused'; task(id).downloadedBytes = 512;
+    manager.refreshTaskUrl(id, 'https://another.example.org/different.zip'); await settle(id);
+    expect(calls('prepare_download_file').at(-1)![1].reset).toBe(true);
+  });
+  it('keeps the task and reports a disk deletion failure', async () => {
+    const id = manager.addTask('https://example.com/keep.zip'); await settle(id);
+    implementation = (name, args) => { if (name === 'delete_file_item') throw new Error('access denied'); return defaultInvoke(name, args); };
+    await manager.removeTask(id, true);
+    expect(task(id).status).toBe('completed'); expect(task(id).errorMessage).toContain('access denied');
+    expect(task(id).savePath).toContain('keep.zip');
+  });
+  it('persists a browser task before acknowledging or probing it', async () => {
+    await vi.waitFor(() => expect(events.has('browser-add-download')).toBe(true));
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    implementation = (name, args) => {
+      if (name === 'acknowledge_browser_download') {
+        expect(args).toEqual({ requestId: 'bridge-test', accepted: true });
+        expect(window.localStorage.getItem('otium_download_tasks_v1')).toContain('from-browser.zip');
+        return pending;
+      }
+      return defaultInvoke(name, args);
+    };
+    events.get('browser-add-download')!({ payload: { url: 'https://example.com/from-browser.zip', request_id: 'bridge-test' } });
+    await vi.waitFor(() => expect(calls('acknowledge_browser_download')).toHaveLength(1));
+    manager.processQueue();
+    expect(calls('probe_url')).toHaveLength(0);
+    release();
+    await vi.waitFor(() => expect(manager.getTasks()[0]?.status).toBe('completed'));
+  });
+  it('does not acknowledge or start a browser task that cannot be persisted', async () => {
+    await vi.waitFor(() => expect(events.has('browser-add-download')).toBe(true));
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    events.get('browser-add-download')!({ payload: { url: 'https://example.com/not-saved.zip', request_id: 'bridge-quota' } });
+    await vi.waitFor(() => expect(calls('acknowledge_browser_download')[0]?.[1]).toEqual({ requestId: 'bridge-quota', accepted: false }));
+    expect(manager.getTasks()).toHaveLength(0); expect(calls('probe_url')).toHaveLength(0);
+  });
+  it('removes an unconfirmed handoff and leaves the browser responsible when acknowledgement expires', async () => {
+    await vi.waitFor(() => expect(events.has('browser-add-download')).toBe(true));
+    implementation = (name, args) => { if (name === 'acknowledge_browser_download') throw new Error('expired'); return defaultInvoke(name, args); };
+    events.get('browser-add-download')!({ payload: { url: 'https://example.com/expired.zip', request_id: 'bridge-expired' } });
+    await vi.waitFor(() => expect(calls('acknowledge_browser_download')).toHaveLength(1));
+    await vi.waitFor(() => expect(manager.getTasks()).toHaveLength(0));
+    expect(calls('probe_url')).toHaveLength(0);
+  });
   it('reports preview mode instead of simulating a download', () => {
     vi.stubGlobal('window', { setTimeout, clearTimeout, setInterval, clearInterval });
     const id = manager.addTask('https://example.com/file.zip');

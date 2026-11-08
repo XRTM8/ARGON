@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -38,3 +41,5 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Cargo Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Test encrypted sharing
+        run: cargo test --locked --manifest-path flow-core/Cargo.toml -- --test-threads=1

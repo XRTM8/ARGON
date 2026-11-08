@@ -1,201 +1,104 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Link2,
-  ArrowDownToLine,
-  ChevronDown,
-  ChevronUp,
-  Clipboard,
-  AlertCircle,
-  Loader2
-} from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { ArrowDownToLine, Clipboard, ChevronDown, Link2, ListPlus } from 'lucide-react';
+import { downloadManager } from '../core/downloadManager';
+import { parseDownloadInput } from '../core/downloadInput';
 
-interface QuickAddBarProps {
+interface Props {
   lang: 'ar' | 'en';
   onAdd: (url: string, filename?: string, segments?: number) => void;
   detectedClipboardUrl?: string | null;
+  intakeKey?: number;
   onClearClipboardUrl?: () => void;
 }
 
-export const QuickAddBar: React.FC<QuickAddBarProps> = ({
-  lang,
-  onAdd,
-  detectedClipboardUrl,
-  onClearClipboardUrl
-}) => {
-  const isAr = lang === 'ar';
-  const [url, setUrl] = useState('');
-  const [customFilename, setCustomFilename] = useState('');
-  const [segments, setSegments] = useState(16);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [isResolving, setIsResolving] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onClearClipboardUrl }: Props) {
+  const ar = lang === 'ar';
+  const [value, setValue] = useState('');
+  const [batch, setBatch] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const [filename, setFilename] = useState('');
+  const [segments, setSegments] = useState(() => downloadManager.getSettings().defaultSegmentCount || 8);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const input = useRef<HTMLTextAreaElement>(null);
+  const parsed = parseDownloadInput(value);
 
   useEffect(() => {
-    if (detectedClipboardUrl && !url) {
-      setUrl(detectedClipboardUrl);
+    if (detectedClipboardUrl) {
+      setValue(detectedClipboardUrl); setBatch(detectedClipboardUrl.includes('\n'));
+      setError(''); input.current?.focus();
     }
-  }, [detectedClipboardUrl]);
+  }, [detectedClipboardUrl, intakeKey]);
 
-  const handlePasteClipboard = async () => {
-    try {
-      const text = await navigator.clipboard?.readText?.();
-      if (text && /^https?:\/\/.+/i.test(text.trim())) {
-        setUrl(text.trim());
-        setErrorMessage(null);
+  useEffect(() => {
+    const focus = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault(); input.current?.focus();
       }
-    } catch {
-      // Clipboard denied
+    };
+    window.addEventListener('keydown', focus);
+    return () => window.removeEventListener('keydown', focus);
+  }, []);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (parsed.invalid.length || !parsed.urls.length) {
+      setError(ar ? 'أدخل رابط HTTP أو HTTPS كامل في كل سطر. صحّح الروابط غير الصالحة أولاً.' : 'Use a complete HTTP or HTTPS URL on each line. Fix invalid links first.'); return;
     }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanUrl = url.trim();
-    if (!cleanUrl) return;
-
-    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('magnet:')) {
-      setErrorMessage(
-        isAr
-          ? 'يرجى إدخال رابط صالح يبدأ بـ http:// أو https:// أو magnet:'
-          : 'Please enter a valid HTTP, HTTPS, or magnet URL'
-      );
-      return;
+    if (parsed.urls.length > 100) {
+      setError(ar ? 'الحد الأقصى 100 رابط في الدفعة.' : 'Add up to 100 links at a time.'); return;
     }
-
-    setErrorMessage(null);
-    setIsResolving(true);
-
-    try {
-      onAdd(cleanUrl, customFilename.trim() || undefined, segments);
-      setUrl('');
-      setCustomFilename('');
-      setShowAdvanced(false);
-      onClearClipboardUrl?.();
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'حدث خطأ في معالجة الرابط');
-    } finally {
-      setIsResolving(false);
-    }
+    for (const url of parsed.urls) onAdd(url, parsed.urls.length === 1 ? filename.trim() || undefined : undefined, segments);
+    setNotice(ar ? `تمت إضافة ${parsed.urls.length} إلى القائمة.` : `${parsed.urls.length} added to the list.`);
+    setValue(''); setFilename(''); setError(''); onClearClipboardUrl?.(); input.current?.focus();
   };
 
   return (
-    <div className="w-full bg-[#111116] border border-white/[0.08] hover:border-white/[0.14] rounded-2xl p-3 sm:p-4 shadow-xl transition-all">
-      <form onSubmit={handleSubmit} className="space-y-3">
-        {/* Main Input Row */}
-        <div className="flex flex-col sm:flex-row items-stretch gap-2">
-          <div className="relative flex-1">
-            <Link2 className="w-4 h-4 text-zinc-500 absolute left-3.5 rtl:right-3.5 rtl:left-auto top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                if (errorMessage) setErrorMessage(null);
-              }}
-              placeholder={
-                isAr
-                  ? 'الصق رابط التحميل المباشر هنا (ملفات، وسائط، تيك توك، روابط مضغوطة)...'
-                  : 'Paste direct download link here (files, media, streams, archives)...'
-              }
-              className="w-full bg-[#09090d] border border-white/[0.08] focus:border-cyan-400/60 rounded-xl pl-9 rtl:pr-9 rtl:pl-24 pr-24 py-2.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-cyan-400/30 transition-all font-mono"
-            />
-
-            {/* Quick Paste inside Input button */}
-            <button
-              type="button"
-              onClick={handlePasteClipboard}
-              className="absolute right-2 rtl:left-2 rtl:right-auto top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-cyan-300 text-xs font-mono flex items-center gap-1 transition-all border border-white/[0.05]"
-              title={isAr ? 'لصق من الحافظة' : 'Paste from clipboard'}
-            >
-              <Clipboard className="w-3 h-3 text-cyan-400" />
-              <span className="hidden sm:inline text-[11px]">{isAr ? 'لصق' : 'Paste'}</span>
-            </button>
-          </div>
-
-          {/* Submit Action Button */}
-          <button
-            type="submit"
-            disabled={!url.trim() || isResolving}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-400 to-cyan-500 text-zinc-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 hover:from-cyan-300 hover:to-cyan-400 active:scale-95 transition-all shadow-[0_0_20px_rgba(0,229,255,0.25)] disabled:opacity-40 disabled:pointer-events-none shrink-0"
-          >
-            {isResolving ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>{isAr ? 'جاري الفحص...' : 'Resolving...'}</span>
-              </>
-            ) : (
-              <>
-                <ArrowDownToLine className="w-4 h-4 stroke-[2.5]" />
-                <span>{isAr ? 'بدء التنزيل' : 'Download'}</span>
-              </>
-            )}
+    <section className="quick-add" aria-label={ar ? 'إضافة تنزيل' : 'Add download'}>
+      <form onSubmit={submit}>
+        <div className="quick-add-heading">
+          <label htmlFor="download-url"><Link2 size={15} />{ar ? 'رابط جديد' : 'New download'}</label>
+          <button type="button" className="text-button" aria-pressed={batch} onClick={() => setBatch(!batch)}>
+            <ListPlus size={15} />{ar ? 'روابط متعددة' : 'Multiple links'}
           </button>
         </div>
-
-        {/* Inline Error Notice if any */}
-        {errorMessage && (
-          <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/25 flex items-start gap-2 text-rose-300 text-xs font-mono animate-in-fade">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span className="leading-relaxed">{errorMessage}</span>
+        <div className="quick-add-row">
+          <div className="url-field">
+            <textarea ref={input} id="download-url" dir="ltr" rows={batch ? 4 : 1}
+              value={value} spellCheck={false} autoCapitalize="off" autoComplete="off"
+              placeholder={batch ? 'https://example.com/file.zip\nhttps://example.com/video.mp4' : 'https://example.com/file.zip'}
+              aria-invalid={!!error} aria-describedby="download-input-help"
+              onChange={(event) => { setValue(event.target.value); setError(''); setNotice(''); if (event.target.value.includes('\n')) setBatch(true); }}
+              onKeyDown={(event) => { if (event.key === 'Enter' && (!batch || event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(event); } }} />
+            <button type="button" className="icon-button" aria-label={ar ? 'لصق الروابط' : 'Paste links'} title={ar ? 'لصق' : 'Paste'} onClick={async () => {
+              try { const text = await navigator.clipboard.readText(); setValue(text.trim()); setBatch(text.includes('\n')); setError(''); input.current?.focus(); }
+              catch { setError(ar ? 'تعذّرت قراءة الحافظة. استخدم Ctrl+V داخل حقل الرابط.' : 'Clipboard unavailable. Paste with Ctrl+V in the link field.'); }
+            }}><Clipboard size={16} /></button>
           </div>
-        )}
-
-        {/* Advanced Options Toggle */}
-        <div className="flex items-center justify-between text-xs pt-0.5">
-          <button
-            type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="text-[11px] font-mono text-zinc-400 hover:text-cyan-300 flex items-center gap-1 transition-colors"
-          >
-            <span>{isAr ? 'خيارات متقدمة (اسم الملف، المسارات)' : 'Advanced (filename, threads)'}</span>
-            {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          <button type="submit" className="action-button primary" disabled={!value.trim()}>
+            <ArrowDownToLine size={16} />{ar ? (parsed.urls.length > 1 ? `إضافة ${parsed.urls.length} روابط` : 'تنزيل') : (parsed.urls.length > 1 ? `Add ${parsed.urls.length} links` : 'Download')}
           </button>
-
-          <span className="text-[10px] font-mono text-zinc-500">
-            {isAr ? `${segments} اتصالات متوازية` : `${segments} parallel streams`}
-          </span>
         </div>
-
-        {/* Expandable Advanced Options */}
-        {showAdvanced && (
-          <div className="pt-2 border-t border-white/[0.04] grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono animate-in-fade">
-            <div>
-              <label className="text-[11px] text-zinc-400 block mb-1">
-                {isAr ? 'اسم ملف مخصص (اختياري):' : 'Custom Filename (optional):'}
-              </label>
-              <input
-                type="text"
-                value={customFilename}
-                onChange={(e) => setCustomFilename(e.target.value)}
-                placeholder="myfile.ext"
-                className="w-full bg-[#09090d] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-400/40"
-              />
-            </div>
-
-            <div>
-              <label className="text-[11px] text-zinc-400 block mb-1">
-                {isAr ? 'مسارات التسريع المتوازية:' : 'Parallel Streams:'}
-              </label>
-              <div className="grid grid-cols-4 gap-1.5">
-                {[4, 8, 16, 32].map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setSegments(s)}
-                    className={`py-1.5 rounded-lg border text-center font-bold text-xs transition-all ${
-                      segments === s
-                        ? 'border-cyan-400 text-zinc-950 bg-cyan-400 shadow-[0_0_12px_rgba(0,229,255,0.3)]'
-                        : 'border-white/[0.06] text-zinc-400 hover:text-zinc-200 bg-white/[0.02]'
-                    }`}
-                  >
-                    {s}x
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="quick-add-foot" id="download-input-help">
+          <button type="button" className="text-button" aria-expanded={advanced} aria-controls="download-options" onClick={() => setAdvanced(!advanced)}>
+            <ChevronDown size={14} className={advanced ? 'rotate-180' : ''} />{ar ? 'خيارات التنزيل' : 'Download options'}
+          </button>
+          <span>{value.trim() && batch ? (ar ? `${parsed.urls.length} صالحة · ${parsed.invalid.length} غير صالحة · ${parsed.duplicates} مكررة` : `${parsed.urls.length} valid · ${parsed.invalid.length} invalid · ${parsed.duplicates} duplicates`) : (ar ? 'الصق رابطاً أو اسحبه هنا · Ctrl+N' : 'Paste a link or drop it here · Ctrl+N')}</span>
+        </div>
+        {advanced && <div className="download-options" id="download-options">
+          <label>{ar ? 'اسم الملف (لرابط واحد)' : 'Filename (single link)'}
+            <input value={filename} onChange={(event) => setFilename(event.target.value)} disabled={parsed.urls.length > 1} placeholder="filename.ext" dir="ltr" />
+          </label>
+          <label>{ar ? 'الحد الأقصى للاتصالات' : 'Maximum connections'}
+            <select value={segments} onChange={(event) => setSegments(Number(event.target.value))}>
+              {[1, 4, 8, 16, 32].map((count) => <option key={count} value={count}>{count}</option>)}
+            </select>
+          </label>
+          <p>{ar ? 'يستخدم المحرك اتصالاً واحداً إذا كان الخادم لا يدعم تقسيم الملف.' : 'The engine uses one connection when the server does not support ranges.'}</p>
+        </div>}
+        {error && <p className="inline-error" role="alert">{error}</p>}
+        <span className="inline-notice" role="status">{notice}</span>
       </form>
-    </div>
+    </section>
   );
-};
+}

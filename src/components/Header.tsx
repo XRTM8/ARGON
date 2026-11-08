@@ -3,21 +3,23 @@ import {
   Send,
   Clipboard,
   History,
-  Sliders
+  Sliders,
+  Puzzle
 } from 'lucide-react';
 import type { DownloadStats } from '../types/downloader';
 
-export type MainViewTab = 'downloads' | 'sharing' | 'clipboard' | 'history' | 'settings';
-export const CURRENT_VERSION = '2.0.0';
+export type MainViewTab = 'downloads' | 'sharing' | 'clipboard' | 'history' | 'browser' | 'settings';
+export const CURRENT_VERSION = '2.1.0';
 
 interface Props {
   lang: 'ar' | 'en';
   activeTab: MainViewTab;
   onTabChange: (tab: MainViewTab) => void;
   stats: DownloadStats;
+  runtime: 'preview' | 'starting' | 'ready' | 'error';
 }
 
-export function Header({ lang, activeTab, onTabChange, stats }: Props) {
+export function Header({ lang, activeTab, onTabChange, stats, runtime }: Props) {
   const ar = lang === 'ar';
 
   const links = [
@@ -41,6 +43,11 @@ export function Header({ lang, activeTab, onTabChange, stats }: Props) {
       id: 'history' as const,
       label: ar ? 'السجل' : 'Activity',
       icon: History
+    },
+    {
+      id: 'browser' as const,
+      label: ar ? 'إضافة المتصفح' : 'Browser extension',
+      icon: Puzzle
     },
     {
       id: 'settings' as const,
@@ -98,8 +105,8 @@ export function Header({ lang, activeTab, onTabChange, stats }: Props) {
       {/* Sidebar Footer */}
       <div className="sidebar-bottom">
         <div className="engine-status-pill">
-          <span className="status-dot" />
-          <span>{ar ? 'المحرك جاهز' : 'Engine active'}</span>
+          <span className={`status-dot ${runtime !== 'ready' ? 'offline' : ''}`} />
+          <span>{({ preview: ar ? 'معاينة الواجهة' : 'Interface preview', starting: ar ? 'تهيئة المحرك…' : 'Starting engine…', ready: ar ? 'المحرك متصل' : 'Engine connected', error: ar ? 'المحرك غير متاح' : 'Engine unavailable' })[runtime]}</span>
         </div>
         <div className="version-tag" dir="ltr">
           <span>ARGON 2</span>
