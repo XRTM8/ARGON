@@ -73,6 +73,7 @@ mkdirSync(outDir, { recursive: true });
 const installerPath = args.get('installer');
 const signaturePath = args.get('signature');
 const portablePath = args.get('portable');
+const extensionPath = args.get('extension');
 const apkPath = args.get('apk');
 
 const feed = {
@@ -100,7 +101,7 @@ if (installerPath && existsSync(installerPath)) {
   const stat = statSync(stagedInstaller);
   const hash = sha256(stagedInstaller);
 
-  feed.platforms['windows-x86_64'] = {
+  if (signature) feed.platforms['windows-x86_64'] = {
     signature,
     url: `https://github.com/${repository}/releases/download/${tag}/${installerName}`
   };
@@ -117,6 +118,7 @@ if (installerPath && existsSync(installerPath)) {
 
 // 2. Windows Portable ZIP
 if (portablePath && existsSync(portablePath)) {
+  if (readFileSync(portablePath).readUInt32LE(0) !== 0x04034b50) fail('portable artifact must be a real ZIP, not a renamed executable');
   const portableName = `argon-${version}-portable.zip`;
   const stagedPortable = path.join(outDir, portableName);
   if (path.resolve(portablePath) !== path.resolve(stagedPortable)) {
@@ -133,6 +135,17 @@ if (portablePath && existsSync(portablePath)) {
     url: `https://github.com/${repository}/releases/download/${tag}/${portableName}`,
     size: stat.size,
     sha256: hash
+  });
+}
+
+if (extensionPath && existsSync(extensionPath)) {
+  const extensionName = `argon-${version}-browser-extension.zip`;
+  const stagedExtension = path.join(outDir, extensionName);
+  if (path.resolve(extensionPath) !== path.resolve(stagedExtension)) copyFileSync(extensionPath, stagedExtension);
+  feed.assets.push({
+    name: extensionName, kind: 'browser-extension',
+    url: `https://github.com/${repository}/releases/download/${tag}/${extensionName}`,
+    size: statSync(stagedExtension).size, sha256: sha256(stagedExtension)
   });
 }
 

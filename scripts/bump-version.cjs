@@ -1,6 +1,9 @@
 const fs = require('fs');
 
-const targetVersion = process.argv[2] || '1.2.0';
+const targetVersion = process.argv[2];
+if (!/^\d+\.\d+\.\d+$/.test(targetVersion || '')) {
+  throw new Error('Usage: node scripts/bump-version.cjs <major.minor.patch>');
+}
 
 // 1. package.json
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -26,6 +29,14 @@ fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(tauriConf, null, 2)
 let cargoToml = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
 cargoToml = cargoToml.replace(/^version\s*=\s*"[^"]+"/m, `version = "${targetVersion}"`);
 fs.writeFileSync('src-tauri/Cargo.toml', cargoToml, 'utf8');
+
+// Keep the app package in Cargo.lock consistent without changing dependency versions.
+const cargoLockPath = 'src-tauri/Cargo.lock';
+const cargoLock = fs.readFileSync(cargoLockPath, 'utf8').replace(
+  /(\[\[package\]\]\s+name = "otium_downloader"\s+version = ")[^"]+("[\s\S]*?)(?=\[\[package\]\]|$)/,
+  (_, prefix, rest) => `${prefix}${targetVersion}${rest}`
+);
+fs.writeFileSync(cargoLockPath, cargoLock, 'utf8');
 
 // 5. Visible version and browser integration
 const headerPath = 'src/components/Header.tsx';

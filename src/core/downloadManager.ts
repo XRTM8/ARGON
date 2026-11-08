@@ -45,7 +45,9 @@ interface NativeRun {
 export class DownloadManager {
   private ready: Promise<void>;
   private runtimeError?: string;
+  private runtimeReady = false;
   private runs = new Map<string, NativeRun>();
+  private pendingBrowserTasks = new Set<string>();
   private destroyed = false;
   private batchPausing = false;
   private tasks: Map<string, DownloadTask> = new Map();
@@ -73,8 +75,15 @@ export class DownloadManager {
     this.loadSettings();
     this.loadFromStorage();
     this.startSpeedLoop();
-    this.ready = Promise.all([this.initTauriListeners(), this.initDefaultDirectory()]).then(() => {}).catch((error) => {
+    this.ready = Promise.all([this.initTauriListeners(), this.initDefaultDirectory()]).then(async () => {
+      if (isTauri() && !this.destroyed) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('set_browser_bridge_ready');
+      }
+      this.runtimeReady = true; this.notify(true);
+    }).catch((error) => {
       this.runtimeError = String(error);
+      this.notify(true);
     });
   }
 
@@ -200,16 +209,10 @@ export class DownloadManager {
         url: string;
         filename?: string;
         headers?: Record<string, string>;
+        request_id?: string;
       }>('browser-add-download', (event) => {
         if (event.payload?.url) {
-          this.addTask(
-            event.payload.url,
-            event.payload.filename,
-            this.defaultSegmentCount,
-            undefined,
-            event.payload.headers
-          );
-          this.showNotification('تم استلام تنزيل من المتصفح ⚡', event.payload.filename || event.payload.url);
+          void this.acceptBrowserDownload(event.payload);
         }
       });
       this.tauriUnlisten = () => {
@@ -217,11 +220,40 @@ export class DownloadManager {
         unlistenBrowser();
       };
       if (this.destroyed) { this.tauriUnlisten(); this.tauriUnlisten = null; return; }
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_browser_bridge_ready');
     } catch (error) {
       throw new Error(`تعذر تهيئة أحداث التنزيل: ${String(error)}`);
     }
+  }
+
+  private async acceptBrowserDownload(payload: { url: string; filename?: string; headers?: Record<string, string>; request_id?: string }) {
+    await this.ready;
+    if (this.runtimeError || this.destroyed) {
+      if (payload.request_id) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('acknowledge_browser_download', { requestId: payload.request_id, accepted: false }).catch(() => {});
+      }
+      return;
+    }
+    // Persist before acknowledging: the browser must never cancel on an event emission alone.
+    const id = this.addTask(payload.url, payload.filename, this.defaultSegmentCount, undefined, payload.headers, undefined, undefined, true);
+    const task = this.tasks.get(id)!;
+    const accepted = !task.errorMessage && saveTasksToStorage(this.getTasks());
+    if (!accepted) { this.tasks.delete(id); this.pendingBrowserTasks.delete(id); this.notify(true); }
+    if (payload.request_id) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('acknowledge_browser_download', { requestId: payload.request_id, accepted });
+      } catch {
+        // No acknowledgement means the browser keeps its download. Avoid starting a duplicate.
+        this.tasks.delete(id); this.pendingBrowserTasks.delete(id); saveTasksToStorage(this.getTasks()); this.notify(true); return;
+      }
+    }
+    this.pendingBrowserTasks.delete(id);
+    if (accepted) { this.processQueue(); this.notify(true); }
+  }
+
+  public getRuntimeStatus(): 'preview' | 'starting' | 'ready' | 'error' {
+    return !isTauri() ? 'preview' : this.runtimeError ? 'error' : this.runtimeReady ? 'ready' : 'starting';
   }
 
   public subscribe(listener: () => void): () => void {
@@ -259,6 +291,26 @@ export class DownloadManager {
 
   public getSpeedHistory(): number[] {
     return [...this.speedHistory];
+  }
+
+  public refreshTaskUrl(id: string, value: string) {
+    const task = this.tasks.get(id);
+    if (!task || !['paused', 'error'].includes(task.status)) throw new Error('Pause the download before replacing its URL.');
+    let next: URL;
+    try { next = new URL(value.trim()); if (!['http:', 'https:'].includes(next.protocol)) throw new Error(); }
+    catch { throw new Error('Enter a complete HTTP or HTTPS URL.'); }
+    let previous: URL | undefined;
+    try { previous = new URL(task.url); } catch { /* Invalid original links restart from zero. */ }
+    // A different resource cannot reuse the partial file, even if an unrelated server reuses an ETag.
+    if (previous?.origin !== next.origin || previous?.pathname !== next.pathname) task.probed = false;
+    const resolved = resolveUniversalLink(value.trim());
+    task.originalUrl = value.trim(); task.url = resolved.resolvedUrl;
+    task.torrentInfo = undefined; task.mediaInfo = undefined;
+    // Never carry credentials or Referer headers to the replacement URL.
+    task.headers = resolved.suggestedHeaders;
+    task.errorMessage = undefined;
+    if (task.checksum) { task.checksum.actual = undefined; task.checksum.verified = false; }
+    this.resumeTask(id);
   }
 
   public restartTask(id: string) {
@@ -372,23 +424,15 @@ export class DownloadManager {
   }
 
   public async openFile(filePath?: string) {
-    if (!filePath || !isTauri()) return;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('open_file_item', { filePath });
-    } catch (e) {
-      console.warn('Failed to open file:', e);
-    }
+    if (!filePath || !isTauri()) throw new Error('Open the ARGON app to access saved files.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_file_item', { filePath });
   }
 
   public async openBrowserExtensionDir() {
-    if (!isTauri()) return;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('open_browser_extension_dir');
-    } catch (e) {
-      console.warn('Failed to open browser extension dir:', e);
-    }
+    if (!isTauri()) throw new Error('Open the ARGON desktop app to find the extension folder.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_browser_extension_dir');
   }
 
   public addBatchTasks(urls: string[], segmentCount?: number): string[] {
@@ -506,7 +550,7 @@ export class DownloadManager {
   public processQueue() {
     if (this.destroyed || this.batchPausing || !this.isNightSchedulerActive()) return;
     let active = this.getTasks().filter((t) => t.status === 'downloading').length;
-    for (const task of this.getTasks().filter((t) => t.status === 'queued').sort((a, b) => a.createdAt - b.createdAt)) {
+    for (const task of this.getTasks().filter((t) => t.status === 'queued' && !this.pendingBrowserTasks.has(t.id)).sort((a, b) => a.createdAt - b.createdAt)) {
       if (active >= this.maxConcurrentDownloads) break;
       task.status = 'downloading';
       task.errorMessage = undefined;
@@ -520,7 +564,7 @@ export class DownloadManager {
   public addTask(
     url: string, customFilename?: string, segmentCount: number = this.defaultSegmentCount,
     expectedSha256?: string, customHeaders?: Record<string, string>, torrentMeta?: TorrentMetadata,
-    mediaInfo?: import('../types/downloader').MediaMetadata
+    mediaInfo?: import('../types/downloader').MediaMetadata, deferStart = false
   ): string {
     const originalUrl = url.trim();
     const resolved = resolveUniversalLink(originalUrl);
@@ -547,7 +591,8 @@ export class DownloadManager {
       checksum: expectedSha256?.trim() ? { algorithm: 'sha256', expected: expectedSha256.trim().toLowerCase(), verified: false } : undefined,
     };
     this.tasks.set(id, task);
-    if (!error) { soundEngine.playStartSweep(); this.processQueue(); }
+    if (deferStart) this.pendingBrowserTasks.add(id);
+    if (!error && !deferStart) { soundEngine.playStartSweep(); this.processQueue(); }
     this.scheduleStorageSave();
     this.notify(true);
     return id;
@@ -757,16 +802,24 @@ export class DownloadManager {
     this.notify(true);
   }
 
-  public removeTask(id: string, deleteFileFromDisk: boolean = false) {
+  public async removeTask(id: string, deleteFileFromDisk: boolean = false) {
     const task = this.tasks.get(id);
     this.cancelRun(id);
     const running = this.runs.get(id)?.promise || Promise.resolve();
+    if (deleteFileFromDisk && task?.savePath && isTauri()) {
+      if (task.status === 'downloading' || task.status === 'queued') task.status = 'paused';
+      try {
+        await running;
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('delete_file_item', { filePath: task.savePath });
+      } catch (error) {
+        task.errorMessage = `Could not delete file: ${String(error)}`;
+        this.scheduleStorageSave(); this.notify(true); return;
+      }
+    }
     this.tasks.delete(id);
+    this.pendingBrowserTasks.delete(id);
     this.speedSamples.delete(id);
-    if (deleteFileFromDisk && task?.savePath && isTauri()) void running.then(async () => {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('delete_file_item', { filePath: task.savePath });
-    }).catch(console.warn);
     this.scheduleStorageSave();
     this.notify(true);
     this.processQueue();
@@ -806,13 +859,9 @@ export class DownloadManager {
   }
 
   public async openFolder(filePath?: string) {
-    if (!filePath || !isTauri()) return;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('open_destination_folder', { filePath });
-    } catch (e) {
-      console.warn('Failed to open folder:', e);
-    }
+    if (!filePath || !isTauri()) throw new Error('Open the ARGON app to access saved folders.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_destination_folder', { filePath });
   }
 
   public async verifyHash(id: string): Promise<string | null> {

@@ -1,205 +1,112 @@
-/**
- * ARGON Extension - Background Service Worker
- * Intercepts downloads and routes context-menu clicks to ARGON's native loopback bridge (127.0.0.1:41523)
- */
+import { DEFAULTS, httpUrl, shouldCapture, mediaDescriptor } from './core.js';
+import { connection, sendDownload } from './bridge-client.js';
 
-const OTIUM_BRIDGE_URL = 'http://127.0.0.1:41523';
-
-// In-memory sniffer cache for detected video/media streams per browser tab
-const tabMedia = new Map();
-const MEDIA_REGEX = /\.(m3u8|mpd|mp4|webm|flv|mkv)(\?.*)?$/i;
-
-// 1. Initialize Context Menus
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'otium-download-link',
-    title: 'تنزيل بواسطة ARGON ⚡',
-    contexts: ['link']
-  });
-
-  chrome.contextMenus.create({
-    id: 'otium-download-media',
-    title: 'تنزيل الوسائط بواسطة ARGON ⚡',
-    contexts: ['image', 'video', 'audio']
-  });
-
-  chrome.contextMenus.create({
-    id: 'otium-download-selection',
-    title: 'تنزيل الرابط المحدد بـ ARGON ⚡',
-    contexts: ['selection']
-  });
-});
-
-// 2. Handle Context Menu Clicks
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  let targetUrl = '';
-  if (info.menuItemId === 'otium-download-link' && info.linkUrl) {
-    targetUrl = info.linkUrl;
-  } else if (info.menuItemId === 'otium-download-media' && info.srcUrl) {
-    targetUrl = info.srcUrl;
-  } else if (info.menuItemId === 'otium-download-selection' && info.selectionText) {
-    const text = info.selectionText.trim();
-    if (/^https?:\/\/.+/i.test(text) || text.startsWith('magnet:?')) {
-      targetUrl = text;
-    }
-  }
-
-  if (targetUrl) {
-    const referer = tab?.url || '';
-    const success = await sendToOtium(targetUrl, undefined, referer);
-    if (!success) {
-      showNotification('تنبيه ARGON', 'تأكد من تشغيل تطبيق ARGON على حاسوبك للبدء.');
-    }
-  }
-});
-
-// 3. Optional: Intercept Native Browser Downloads
-chrome.downloads.onCreated.addListener(async (item) => {
-  const settings = await chrome.storage.local.get({ autoIntercept: true });
-  if (!settings.autoIntercept) return;
-
-  const url = item.finalUrl || item.url;
-  if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('chrome-extension:')) {
-    return;
-  }
-
-  // Ping ARGON bridge
-  const isOnline = await checkOtiumOnline();
-  if (!isOnline) {
-    // Otium is not open, let the browser download proceed untouched
-    return;
-  }
-
-  const referer = item.referrer || '';
-  const filename = item.filename ? item.filename.split(/[\\/]/).pop() : undefined;
-
-  const sent = await sendToOtium(url, filename, referer);
-  if (sent) {
-    try { await chrome.downloads.cancel(item.id); await chrome.downloads.erase({ id: item.id }); } catch { /* Download may have already completed. */ }
-    showNotification('تم التقاط التنزيل ⚡', filename || url);
-  }
-});
-
-// 4. Live Media/Stream Sniffer (HLS .m3u8, DASH .mpd, MP4, WebM)
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    if (details.tabId > 0 && details.url) {
-      const match = details.url.match(MEDIA_REGEX);
-      if (match) {
-        const ext = match[1].toLowerCase();
-        let list = tabMedia.get(details.tabId) || [];
-        if (!list.some((m) => m.url === details.url)) {
-          const rawName = details.url.split('?')[0].split('/').pop() || `stream.${ext}`;
-          let cleanName = rawName;
-          try { cleanName = decodeURIComponent(rawName); } catch { /* Keep malformed escaped names readable. */ }
-          list.push({
-            url: details.url,
-            ext,
-            type: ext === 'm3u8' ? 'HLS Stream' : ext === 'mpd' ? 'DASH Stream' : ext.toUpperCase(),
-            filename: cleanName,
-            timestamp: Date.now()
-          });
-          if (list.length > 30) list = list.slice(-30);
-          tabMedia.set(details.tabId, list);
-
-          try {
-            chrome.action.setBadgeText({ tabId: details.tabId, text: String(list.length) });
-            chrome.action.setBadgeBackgroundColor({ tabId: details.tabId, color: '#00e599' });
-          } catch {}
-        }
-      }
-    }
-  },
-  { urls: ['<all_urls>'] }
-);
-
-// Tab cleanup on close or reload
-chrome.tabs.onRemoved.addListener((tabId) => {
-  tabMedia.delete(tabId);
-});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') {
-    tabMedia.delete(tabId);
+// Session storage survives MV3 worker suspension, but is cleared with the browser session.
+const writes = new Map();
+const handoffKey = (id) => `handoff:${id}`;
+// Recover a paused browser transfer if the worker was interrupted mid-handoff.
+const recovered = (async () => {
+  const data = await chrome.storage.local.get(null);
+  for (const [key, record] of Object.entries(data)) {
+    if (!key.startsWith('handoff:') || !record?.id) continue;
     try {
-      chrome.action.setBadgeText({ tabId, text: '' });
-    } catch {}
+      const [item] = await chrome.downloads.search({ id: record.id });
+      if (item?.state === 'in_progress' && item.startTime === record.startTime) {
+        if (record.saved) await chrome.downloads.cancel(item.id);
+        else if (item.paused) await chrome.downloads.resume(item.id);
+      }
+      await chrome.storage.local.remove(key);
+    } catch { /* Keep the record for the next worker wake-up. */ }
   }
+})();
+const keyFor = (id) => `media:${id}`;
+function updateTab(id, operation) {
+  const previous = writes.get(id) || Promise.resolve();
+  const next = previous.catch(() => {}).then(async () => {
+    const key = keyFor(id);
+    const data = await chrome.storage.session.get(key);
+    const list = operation(data[key] || []);
+    if (list === null) await chrome.storage.session.remove(key);
+    else await chrome.storage.session.set({ [key]: list });
+    await chrome.action.setBadgeText({ tabId: id, text: list?.filter((item) => item.supported).length ? String(list.filter((item) => item.supported).length) : '' }).catch(() => {});
+    await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#587849' }).catch(() => {});
+  });
+  writes.set(id, next);
+  void next.catch(() => {}).finally(() => { if (writes.get(id) === next) writes.delete(id); });
+  return next;
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    for (const [id, title, contexts] of [
+      ['argon-link', 'Download with ARGON / تنزيل بواسطة ARGON', ['link']],
+      ['argon-media', 'Download media with ARGON / تنزيل الوسائط', ['image', 'video', 'audio']],
+      ['argon-selection', 'Send selected URL to ARGON / إرسال الرابط المحدد', ['selection']]
+    ]) chrome.contextMenus.create({ id, title, contexts });
+  });
 });
 
-// Runtime message responder for popup queries
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'GET_TAB_MEDIA') {
-    const list = tabMedia.get(request.tabId) || [];
-    sendResponse({ media: list });
+async function notify(message) {
+  const { language } = await chrome.storage.local.get(DEFAULTS);
+  await chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'ARGON', message: language === 'ar' ? message[0] : message[1] }).catch(() => {});
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const url = info.menuItemId === 'argon-link' ? info.linkUrl : info.menuItemId === 'argon-media' ? info.srcUrl : info.selectionText?.trim();
+  if (!httpUrl(url)) { void notify(['اختر رابط HTTP أو HTTPS مباشر.', 'Choose a direct HTTP or HTTPS URL.']); return; }
+  void connection().then(() => sendDownload(url, undefined, info.frameUrl || tab?.url)).then(
+    () => notify(['تمت إضافة الرابط إلى ARGON.', 'Link added to ARGON.']),
+    () => notify(['تعذّر تسليم الرابط. افتح ARGON وتحقق من دعم نوع الرابط.', 'Could not hand off this link. Open ARGON and check that the URL type is supported.'])
+  );
+});
+
+chrome.downloads.onCreated.addListener((item) => { void capture(item).catch(() => {}); });
+async function capture(item) {
+  await recovered;
+  const settings = await chrome.storage.local.get(DEFAULTS);
+  if (!shouldCapture(item, settings)) return;
+  // Require the durable-handoff protocol before touching any browser download.
+  try { await connection(); } catch { return; }
+  const [current] = await chrome.downloads.search({ id: item.id });
+  if (!current || !shouldCapture(current, settings)) return;
+  const key = handoffKey(item.id);
+  await chrome.storage.local.set({ [key]: { id: item.id, startTime: current.startTime, saved: false } });
+  // Pause, then send: prevents small files completing while ARGON takes over.
+  try { await chrome.downloads.pause(item.id); } catch { await chrome.storage.local.remove(key); return; }
+  try {
+    await sendDownload(current.finalUrl || current.url, current.filename?.split(/[\\/]/).pop(), current.referrer);
+  } catch {
+    try { await chrome.downloads.resume(item.id); await chrome.storage.local.remove(key); } catch { /* Recover on the next wake-up. */ }
+    return;
   }
+  // Only an acknowledgement of a saved task permits cancellation. Keep browser history.
+  try {
+    await chrome.storage.local.set({ [key]: { id: item.id, startTime: current.startTime, saved: true } });
+    await chrome.downloads.cancel(item.id);
+    await chrome.storage.local.remove(key);
+    await notify(['حُفظ التنزيل في ARGON.', 'Download saved in ARGON.']);
+  } catch { await notify(['حُفظ التنزيل في ARGON؛ تحقق من تنزيل المتصفح أيضاً.', 'Saved in ARGON; also check the browser download.']); }
+}
+
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  if (details.tabId < 0 || details.incognito || details.statusCode < 200 || details.statusCode >= 400) return;
+  const mime = details.responseHeaders?.find((header) => header.name.toLowerCase() === 'content-type')?.value || '';
+  const descriptor = mediaDescriptor(details.url, mime);
+  if (!descriptor) return;
+  void updateTab(details.tabId, (previous) => {
+    const list = previous.filter((item) => Date.now() - item.timestamp < 30 * 60 * 1000 && item.url !== descriptor.url);
+    return [...list, { ...descriptor, timestamp: Date.now() }].slice(-40);
+  }).catch(() => {});
+}, { urls: ['http://*/*', 'https://*/*'] }, ['responseHeaders']);
+
+chrome.tabs.onRemoved.addListener((id) => { void updateTab(id, () => null).catch(() => {}); });
+chrome.tabs.onUpdated.addListener((id, change) => {
+  if (change.status === 'loading') void updateTab(id, () => []).catch(() => {});
+});
+
+chrome.runtime.onMessage.addListener((request, sender, respond) => {
+  if (sender.id !== chrome.runtime.id || request.type !== 'GET_TAB_MEDIA' || !Number.isInteger(request.tabId)) return false;
+  const key = keyFor(request.tabId);
+  void (writes.get(request.tabId) || Promise.resolve()).catch(() => {}).then(() => chrome.storage.session.get(key)).then((data) => respond({ media: (data[key] || []).filter((item) => Date.now() - item.timestamp < 30 * 60 * 1000) }), () => respond({ media: [] }));
   return true;
 });
-
-/**
- * Checks if ARGON local bridge is listening.
- */
-async function checkOtiumOnline() {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 750);
-    const res = await fetch(`${OTIUM_BRIDGE_URL}/ping`, {
-      method: 'GET',
-      headers: {
-        'X-Otium-Client': 'browser-extension'
-      },
-      signal: ctrl.signal
-    });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Dispatches a download link to ARGON.
- */
-async function sendToOtium(url, filename, referer) {
-  try {
-    const headers = {};
-    if (referer && !referer.startsWith('chrome') && !referer.startsWith('moz')) {
-      headers['Referer'] = referer;
-    }
-
-    const payload = {
-      url,
-      filename: filename || null,
-      headers: Object.keys(headers).length > 0 ? headers : null
-    };
-
-    const res = await fetch(`${OTIUM_BRIDGE_URL}/add`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Otium-Client': 'browser-extension'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    return res.ok;
-  } catch (err) {
-    console.warn('Failed to communicate with ARGON:', err);
-    return false;
-  }
-}
-
-/**
- * Emits a Chrome system notification.
- */
-function showNotification(title, message) {
-  try {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon48.png',
-      title,
-      message,
-      priority: 1
-    });
-  } catch {}
-}

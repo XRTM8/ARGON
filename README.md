@@ -4,7 +4,7 @@
 
 ## ARGON 2
 
-The unified interface uses AMOLED black, frosted dark panels and titanium text. Downloads, Sharing, Clipboard, Activity and Settings share one navigation panel, with a compact layout on phones.
+The Arabic/English interface uses graphite surfaces, a restrained sage accent and aligned file rows. Downloads, Sharing, Clipboard, Activity, Browser Extension and Settings share one navigation panel, with a bottom navigation bar on phones. Downloads support reviewed batch intake, search/status/type filters, sorting, multi-selection and replacing expired links. See the [UI/UX review and comparison criteria](docs/UI-UX-REVIEW.md).
 
 - Native file selection and encrypted device-to-device transfers, with a six-digit pairing code confirmed on both screens.
 - Explicit acceptance for every received file or text; no unattended clipboard synchronization.
@@ -59,7 +59,7 @@ The installer is generated under `src-tauri/target/release/bundle/nsis/`. A port
 
 ## Browser extension
 
-Open Chrome/Edge's extension manager, enable Developer mode, choose **Load unpacked**, and select `browser-extension/`. The folder is also accessible from ARGON Settings. The extension uses the native bridge on `127.0.0.1:41523`. A browser download is cancelled only after the bridge accepts its task; failed handoffs leave the browser download running.
+Open Chrome/Edge's extension manager, enable Developer mode, choose **Load unpacked**, and select `browser-extension/`. The **Browser extension** section in ARGON includes setup instructions, folder access and bridge diagnostics. The extension offers Arabic/English controls, transient media discovery, selected page-file downloads and opt-in automatic capture with website exclusions and minimum sizes. It uses the native bridge on `127.0.0.1:41523`. Browser downloads are paused for handoff, then cancelled only after ARGON confirms saving the task; failed handoffs resume the browser download. Update the native app and extension together for this protocol. See [extension usage, permissions and validation](browser-extension/README.md).
 
 ## Android preview
 

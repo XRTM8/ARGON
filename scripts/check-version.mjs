@@ -64,6 +64,9 @@ if (!canonicalVersion) {
   process.exit(1);
 }
 
+const extensionManifest = parseJson('browser-extension/manifest.json');
+if (extensionManifest) check('browser-extension/manifest.json version', extensionManifest.version, canonicalVersion);
+
 // 1. Cargo.toml
 const cargoToml = read('src-tauri/Cargo.toml');
 check('src-tauri/Cargo.toml [package].version', cargoPackageVersion(cargoToml), canonicalVersion);
