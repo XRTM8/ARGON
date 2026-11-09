@@ -18,7 +18,7 @@ function labels(){
 function items(){
  const platform=platformVideo(tab?.url,tab?.title);
  const found=new Map();
- for(const item of [...(platform?[platform]:media.filter(item=>item.supported)),...pageFiles])if(!found.has(item.url))found.set(item.url,item);
+ for(const item of [...(platform?[platform]:media.filter(item=>item.supported)),...pageFiles.filter(item=>!platform||!item.media)])if(!found.has(item.url))found.set(item.url,item);
  return [...found.values()].slice(0,40);
 }
 function render(){

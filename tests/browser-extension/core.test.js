@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest';
-import { DEFAULTS, excludedHost, mediaDescriptor, shouldCapture, parseUrls, platformVideo } from '../../browser-extension/core.js';
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULTS, excludedHost, mediaDescriptor, shouldCapture, parseUrls, platformVideo, scanPageLinks } from '../../browser-extension/core.js';
 
 const download = { id: 1, url: 'https://files.example.com/file.zip', state: 'in_progress', danger: 'safe', totalBytes: 5000 };
 const enabled = { ...DEFAULTS, autoIntercept: true };
 describe('browser capture eligibility', () => {
+  it('filters stream fragments from page scans and distinguishes media from file links', () => {
+    const element = (tagName, value) => ({ tagName, [tagName === 'A' ? 'href' : 'src']: value, getAttribute: () => '', hasAttribute: () => false });
+    vi.stubGlobal('document', { querySelectorAll: () => [element('SOURCE', 'https://example.com/part.m4s'), element('VIDEO', 'https://example.com/master.m3u8'), element('VIDEO', 'https://example.com/playback?id=3'), element('A', 'https://example.com/archive.zip')] });
+    try {
+      expect(scanPageLinks()).toEqual([expect.objectContaining({ url: 'https://example.com/playback?id=3', media: true }), expect.objectContaining({ url: 'https://example.com/archive.zip', media: false })]);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('uses the platform page for supported videos rather than separate CDN audio/video tracks', () => {
     expect(platformVideo('https://www.youtube.com/watch?v=abc', 'My video')).toMatchObject({ type: 'YouTube', platform: true, filename: 'My video' });
     expect(platformVideo('https://youtube.com/@channel')).toBeNull();

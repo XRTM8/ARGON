@@ -11,7 +11,7 @@ function updateError(error: string, ar: boolean) {
   if (/signature|pubkey|public key|verify|verification/i.test(error)) return ar ? 'تعذّر التحقق من توقيع التحديث. لم يُثبّت شيء.' : 'The update signature could not be verified. Nothing was installed.';
   if (/tasks_not_saved|preferences_not_saved/.test(error)) return ar ? 'تعذّر حفظ البيانات محلياً. تحقق من مساحة القرص وأعد المحاولة.' : 'Local data could not be saved. Check available storage and retry.';
   if (/incompatible_update_package|unsupported_package/.test(error)) return ar ? 'لا توجد حزمة تحديث متوافقة مع نوع هذه النسخة. لن يُستخدم مثبت بدل Portable.' : 'No compatible update package is available for this copy. A portable copy will not use an installer.';
-  if (/cached_update_changed/.test(error)) return ar ? 'تغير ملف التحديث المحفوظ. أعد فتح التطبيق وافحص التحديث لتنزيل نسخة موثوقة.' : 'The cached update changed. Reopen ARGON and check again to download a verified copy.';
+  if (/cached_update_changed/.test(error)) return ar ? 'تغير ملف التحديث المحفوظ. اضغط تنزيل التحديث لجلب نسخة موثوقة.' : 'The cached update changed. Download the update again to get a verified copy.';
   if (/update_busy/.test(error)) return ar ? 'توجد عملية تحديث قيد التنفيذ.' : 'An update operation is already running.';
   return ar ? 'تعذّر الوصول إلى تحديث موثوق. تحقق من الاتصال وحاول مجدداً.' : 'Could not reach a verified update. Check your connection and retry.';
 }

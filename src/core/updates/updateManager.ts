@@ -161,7 +161,7 @@ export class UpdateManager {
         await this.deps.backend('update_install');
       } catch (error) {
         if (locked) this.deps.installFailed();
-        const retryDownload = /cached_update_changed|signature|pubkey|verification/i.test(String(error));
+        const retryDownload = /cached_update_changed|download_update_first|signature|pubkey|verification/i.test(String(error));
         this.patch({ phase: retryDownload ? 'available' : 'ready', error: String(error) });
       }
     })().finally(() => { this.installing = undefined; });

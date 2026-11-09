@@ -70,10 +70,11 @@ export function scanPageLinks() {
     const value = element.href || element.src;
     if (!value || !/^https?:\/\//i.test(value) || found.has(value)) continue;
     if (!extensions.test(value) && !element.hasAttribute('download') && element.tagName === 'A') continue;
-    if (/\.(m3u8|mpd)(?:$|[?#])/i.test(value)) continue;
+    if (/\.(m3u8|mpd|m4s|ts|cmfv|cmfa)(?:$|[?#])/i.test(value)) continue;
     let name = element.getAttribute('download') || element.textContent?.trim().slice(0, 100) || '';
     if (!name) { try { name = decodeURIComponent(new URL(value).pathname.split('/').pop()) || 'File'; } catch { name = 'File'; } }
-    found.set(value, { url: value, filename: name, supported: true, type: 'FILE' });
+    const media = element.tagName !== 'A' || /\.(mp4|webm|mkv|mov|mp3|m4a|ogg|wav|flac)(?:$|[?#])/i.test(value);
+    found.set(value, { url: value, filename: name, supported: true, type: 'FILE', media });
     if (found.size >= 100) break;
   }
   return [...found.values()];

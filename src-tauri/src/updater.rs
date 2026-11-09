@@ -377,10 +377,8 @@ pub async fn update_install(
             // The official updater verifies the signature again immediately before launching NSIS.
             let result = update.install(&bytes).map_err(|e| e.to_string());
             if result.is_err() {
-                let mut cache = state.cache.lock().await;
-                cache.ready = false;
-                cache.phase = "available".into();
-                drop(cache);
+                // Launch failures do not invalidate the already verified package.
+                // Keep it ready so the user can retry after resolving the installer error.
                 if was_enabled {
                     if let Some(engine) = engine {
                         let _ = engine.start().await;
