@@ -85,6 +85,18 @@ jobs:
           cargo test --locked --manifest-path flow-core/Cargo.toml -- --test-threads=1
       - name: Build Windows installer
         run: npm run tauri:build -- --bundles nsis
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Verify the installer signature against ARGON's embedded public key
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          $installer = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe -File | Where-Object { $_.Name -like "*$env:VERSION*" })
+          if ($installer.Count -ne 1) { throw 'Expected one installer for this version.' }
+          $env:ARGON_SIGNED_INSTALLER = $installer[0].FullName
+          cargo test --locked --manifest-path src-tauri/Cargo.toml release_signature_matches_embedded_key -- --ignored
       - name: Stage and validate complete release archives
         shell: pwsh
         env:
@@ -121,6 +133,7 @@ jobs:
           node scripts/generate-latest-json.mjs \
             --tag "$TAG" --out-dir upload \
             --installer "upload/ARGON_${VERSION}_x64-setup.exe" \
+            --signature "upload/ARGON_${VERSION}_x64-setup.exe.sig" \
             --portable "upload/argon-${VERSION}-portable.zip" \
             --extension "upload/argon-${VERSION}-browser-extension.zip"
           (cd upload && sha256sum * > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
@@ -153,7 +166,7 @@ jobs:
             const release = releases.find(item => item.tag_name === process.env.TAG && item.draft);
             if (!release) throw new Error('Draft release missing.');
             const assets = await github.paginate(github.rest.repos.listReleaseAssets, { ...context.repo, release_id: release.id, per_page: 100 });
-            const required = [`ARGON_${process.env.VERSION}_x64-setup.exe`, `argon-${process.env.VERSION}-portable.zip`, `argon-${process.env.VERSION}-browser-extension.zip`, 'latest.json', 'SHA256SUMS.txt'];
+            const required = [`ARGON_${process.env.VERSION}_x64-setup.exe`, `ARGON_${process.env.VERSION}_x64-setup.exe.sig`, `argon-${process.env.VERSION}-portable.zip`, `argon-${process.env.VERSION}-browser-extension.zip`, 'latest.json', 'SHA256SUMS.txt'];
             for (const name of required) {
               const asset = assets.find(item => item.name === name && item.state === 'uploaded');
               if (!asset || asset.size !== fs.statSync(`upload/${name}`).size) throw new Error(`Uploaded asset is missing or incomplete: ${name}`);

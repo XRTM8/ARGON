@@ -4,6 +4,7 @@ mod flow;
 mod flow_mobile;
 mod media;
 mod transfer;
+mod updater;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub struct TaskManager {
     cancellations: RwLock<HashMap<String, Arc<AtomicBool>>>,
     speed_limit_bytes_per_sec: AtomicU64,
     frontend_ready: AtomicBool,
+    updating: AtomicBool,
     bridge_listening: AtomicBool,
     bridge_sequence: AtomicU64,
     bridge_acks: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
@@ -29,6 +31,16 @@ pub struct TaskManager {
 }
 
 impl TaskManager {
+    pub async fn begin_transfer(&self, task_id: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut map = self.cancellations.write().await;
+        if self.updating.load(Ordering::SeqCst) {
+            return Err("update_installing".into());
+        }
+        Ok(map
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone())
+    }
     pub async fn get_or_create_token(&self, task_id: &str) -> Arc<AtomicBool> {
         let mut map = self.cancellations.write().await;
         if let Some(token) = map.get(task_id) {
@@ -465,11 +477,15 @@ async fn validate_download_directory(directory: String) -> Result<String, String
 #[tauri::command]
 async fn prepare_download_file(
     app: AppHandle,
+    state: tauri::State<'_, Arc<TaskManager>>,
     destination_path: String,
     total_bytes: u64,
     fresh: bool,
     reset: bool,
 ) -> Result<String, String> {
+    if state.updating.load(Ordering::SeqCst) {
+        return Err("update_installing".into());
+    }
     let mut target = resolve_destination_path(&app, &destination_path);
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent)
@@ -542,13 +558,21 @@ async fn acknowledge_browser_download(
     request_id: String,
     accepted: bool,
 ) -> Result<(), String> {
-    let sender = state.bridge_acks.lock().await.remove(&request_id)
+    let sender = state
+        .bridge_acks
+        .lock()
+        .await
+        .remove(&request_id)
         .ok_or("Browser handoff expired; the browser will keep its download")?;
-    sender.send(accepted).map_err(|_| "Browser handoff closed".to_string())
+    sender
+        .send(accepted)
+        .map_err(|_| "Browser handoff closed".to_string())
 }
 
 #[tauri::command]
-async fn browser_bridge_status(state: tauri::State<'_, Arc<TaskManager>>) -> Result<serde_json::Value, String> {
+async fn browser_bridge_status(
+    state: tauri::State<'_, Arc<TaskManager>>,
+) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "listening": state.bridge_listening.load(Ordering::Relaxed),
         "ready": state.frontend_ready.load(Ordering::Relaxed),
@@ -590,7 +614,7 @@ async fn download_segment(
     expected_total: Option<u64>,
     validator: Option<String>,
 ) -> Result<transfer::TransferResult, String> {
-    let token = state.get_or_create_token(&task_id).await;
+    let token = state.begin_transfer(&task_id).await?;
     let path = resolve_destination_path(&app, &destination_path);
     transfer::download(
         transfer::Transfer {
@@ -762,7 +786,10 @@ fn start_browser_bridge(app_handle: AppHandle) {
         let addr = "127.0.0.1:41523";
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => {
-                app_handle.state::<Arc<TaskManager>>().bridge_listening.store(true, Ordering::Relaxed);
+                app_handle
+                    .state::<Arc<TaskManager>>()
+                    .bridge_listening
+                    .store(true, Ordering::Relaxed);
                 log::info!("Otium Browser Bridge listening on http://{}", addr);
                 l
             }
@@ -870,6 +897,10 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         .state::<Arc<TaskManager>>()
                         .frontend_ready
                         .load(Ordering::Relaxed)
+                        || app
+                            .state::<Arc<TaskManager>>()
+                            .updating
+                            .load(Ordering::SeqCst)
                     {
                         let _ = socket
                             .write_all(
@@ -897,6 +928,10 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         .state::<Arc<TaskManager>>()
                         .frontend_ready
                         .load(Ordering::Relaxed)
+                        || app
+                            .state::<Arc<TaskManager>>()
+                            .updating
+                            .load(Ordering::SeqCst)
                     {
                         let _ = socket
                             .write_all(
@@ -937,7 +972,8 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         {
                             let url_trim = payload.url.trim();
                             let valid_url = reqwest::Url::parse(url_trim).ok().filter(|url| {
-                                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+                                matches!(url.scheme(), "http" | "https")
+                                    && url.host_str().is_some()
                                     && !url.path().to_ascii_lowercase().ends_with(".m3u8")
                                     && !url.path().to_ascii_lowercase().ends_with(".mpd")
                             });
@@ -960,16 +996,27 @@ fn start_browser_bridge(app_handle: AppHandle) {
                             }
 
                             let state = app.state::<Arc<TaskManager>>();
-                            let request_id = format!("bridge-{}", state.bridge_sequence.fetch_add(1, Ordering::Relaxed));
+                            let request_id = format!(
+                                "bridge-{}",
+                                state.bridge_sequence.fetch_add(1, Ordering::Relaxed)
+                            );
                             let (sender, receiver) = tokio::sync::oneshot::channel();
-                            state.bridge_acks.lock().await.insert(request_id.clone(), sender);
+                            state
+                                .bridge_acks
+                                .lock()
+                                .await
+                                .insert(request_id.clone(), sender);
                             payload.request_id = Some(request_id.clone());
                             if app.emit("browser-add-download", payload).is_err() {
                                 state.bridge_acks.lock().await.remove(&request_id);
                                 let _ = socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await;
                                 return;
                             }
-                            let accepted = matches!(tokio::time::timeout(std::time::Duration::from_secs(4), receiver).await, Ok(Ok(true)));
+                            let accepted = matches!(
+                                tokio::time::timeout(std::time::Duration::from_secs(4), receiver)
+                                    .await,
+                                Ok(Ok(true))
+                            );
                             state.bridge_acks.lock().await.remove(&request_id);
                             if !accepted {
                                 let body = r#"{"error":"handoff_not_saved","message":"ARGON could not save the task; keep the browser download"}"#;
@@ -1056,8 +1103,26 @@ async fn open_browser_extension_dir(app: AppHandle) -> Result<(), String> {
 pub fn run() {
     let task_manager = Arc::new(TaskManager::default());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .target("windows-x86_64-nsis")
+                .default_version_comparator(|current, release| {
+                    release.version.pre.is_empty() && release.version > current
+                })
+                .build(),
+        );
+    builder
         .manage(task_manager)
+        .manage(updater::UpdateRuntime::default())
         .manage(flow::FlowRuntime::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
@@ -1105,7 +1170,11 @@ pub fn run() {
             open_file_item,
             delete_file_item,
             open_browser_extension_dir,
-            system_shutdown
+            system_shutdown,
+            updater::update_status,
+            updater::update_check,
+            updater::update_download,
+            updater::update_install
         ])
         .build(tauri::generate_context!())
         .expect("error while building ARGON")
@@ -1208,6 +1277,17 @@ mod tests {
 
         let none = "inline; size=4096";
         assert_eq!(parse_content_disposition_filename(none), None);
+    }
+
+    #[tokio::test]
+    async fn update_installation_blocks_new_native_transfers() {
+        let tm = TaskManager::default();
+        tm.updating.store(true, Ordering::SeqCst);
+        assert!(tm.begin_transfer("blocked").await.is_err());
+        assert!(tm.cancellations.read().await.is_empty());
+        tm.updating.store(false, Ordering::SeqCst);
+        assert!(tm.begin_transfer("allowed").await.is_ok());
+        assert!(tm.cancellations.read().await.contains_key("allowed"));
     }
 
     #[tokio::test]

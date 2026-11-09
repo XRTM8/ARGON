@@ -50,6 +50,7 @@ export class DownloadManager {
   private pendingBrowserTasks = new Set<string>();
   private destroyed = false;
   private batchPausing = false;
+  private updateInstallation = false;
   private tasks: Map<string, DownloadTask> = new Map();
   private listeners: Set<() => void> = new Set();
   private speedSamples: Map<string, SpeedSample> = new Map();
@@ -413,6 +414,7 @@ export class DownloadManager {
   }
 
   private checkAutoShutdown() {
+    if (this.updateInstallation) return;
     if (!this.autoShutdownOnComplete) return;
     const remainingActiveOrQueued = Array.from(this.tasks.values()).filter(
       (t) => t.status !== 'completed'
@@ -548,7 +550,7 @@ export class DownloadManager {
   }
 
   public processQueue() {
-    if (this.destroyed || this.batchPausing || !this.isNightSchedulerActive()) return;
+    if (this.destroyed || this.batchPausing || this.updateInstallation || !this.isNightSchedulerActive()) return;
     let active = this.getTasks().filter((t) => t.status === 'downloading').length;
     for (const task of this.getTasks().filter((t) => t.status === 'queued' && !this.pendingBrowserTasks.has(t.id)).sort((a, b) => a.createdAt - b.createdAt)) {
       if (active >= this.maxConcurrentDownloads) break;
@@ -559,6 +561,15 @@ export class DownloadManager {
     }
     this.scheduleStorageSave();
     this.notify(true);
+  }
+
+  public beginUpdateInstallation() {
+    if (this.getStats().activeCount > 0) throw new Error('transfers_active');
+    this.updateInstallation = true;
+    if (!saveTasksToStorage(this.getTasks())) { this.updateInstallation = false; throw new Error('tasks_not_saved'); }
+  }
+  public endUpdateInstallation() {
+    this.updateInstallation = false; this.processQueue();
   }
 
   public addTask(
