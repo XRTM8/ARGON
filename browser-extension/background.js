@@ -1,4 +1,4 @@
-import { DEFAULTS, httpUrl, shouldCapture, mediaDescriptor } from './core.js';
+import { DEFAULTS, httpUrl, shouldCapture, mediaDescriptor, platformVideo, excludedHost } from './core.js';
 import { connection, sendDownload } from './bridge-client.js';
 
 // Session storage survives MV3 worker suspension, but is cleared with the browser session.
@@ -30,6 +30,7 @@ function updateTab(id, operation) {
     else await chrome.storage.session.set({ [key]: list });
     await chrome.action.setBadgeText({ tabId: id, text: list?.filter((item) => item.supported).length ? String(list.filter((item) => item.supported).length) : '' }).catch(() => {});
     await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#587849' }).catch(() => {});
+    if (typeof chrome.tabs.sendMessage === 'function') void chrome.tabs.sendMessage(id, { type: 'ARGON_MEDIA_CHANGED' }).catch(() => {});
   });
   writes.set(id, next);
   void next.catch(() => {}).finally(() => { if (writes.get(id) === next) writes.delete(id); });
@@ -105,6 +106,20 @@ chrome.tabs.onUpdated.addListener((id, change) => {
 });
 
 chrome.runtime.onMessage.addListener((request, sender, respond) => {
+  if (sender.id === chrome.runtime.id && ['GET_VIDEO_TARGET', 'DOWNLOAD_VIDEO'].includes(request.type) && Number.isInteger(sender.tab?.id) && !sender.tab.incognito) {
+    void (async () => {
+      const settings = await chrome.storage.local.get(DEFAULTS);
+      if (!settings.showVideoButton || excludedHost(sender.tab.url, settings.excludedHosts)) return respond({ ok: false });
+      const data = await chrome.storage.session.get(keyFor(sender.tab.id));
+      const direct = mediaDescriptor(request.source);
+      const target = platformVideo(sender.tab.url, sender.tab.title) || (direct?.supported ? direct : (data[keyFor(sender.tab.id)] || []).find(item => item.url === request.source && item.supported));
+      if (!target || excludedHost(target.url, settings.excludedHosts)) return respond({ ok: false });
+      if (request.type === 'GET_VIDEO_TARGET') return respond({ ok: true, target, language: settings.language });
+      try { await connection(); await sendDownload(target.url, target.platform ? undefined : target.filename, sender.tab.url); respond({ ok: true }); }
+      catch { respond({ ok: false, error: 'offline' }); }
+    })().catch(() => respond({ ok: false }));
+    return true;
+  }
   if (sender.id !== chrome.runtime.id || request.type !== 'GET_TAB_MEDIA' || !Number.isInteger(request.tabId)) return false;
   const key = keyFor(request.tabId);
   void (writes.get(request.tabId) || Promise.resolve()).catch(() => {}).then(() => chrome.storage.session.get(key)).then((data) => respond({ media: (data[key] || []).filter((item) => Date.now() - item.timestamp < 30 * 60 * 1000) }), () => respond({ media: [] }));

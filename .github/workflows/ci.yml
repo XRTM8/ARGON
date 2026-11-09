@@ -25,11 +25,16 @@ jobs:
       - run: npm run build
 
   rust-backend:
-    name: Backend (Rust & Tauri)
-    runs-on: ubuntu-latest
+    name: Backend (Rust & Tauri · ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies for Tauri v2
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
@@ -38,8 +43,8 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
       - name: Cargo Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
       - name: Cargo Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Test encrypted sharing
         run: cargo test --locked --manifest-path flow-core/Cargo.toml -- --test-threads=1

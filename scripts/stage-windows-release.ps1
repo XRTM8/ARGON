@@ -39,10 +39,11 @@ Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $outputRo
 if (Test-Path -LiteralPath "$($installers[0].FullName).sig") {
   Copy-Item -LiteralPath "$($installers[0].FullName).sig" -Destination (Join-Path $outputRoot "ARGON_${Version}_x64-setup.exe.sig")
 }
+else { throw 'A signed installer is required for in-app updates.' }
 $archive = [System.IO.Compression.ZipFile]::OpenRead($portableZip)
 try {
   $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-  foreach ($requiredEntry in @('ARGON.exe', 'tools/node.exe', 'tools/yt-dlp.exe', 'browser-extension/manifest.json', 'browser-extension/background.js', 'browser-extension/bridge-client.js', 'browser-extension/core.js', 'browser-extension/popup.js', 'browser-extension/popup.css')) {
+  foreach ($requiredEntry in @('ARGON.exe', 'tools/node.exe', 'tools/yt-dlp.exe', 'browser-extension/manifest.json', 'browser-extension/background.js', 'browser-extension/bridge-client.js', 'browser-extension/core.js', 'browser-extension/popup.js', 'browser-extension/popup.css', 'browser-extension/video-button.js')) {
     if ($entries -notcontains $requiredEntry) { throw "Portable archive is missing $requiredEntry" }
   }
 } finally { $archive.Dispose() }

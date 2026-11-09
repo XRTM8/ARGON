@@ -3,13 +3,10 @@ import {
   FolderOpen,
   Bell,
   Volume2,
-  RefreshCw,
-  CheckCircle2,
   Sliders,
-  Shield,
   } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
-import { fetchReleaseInfo, isNewerVersion, type ReleaseInfo } from '../core/updates/releaseFeed';
+import { UpdatesPanel } from './UpdatesPanel';
 import { CURRENT_VERSION } from './Header';
 
 interface SettingsViewProps {
@@ -25,10 +22,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang }) => {
   const [notifications, setNotifications] = useState(currentSettings.enableNotifications);
   const [sound, setSound] = useState(currentSettings.enableSound ?? true);
   const [soundVolume, setSoundVolume] = useState(currentSettings.soundVolume ?? 0.5);
-  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean; version?: string } | null>(null);
-  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
   const [directory, setDirectory] = useState(currentSettings.defaultDirectory);
   const [directoryMessage, setDirectoryMessage] = useState<string | null>(null);
 
@@ -59,25 +52,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang }) => {
     downloadManager.updateSettings({ soundVolume: vol });
   };
 
-  const handleCheckUpdates = async () => {
-    setIsCheckingUpdate(true);
-    setUpdateInfo(null);
-    setUpdateError(null);
-    setReleaseInfo(null);
-    try {
-      const release = await fetchReleaseInfo();
-      if (release && isNewerVersion(release.version, CURRENT_VERSION)) {
-        setUpdateInfo({ hasUpdate: true, version: release.version });
-        setReleaseInfo(release);
-      } else {
-        setUpdateInfo({ hasUpdate: false });
-      }
-    } catch (error) {
-      setUpdateError(isAr ? String(error) : 'Could not check published releases. Check your connection and try again.');
-    } finally {
-      setIsCheckingUpdate(false);
-    }
-  };
 
   return (
     <div className="max-w-2xl mx-auto space-y-4 py-2 animate-in-fade">
@@ -260,67 +234,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang }) => {
         )}
       </div>
 
-      {/* 4. Updates & Verification */}
-      <div className="bg-[#121212] border border-white/[0.06] rounded-lg p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <Shield className="w-4 h-4 text-[#b6d99c]" />
-          <div>
-            <span className="text-xs font-semibold text-zinc-200 block">
-              {isAr ? 'تحديثات التطبيق' : 'Application Updates'}
-            </span>
-            <span className="text-[11px] text-zinc-500 font-mono">
-              ARGON v{CURRENT_VERSION}
-            </span>
-          </div>
-        </div>
-
-        <button
-          onClick={handleCheckUpdates}
-          disabled={isCheckingUpdate}
-          className="px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-xs font-semibold text-zinc-200 transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isCheckingUpdate ? 'animate-spin text-[#b6d99c]' : ''}`} />
-          <span>{isCheckingUpdate ? (isAr ? 'جاري الفحص...' : 'Checking...') : (isAr ? 'فحص التحديثات' : 'Check for Updates')}</span>
-        </button>
-      </div>
-
-      {updateInfo && (
-        <div
-          className={`p-3 rounded-xl border text-xs font-mono flex items-center gap-2 animate-in-fade ${
-            updateInfo.hasUpdate
-              ? 'bg-[#b6d99c]/10 border-[#b6d99c]/30 text-[#b6d99c]'
-              : 'bg-white/[0.02] border-white/[0.06] text-zinc-400'
-          }`}
-        >
-          {updateInfo.hasUpdate ? (
-            <>
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#b6d99c]" />
-              <span>
-                {isAr
-                  ? `يتوفر تحديث جديد (v${updateInfo.version})!`
-                  : `New version available (v${updateInfo.version})!`}
-              </span>
-            </>
-          ) : (
-            <>
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#b6d99c]" />
-              <span>
-                {isAr ? 'أنت تستخدم أحدث إصدار متوفر ✓' : 'You are running the latest version ✓'}
-              </span>
-            </>
-          )}
-        </div>
-      )}
-      {releaseInfo && updateInfo?.hasUpdate && (
-        <button className="px-4 py-2 rounded-xl bg-[#b6d99c] text-zinc-950 text-xs font-bold" onClick={() => {
-          const isAndroid = /android/i.test(navigator.userAgent);
-          const asset = isAndroid ? releaseInfo.assets.androidApk : releaseInfo.assets.windowsInstaller;
-          if (!asset) { setUpdateError(isAr ? 'لا يتوفر مثبت لهذا النظام في الإصدار المنشور.' : 'No installer is published for this platform.'); return; }
-          downloadManager.addTask(asset.url, undefined, 4, asset.sha256);
-          setUpdateError(isAr ? 'أُضيف التحديث إلى التنزيلات.' : 'Update added to downloads.');
-        }}>{isAr ? 'تنزيل التحديث' : 'Download update'}</button>
-      )}
-      {updateError && <p role="status" className="text-xs text-amber-300 p-3 border border-amber-500/20 rounded-xl">{updateError}</p>}
+      <UpdatesPanel lang={lang} />
     </div>
   );
 };

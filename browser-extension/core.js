@@ -1,4 +1,17 @@
-export const DEFAULTS = { autoIntercept: false, excludedHosts: [], minSizeBytes: 0, language: 'ar' };
+export const DEFAULTS = { autoIntercept: false, showVideoButton: true, excludedHosts: [], minSizeBytes: 0, language: 'ar' };
+
+export function platformVideo(value, title) {
+  const url = httpUrl(value);
+  if (!url) return null;
+  const host = url.hostname.replace(/^www\.|^m\./g, '');
+  let platform;
+  if ((host === 'youtube.com' && ((url.pathname === '/watch' && url.searchParams.has('v')) || url.pathname.startsWith('/shorts/'))) || (host === 'youtu.be' && url.pathname.length > 1)) platform = 'YouTube';
+  else if ((host === 'tiktok.com' || host.endsWith('.tiktok.com')) && url.pathname.includes('/video/')) platform = 'TikTok';
+  else if (host === 'instagram.com' && /^\/(reel|p)\//.test(url.pathname)) platform = 'Instagram';
+  else if (['x.com', 'twitter.com'].includes(host) && url.pathname.includes('/status/')) platform = 'X';
+  else if (host === 'soundcloud.com' && /^\/[^/]+\/[^/]+/.test(url.pathname)) platform = 'SoundCloud';
+  return platform ? { url: value, filename: title || platform, type: platform, platform: true, supported: true } : null;
+}
 
 export function httpUrl(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !!url.hostname ? url : null; }
@@ -18,6 +31,7 @@ export function mediaDescriptor(value, contentType = '') {
   if (!url) return null;
   const mime = contentType.toLowerCase().split(';')[0].trim();
   const ext = /\.([a-z0-9]+)$/i.exec(url.pathname)?.[1]?.toLowerCase();
+  if (['m4s', 'ts', 'cmfv', 'cmfa'].includes(ext)) return null;
   const playlist = ['m3u8', 'mpd'].includes(ext) || /mpegurl|dash\+xml/.test(mime);
   const direct = /^(video|audio)\//.test(mime) || ['mp4', 'webm', 'mkv', 'mov', 'mp3', 'm4a', 'ogg', 'wav', 'flac'].includes(ext);
   if (!playlist && !direct) return null;

@@ -27,6 +27,29 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('confirmed browser handoff', () => {
+  it('uses the platform page rather than a silent CDN track for the video button', async () => {
+    await import('../../browser-extension/background.js');
+    const respond = vi.fn();
+    listeners.message({ type: 'DOWNLOAD_VIDEO', source: 'https://cdn.example.com/silent.mp4' }, { id: 'test-extension', tab: { id: 7, url: 'https://www.youtube.com/watch?v=example123', title: 'Example' } }, respond);
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledWith({ ok: true }));
+    const request = fetchMock.mock.calls.find(([url]) => url.endsWith('/add'));
+    expect(JSON.parse(request[1].body).url).toBe('https://www.youtube.com/watch?v=example123');
+  });
+  it('suppresses the video button on excluded sites, in incognito and when disabled', async () => {
+    await import('../../browser-extension/background.js');
+    const request = { type: 'GET_VIDEO_TARGET', source: 'https://cdn.example.com/film.mp4' };
+    const sender = { id: 'test-extension', tab: { id: 7, url: 'https://example.com/watch' } };
+    local.excludedHosts = ['example.com'];
+    const excluded = vi.fn(); listeners.message(request, sender, excluded);
+    await vi.waitFor(() => expect(excluded).toHaveBeenCalledWith({ ok: false }));
+    local.excludedHosts = []; local.showVideoButton = false;
+    const disabled = vi.fn(); listeners.message(request, sender, disabled);
+    await vi.waitFor(() => expect(disabled).toHaveBeenCalledWith({ ok: false }));
+    const privateReply = vi.fn();
+    expect(listeners.message(request, { ...sender, tab: { ...sender.tab, incognito: true } }, privateReply)).toBe(false);
+    expect(privateReply).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it('pauses before dispatch, then cancels only after ARGON acknowledges a saved task', async () => {
     const order = [];
     chromeMock.downloads.pause.mockImplementation(async () => { order.push('pause'); });

@@ -33,6 +33,12 @@ beforeEach(() => {
 afterEach(async () => { manager.destroy(); await Promise.resolve(); vi.unstubAllGlobals(); });
 
 describe('ARGON real download lifecycle', () => {
+  it('persists queued work and blocks new transfers until a failed update releases the queue', async () => {
+    manager.beginUpdateInstallation();
+    const id = manager.addTask('https://example.com/after-update.zip');
+    expect(task(id).status).toBe('queued'); expect(calls('probe_url')).toHaveLength(0);
+    manager.endUpdateInstallation(); await settle(id); expect(task(id).status).toBe('completed');
+  });
   it('refreshes signed links without forwarding old credentials and revalidates partial data', async () => {
     const id = manager.addTask('https://example.com/file.zip?token=old'); await settle(id);
     const current = task(id); current.status = 'paused'; current.downloadedBytes = 512;

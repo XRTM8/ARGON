@@ -8,6 +8,13 @@ pub struct FlowRuntime {
     pub engine: Mutex<Option<Arc<FlowService>>>,
 }
 async fn service(app: &AppHandle, state: &FlowRuntime) -> Result<Arc<FlowService>, String> {
+    if app
+        .state::<Arc<crate::TaskManager>>()
+        .updating
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err("update_installing".into());
+    }
     let mut engine = state.engine.lock().await;
     if let Some(engine) = engine.as_ref() {
         return Ok(engine.clone());

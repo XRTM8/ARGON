@@ -1,10 +1,10 @@
 [package]
 name = "otium_downloader"
-version = "2.1.0"
+version = "2.2.0"
 description = "ARGON — Sovereign, High-Performance Multi-Segment Download Accelerator"
 authors = ["XRTM8"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.90"
 license = "GPL-3.0-or-later"
 
 [lib]
@@ -29,6 +29,15 @@ argon-flow-core = { path = "../flow-core" }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.17.2"
 arboard = { version = "3.4", default-features = false }
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls", "system-proxy"] }
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "=0.56.0"
+
+[dev-dependencies]
+base64 = "0.23"
+minisign-verify = "0.3"
 
 [profile.release]
 strip = "symbols"

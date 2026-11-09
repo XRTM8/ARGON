@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ARGON",
   "mainBinaryName": "ARGON",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "identifier": "com.otium.downloader",
   "build": {
     "frontendDist": "../dist",
@@ -52,9 +52,10 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser"
-      }
+      },
+      "allowDowngrades": false
     },
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "resources": {
       "../browser-extension/": "browser-extension/",
       "tools/": "tools/"
@@ -63,6 +64,7 @@
   "plugins": {
     "opener": {},
     "updater": {
+      "requireSignedVersion": true,
       "endpoints": [
         "https://github.com/XRTM8/ARGON/releases/latest/download/latest.json"
       ],

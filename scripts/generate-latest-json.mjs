@@ -2,7 +2,7 @@
 /**
  * Builds the release feed consumed by the ARGON updater runtime and in-app feeds.
  *
- * The Windows updater reads `platforms.windows-x86_64` (Tauri's signed installer).
+ * The Windows updater reads `platforms.windows-x86_64-nsis` (Tauri's signed installer).
  * The updater UI also reads `assets` to locate the portable ZIP and Android APK.
  */
 import { createHash } from 'node:crypto';
@@ -66,6 +66,7 @@ const pkg = readJson('package.json');
 const version = pkg.version;
 const tag = args.get('tag') || `v${version}`;
 const repository = 'XRTM8/ARGON';
+if (tag !== `v${version}`) fail('release tag must match package.json');
 
 const outDir = path.resolve(root, args.get('out-dir') || 'release');
 mkdirSync(outDir, { recursive: true });
@@ -93,6 +94,7 @@ if (installerPath && existsSync(installerPath)) {
   }
 
   let signature = '';
+  if (signaturePath && !existsSync(signaturePath)) fail('the required installer signature is missing');
   if (signaturePath && existsSync(signaturePath)) {
     signature = readFileSync(signaturePath, 'utf8').trim();
     writeFileSync(`${stagedInstaller}.sig`, `${signature}\n`);
@@ -105,6 +107,7 @@ if (installerPath && existsSync(installerPath)) {
     signature,
     url: `https://github.com/${repository}/releases/download/${tag}/${installerName}`
   };
+  if (signature) feed.platforms['windows-x86_64-nsis'] = feed.platforms['windows-x86_64'];
 
   feed.assets.push({
     name: installerName,

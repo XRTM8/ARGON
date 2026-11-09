@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
   Globe,
   Wifi,
@@ -24,6 +24,7 @@ import { SettingsView } from './components/SettingsView';
 import { BrowserView } from './components/BrowserView';
 import { SharingView, ClipboardView, FlowDialogs, SharingSettings, flowStatus } from './components/FlowPanels';
 import { downloadManager } from './core/downloadManager';
+import { updateManager } from './core/updates/updateManager';
 import { useFlow } from './core/useFlow';
 import { nativeRuntime } from './core/flowClient';
 import { formatBytes, formatSpeed } from './core/segmentation';
@@ -47,7 +48,9 @@ export function App() {
   const [runtime, setRuntime] = useState(downloadManager.getRuntimeStatus());
 
   const flow = useFlow();
+  const update = useSyncExternalStore(updateManager.subscribe, updateManager.getState);
   const ar = lang === 'ar';
+  useEffect(() => updateManager.start(), []);
 
   const viewNames: Record<MainViewTab, string> = {
     downloads: ar ? 'التنزيلات' : 'Downloads',
@@ -218,6 +221,7 @@ export function App() {
           </div>
         </header>
 
+        {update.phase === 'ready' && activeView !== 'settings' && <div className="update-ready-notice" role="status"><span>{ar ? `تحديث ${update.version} جاهز للتثبيت عندما تنتهي عملياتك.` : `Update ${update.version} is ready to install after your transfers finish.`}</span><button className="text-button" onClick={() => setActiveView('settings')}>{ar ? 'عرض التحديث' : 'View update'}</button></div>}
         {/* Global Error Banner */}
         {flow.error && (
           <div className="global-error" role="alert">

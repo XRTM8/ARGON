@@ -73,7 +73,9 @@ The build produces an unsigned release APK. Sign it with your existing release c
 
 ## Settings and updates
 
-Settings display **ARGON** and **BY Otium**, and allow saving a writable download directory. Release checks use [ARGON releases](https://github.com/XRTM8/ARGON/releases). Download an available update explicitly from Settings, then open its installer from the completed downloads list. An unavailable update service is shown as an error, not as proof that the app is current.
+Settings offer optional automatic update checking and downloading, **off by default**. For the Windows x64 installer, checks run at startup and every six hours when enabled. Packages must pass the embedded public-key signature check and carry the same signed version announced by the release feed. Installation requires an explicit click after downloads and sharing finish; it upgrades the existing per-user installation and restarts ARGON. A single-instance guard prevents a second running app. Failed checks remain errors, rather than claiming the app is current.
+
+Portable copies never invoke the NSIS updater: Settings offers the matching ZIP, verified by its published SHA-256. Close the old copy and extract the new ZIP into a separate folder. Install **2.2.0 once manually** if upgrading from 2.1.0, then enable automatic updates in Settings if desired. See [update behavior and release validation](docs/UPDATES.md).
 
 The application identifier, storage keys and browser bridge header retain their legacy Otium values for compatibility with existing data and integrations. Historical winget manifests describe the original releases.
 

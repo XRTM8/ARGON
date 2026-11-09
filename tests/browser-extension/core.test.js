@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS, excludedHost, mediaDescriptor, shouldCapture, parseUrls } from '../../browser-extension/core.js';
+import { DEFAULTS, excludedHost, mediaDescriptor, shouldCapture, parseUrls, platformVideo } from '../../browser-extension/core.js';
 
 const download = { id: 1, url: 'https://files.example.com/file.zip', state: 'in_progress', danger: 'safe', totalBytes: 5000 };
 const enabled = { ...DEFAULTS, autoIntercept: true };
 describe('browser capture eligibility', () => {
+  it('uses the platform page for supported videos rather than separate CDN audio/video tracks', () => {
+    expect(platformVideo('https://www.youtube.com/watch?v=abc', 'My video')).toMatchObject({ type: 'YouTube', platform: true, filename: 'My video' });
+    expect(platformVideo('https://youtube.com/@channel')).toBeNull();
+    expect(platformVideo('https://notyoutube.com/watch?v=abc')).toBeNull();
+    expect(mediaDescriptor('https://cdn.example.com/part.m4s', 'video/mp4')).toBeNull();
+    expect(mediaDescriptor('https://cdn.example.com/segment.ts', 'video/mp2t')).toBeNull();
+  });
   it('is opt-in and respects hostname boundaries and source-site exclusions', () => {
     expect(shouldCapture(download, DEFAULTS)).toBe(false);
     expect(excludedHost(download.url, ['example.com'])).toBe(true);
