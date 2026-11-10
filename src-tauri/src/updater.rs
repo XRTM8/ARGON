@@ -62,9 +62,9 @@ fn extract_install_dir_from_uninstall_values(
             trimmed.split_whitespace().next().unwrap_or("")
         };
         if !exe_path.is_empty() {
-            if let Some(parent) = PathBuf::from(exe_path).parent() {
-                if !parent.as_os_str().is_empty() {
-                    return Some(parent.to_path_buf());
+            if let Some((parent, _)) = exe_path.rsplit_once(['\\', '/']) {
+                if !parent.is_empty() {
+                    return Some(PathBuf::from(parent));
                 }
             }
         }
