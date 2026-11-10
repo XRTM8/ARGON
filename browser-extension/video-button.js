@@ -4,7 +4,7 @@
   host.style.cssText = 'all:initial;position:fixed;z-index:2147483646;display:none;pointer-events:none;';
   const shadow = host.attachShadow({ mode: 'closed' });
   const style = document.createElement('style');
-  style.textContent = 'button{font:12px/1.3 Segoe UI,Tahoma,sans-serif;display:flex;align-items:center;gap:6px;background:#b6d99c;color:#182210;border:1px solid #91b375;border-radius:4px;padding:7px 10px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px #0003}button:focus-visible{outline:2px solid white;outline-offset:2px}button:disabled{opacity:.65;cursor:wait}';
+  style.textContent = 'button{font:600 12px/1.3 "Segoe UI",Tahoma,sans-serif;display:flex;align-items:center;gap:6px;background:#0D1117;color:#F8FAFC;border:1px solid #3B82F6;border-radius:7px;padding:7px 11px;cursor:pointer;pointer-events:auto;box-shadow:0 6px 18px rgba(0,0,0,0.45)}button:hover{background:#151C28;border-color:#60A5FA}button:focus-visible{outline:2px solid #3B82F6;outline-offset:2px}button:disabled{opacity:.65;cursor:wait}';
   const button = document.createElement('button');
   button.type = 'button'; button.textContent = '↓ ARGON';
   shadow.append(style, button); document.documentElement.append(host);

@@ -1,12 +1,27 @@
+import type { MediaMetadataInfo } from '../types/downloader';
+
 export type PlatformType = 'youtube' | 'tiktok' | 'instagram' | 'twitter' | 'soundcloud' | 'direct' | 'other';
 
 export interface MediaFormatOption {
-  id: string; label: string; labelAr: string; ext: string; resolution?: string;
-  qualityBadge: string; isAudioOnly: boolean; estimatedSizeMultiplier?: number;
+  id: string;
+  label: string;
+  labelAr: string;
+  ext: string;
+  resolution?: string;
+  qualityBadge: string;
+  isAudioOnly: boolean;
+  estimatedSizeMultiplier?: number;
 }
+
 export interface MediaPreview {
-  originalUrl: string; platform: PlatformType; title: string; author?: string;
-  thumbnail?: string; durationSeconds?: number; availableFormats: MediaFormatOption[]; resolvedStreamUrl?: string;
+  originalUrl: string;
+  platform: PlatformType;
+  title: string;
+  author?: string;
+  thumbnail?: string;
+  durationSeconds?: number;
+  availableFormats: MediaFormatOption[];
+  resolvedStreamUrl?: string;
 }
 
 export function detectPlatform(rawUrl: string): PlatformType {
@@ -27,8 +42,21 @@ export function cleanMediaTitle(rawTitle: string): string {
   return rawTitle.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 160) || 'media';
 }
 
-export async function resolveMediaDownloadUrl(url: string, option?: Pick<MediaFormatOption, 'isAudioOnly'>): Promise<{
-  downloadUrl: string; suggestedFilename?: string; headers?: Record<string, string>;
+export async function listMediaFormats(url: string): Promise<MediaMetadataInfo> {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+    throw new Error('استخراج روابط المنصات يتطلب تطبيق ARGON لسطح المكتب.');
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<MediaMetadataInfo>('list_media_formats', { url: url.trim() });
+}
+
+export async function resolveMediaDownloadUrl(
+  url: string,
+  option?: { isAudioOnly?: boolean; formatId?: string }
+): Promise<{
+  downloadUrl: string;
+  suggestedFilename?: string;
+  headers?: Record<string, string>;
 }> {
   const cleanUrl = url.trim();
   if (['direct', 'other'].includes(detectPlatform(cleanUrl))) return { downloadUrl: cleanUrl };
@@ -36,9 +64,11 @@ export async function resolveMediaDownloadUrl(url: string, option?: Pick<MediaFo
     throw new Error('استخراج روابط المنصات يتطلب تطبيق ARGON لسطح المكتب.');
   }
   const { invoke } = await import('@tauri-apps/api/core');
-  // Native extraction avoids CSP/CORS and preserves the required CDN headers.
-  // Extraction failures must never fall back to downloading the webpage.
-  return invoke('resolve_media', { url: cleanUrl, audioOnly: option?.isAudioOnly ?? false });
+  return invoke('resolve_media', {
+    url: cleanUrl,
+    audioOnly: option?.isAudioOnly ?? false,
+    ...(option?.formatId ? { formatId: option.formatId } : {})
+  });
 }
 
 export async function fetchMediaMetadata(url: string): Promise<MediaPreview> {
@@ -47,9 +77,20 @@ export async function fetchMediaMetadata(url: string): Promise<MediaPreview> {
   const title = result.suggestedFilename || decodeURIComponent(parsed.pathname.split('/').pop() || 'media');
   const ext = title.split('.').pop()?.toLowerCase() || 'bin';
   return {
-    originalUrl: url, platform: detectPlatform(url), title, author: parsed.hostname,
+    originalUrl: url,
+    platform: detectPlatform(url),
+    title,
+    author: parsed.hostname,
     resolvedStreamUrl: result.downloadUrl,
-    availableFormats: [{ id: 'original', label: `Original (${ext})`, labelAr: `الملف الأصلي (${ext})`, ext,
-      qualityBadge: ext.toUpperCase(), isAudioOnly: /^(mp3|m4a|aac|flac|wav|ogg|opus)$/.test(ext) }],
+    availableFormats: [
+      {
+        id: 'original',
+        label: `Original (${ext})`,
+        labelAr: `الملف الأصلي (${ext})`,
+        ext,
+        qualityBadge: ext.toUpperCase(),
+        isAudioOnly: /^(mp3|m4a|aac|flac|wav|ogg|opus)$/.test(ext)
+      }
+    ]
   };
 }

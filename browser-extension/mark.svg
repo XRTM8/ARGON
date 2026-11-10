@@ -1,6 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="13" fill="#171d19"/>
-  <path d="m32 9 20 11.5v23L32 55 12 43.5v-23Z" stroke="#b6d99c" stroke-width="3.5" stroke-linejoin="round"/>
-  <path d="m32 21 11 22H21Z" fill="#b6d99c" fill-opacity=".13" stroke="#b6d99c" stroke-width="3" stroke-linejoin="round"/>
-  <circle cx="32" cy="36" r="3" fill="#b6d99c"/>
+  <defs>
+    <linearGradient id="argon-ext-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#151B27" />
+      <stop offset="100%" stop-color="#090C11" />
+    </linearGradient>
+    <linearGradient id="argon-ext-cobalt" x1="32" y1="33" x2="32" y2="49" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#60A5FA" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#argon-ext-bg)" />
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" stroke="#283448" stroke-width="1.5" />
+  <path d="M29 14.5H35L50.5 49H42.3L32 25.4L21.7 49H13.5L29 14.5Z" fill="#F8FAFC" />
+  <path d="M29.9 33.5H34.1V40.6H37.3L32 49L26.7 40.6H29.9V33.5Z" fill="url(#argon-ext-cobalt)" />
 </svg>

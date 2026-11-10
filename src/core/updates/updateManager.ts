@@ -2,6 +2,7 @@ import { getStorage } from '../storage';
 import { downloadManager } from '../downloadManager';
 import { flowClient, nativeRuntime } from '../flowClient';
 import { CURRENT_VERSION } from '../../components/Header';
+import { isAndroidRuntime } from '../safeArea';
 import { fetchReleaseInfo, isNewerVersion, type ReleaseAsset, type ReleaseInfo } from './releaseFeed';
 
 export const UPDATE_PREFERENCES_KEY = 'argon_update_preferences_v1';
@@ -22,13 +23,17 @@ interface Dependencies {
   busy: () => boolean; beforeInstall: () => void; installFailed: () => void;
 }
 const defaults: Dependencies = {
-  native: nativeRuntime(), version: CURRENT_VERSION, android: /android/i.test(globalThis.navigator?.userAgent || ''),
+  native: nativeRuntime(), version: CURRENT_VERSION, android: isAndroidRuntime(),
   backend: async command => (await import('@tauri-apps/api/core')).invoke(command),
   listen: async callback => (await import('@tauri-apps/api/event')).listen('update-progress', event => callback(event.payload as { downloaded: number; total?: number })),
   storage: getStorage, fetchRelease: fetchReleaseInfo,
   queuePortable: asset => {
     const previous = downloadManager.getTasks().find(task => (task.originalUrl || task.url) === asset.url && task.status !== 'error');
-    return previous?.id || downloadManager.addTask(asset.url, undefined, 4, asset.sha256);
+    if (previous) {
+      if (previous.status === 'paused') downloadManager.resumeTask(previous.id);
+      return previous.id;
+    }
+    return downloadManager.addTask(asset.url, undefined, 4, asset.sha256);
   },
   busy: () => downloadManager.getStats().activeCount > 0 || !!flowClient.getState().snapshot?.transfers.some(transfer => ['queued', 'hashing', 'waiting', 'sending', 'receiving', 'verifying'].includes(transfer.status)) || !!flowClient.getState().snapshot?.incoming.length || !!flowClient.getState().snapshot?.pairings.length,
   beforeInstall: () => downloadManager.beginUpdateInstallation(),
@@ -122,6 +127,7 @@ export class UpdateManager {
           const release = await this.deps.fetchRelease();
           if (isNewerVersion(release.version, this.deps.version)) {
             this.manualAsset = compatibleManualAsset(release, this.deps.android);
+            if (this.deps.android && !release.assets.androidApk) throw new Error('android_apk_unavailable');
             if (!this.manualAsset || (this.state.mode === 'unsupported' && !this.deps.android)) throw new Error('incompatible_update_package');
             this.patch({ phase: 'available', version: release.version, notes: release.notes });
           } else this.patch({ phase: 'current', version: undefined });

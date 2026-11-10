@@ -1,4 +1,4 @@
-import type { DownloadTask, DownloadStats, AppSettings } from '../types/downloader';
+import type { DownloadTask, DownloadStats, AppSettings, QueueId } from '../types/downloader';
 import {
   calculateSegments,
   extractFilename,
@@ -8,7 +8,9 @@ import {
 } from './segmentation';
 import { resolveUniversalLink } from './linkResolver';
 import { detectPlatform, resolveMediaDownloadUrl } from './mediaResolver';
+import { isAndroidRuntime, syncSystemBarTheme } from './safeArea';
 import { soundEngine } from './sound';
+import { telemetryStore } from './telemetryStore';
 import { isMagnetUri, parseMagnetUri, type TorrentMetadata } from './torrent';
 import {
   loadTasksFromStorage,
@@ -59,7 +61,10 @@ export class DownloadManager {
   private defaultDownloadDir: string | null = null;
   private notifyTimeout: number | null = null;
   private storageSaveTimeout: number | null = null;
+  private progressSaveTimeout: number | null = null;
   private speedHistory: number[] = new Array(20).fill(0);
+  private lastAndroidNotifyAt = 0;
+  private lastAndroidActiveCount = 0;
 
   // App Settings
   private maxConcurrentDownloads = 3;
@@ -71,6 +76,10 @@ export class DownloadManager {
   private nightSchedulerEnabled = false;
   private nightSchedulerStartHour = 2; // 02:00
   private nightSchedulerEndHour = 8;   // 08:00
+  private theme: 'dark' | 'light' = 'dark';
+  private dynamicWorkStealing = true;
+  private clipboardMonitorEnabled = false;
+  private autoVerifyIntegrity = false;
 
   constructor() {
     this.loadSettings();
@@ -123,6 +132,19 @@ export class DownloadManager {
     if (typeof parsed.nightSchedulerEndHour === 'number') {
       this.nightSchedulerEndHour = Math.max(0, Math.min(23, parsed.nightSchedulerEndHour));
     }
+    if (parsed.theme === 'light' || parsed.theme === 'dark') {
+      this.theme = parsed.theme;
+    }
+    syncSystemBarTheme(this.theme);
+    if (typeof parsed.dynamicWorkStealing === 'boolean') {
+      this.dynamicWorkStealing = parsed.dynamicWorkStealing;
+    }
+    if (typeof parsed.clipboardMonitorEnabled === 'boolean') {
+      this.clipboardMonitorEnabled = parsed.clipboardMonitorEnabled;
+    }
+    if (typeof parsed.autoVerifyIntegrity === 'boolean') {
+      this.autoVerifyIntegrity = parsed.autoVerifyIntegrity;
+    }
   }
 
   private saveSettingsToStorage() {
@@ -137,7 +159,11 @@ export class DownloadManager {
       autoShutdownOnComplete: this.autoShutdownOnComplete,
       nightSchedulerEnabled: this.nightSchedulerEnabled,
       nightSchedulerStartHour: this.nightSchedulerStartHour,
-      nightSchedulerEndHour: this.nightSchedulerEndHour
+      nightSchedulerEndHour: this.nightSchedulerEndHour,
+      theme: this.theme,
+      dynamicWorkStealing: this.dynamicWorkStealing,
+      clipboardMonitorEnabled: this.clipboardMonitorEnabled,
+      autoVerifyIntegrity: this.autoVerifyIntegrity
     };
     saveSettingsToStorage(payload);
   }
@@ -150,12 +176,25 @@ export class DownloadManager {
   }
 
   private scheduleStorageSave() {
+    if (this.progressSaveTimeout !== null) {
+      globalThis.clearTimeout(this.progressSaveTimeout);
+      this.progressSaveTimeout = null;
+    }
     if (this.storageSaveTimeout !== null) return;
 
     this.storageSaveTimeout = (typeof window !== 'undefined' ? globalThis.setTimeout : setTimeout)(() => {
       this.storageSaveTimeout = null;
       saveTasksToStorage(Array.from(this.tasks.values()));
     }, 400) as unknown as number;
+  }
+
+  /** Low-frequency progress checkpoint to prevent JSON.stringify GC spikes during fast transfers. */
+  private scheduleProgressCheckpoint() {
+    if (this.progressSaveTimeout !== null || this.storageSaveTimeout !== null) return;
+    this.progressSaveTimeout = (typeof window !== 'undefined' ? globalThis.setTimeout : setTimeout)(() => {
+      this.progressSaveTimeout = null;
+      saveTasksToStorage(Array.from(this.tasks.values()));
+    }, 4000) as unknown as number;
   }
 
   private showNotification(title: string, body: string) {
@@ -276,7 +315,7 @@ export class DownloadManager {
     this.notifyTimeout = globalThis.setTimeout(() => {
       this.notifyTimeout = null;
       this.listeners.forEach((l) => l());
-    }, 60);
+    }, 220);
   }
 
   public async triggerShutdown(cancel: boolean = false): Promise<boolean> {
@@ -346,7 +385,11 @@ export class DownloadManager {
       autoShutdownOnComplete: this.autoShutdownOnComplete,
       nightSchedulerEnabled: this.nightSchedulerEnabled,
       nightSchedulerStartHour: this.nightSchedulerStartHour,
-      nightSchedulerEndHour: this.nightSchedulerEndHour
+      nightSchedulerEndHour: this.nightSchedulerEndHour,
+      theme: this.theme,
+      dynamicWorkStealing: this.dynamicWorkStealing,
+      clipboardMonitorEnabled: this.clipboardMonitorEnabled,
+      autoVerifyIntegrity: this.autoVerifyIntegrity
     };
   }
 
@@ -398,9 +441,54 @@ export class DownloadManager {
     if (settings.nightSchedulerEndHour !== undefined) {
       this.nightSchedulerEndHour = Math.max(0, Math.min(23, settings.nightSchedulerEndHour));
     }
+    if (settings.theme === 'light' || settings.theme === 'dark') {
+      this.theme = settings.theme;
+      syncSystemBarTheme(this.theme);
+    }
+    if (settings.dynamicWorkStealing !== undefined) {
+      this.dynamicWorkStealing = Boolean(settings.dynamicWorkStealing);
+    }
+    if (settings.clipboardMonitorEnabled !== undefined) {
+      this.clipboardMonitorEnabled = Boolean(settings.clipboardMonitorEnabled);
+    }
+    if (settings.autoVerifyIntegrity !== undefined) {
+      this.autoVerifyIntegrity = Boolean(settings.autoVerifyIntegrity);
+    }
     this.saveSettingsToStorage();
     this.notify(true);
     this.processQueue();
+  }
+
+  public setTaskQueue(id: string, queueId: QueueId) {
+    const task = this.tasks.get(id);
+    if (!task) return;
+    task.queueId = queueId;
+    this.scheduleStorageSave();
+    this.notify(true);
+    this.processQueue();
+  }
+
+  public async setTaskSpeedLimit(id: string, bytesPerSec: number) {
+    const task = this.tasks.get(id);
+    if (!task) return;
+    task.speedLimitBytesPerSec = Math.max(0, Math.floor(bytesPerSec));
+    const run = this.runs.get(id);
+    if (run && !run.cancelled && isTauri()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('set_task_speed_limit', { taskId: run.nativeId, bytesPerSec: task.speedLimitBytesPerSec });
+      } catch {
+        // Ignore if runtime unavailable
+      }
+    }
+    this.scheduleStorageSave();
+    this.notify(true);
+  }
+
+  public async shareFile(filePath?: string) {
+    if (!filePath || !isTauri()) throw new Error('Open the ARGON app to share saved files.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('share_file_item', { filePath });
   }
 
   public isNightSchedulerActive(): boolean {
@@ -552,8 +640,11 @@ export class DownloadManager {
   public processQueue() {
     if (this.destroyed || this.batchPausing || this.updateInstallation || !this.isNightSchedulerActive()) return;
     let active = this.getTasks().filter((t) => t.status === 'downloading').length;
-    for (const task of this.getTasks().filter((t) => t.status === 'queued' && !this.pendingBrowserTasks.has(t.id)).sort((a, b) => a.createdAt - b.createdAt)) {
+    for (const task of this.getTasks()
+      .filter((t) => t.status === 'queued' && !this.pendingBrowserTasks.has(t.id))
+      .sort((a, b) => a.createdAt - b.createdAt)) {
       if (active >= this.maxConcurrentDownloads) break;
+      if (task.queueId === 'night' && !this.isWithinNightWindow()) continue;
       task.status = 'downloading';
       task.errorMessage = undefined;
       active++;
@@ -561,6 +652,14 @@ export class DownloadManager {
     }
     this.scheduleStorageSave();
     this.notify(true);
+  }
+
+  private isWithinNightWindow(): boolean {
+    const hour = new Date().getHours();
+    if (this.nightSchedulerStartHour <= this.nightSchedulerEndHour) {
+      return hour >= this.nightSchedulerStartHour && hour < this.nightSchedulerEndHour;
+    }
+    return hour >= this.nightSchedulerStartHour || hour < this.nightSchedulerEndHour;
   }
 
   public beginUpdateInstallation() {
@@ -575,7 +674,7 @@ export class DownloadManager {
   public addTask(
     url: string, customFilename?: string, segmentCount: number = this.defaultSegmentCount,
     expectedSha256?: string, customHeaders?: Record<string, string>, torrentMeta?: TorrentMetadata,
-    mediaInfo?: import('../types/downloader').MediaMetadata, deferStart = false
+    mediaInfo?: import('../types/downloader').MediaMetadata, deferStart = false, queueId: QueueId = 'main'
   ): string {
     const originalUrl = url.trim();
     const resolved = resolveUniversalLink(originalUrl);
@@ -591,6 +690,7 @@ export class DownloadManager {
     }
     if (!error && !isTauri()) error = 'التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.';
     if (expectedSha256?.trim() && !/^[a-f0-9]{64}$/i.test(expectedSha256.trim())) error = 'بصمة SHA-256 غير صالحة.';
+    const inferredQueue: QueueId = queueId !== 'main' ? queueId : (!['direct', 'other'].includes(detectPlatform(originalUrl)) ? 'media' : 'main');
     const task: DownloadTask = {
       id, originalUrl, url: resolved.resolvedUrl, filename,
       category: meta ? 'torrents' : detectCategory(filename), torrentInfo: meta, mediaInfo,
@@ -599,6 +699,7 @@ export class DownloadManager {
       errorMessage: error, speedBytesPerSec: 0, etaSeconds: 0, chunks: calculateSegments(0, 1),
       createdAt: Date.now(), requestedSegments: Math.max(1, Math.min(32, Math.floor(segmentCount) || 1)),
       customFilename: !!customFilename?.trim(), filePrepared: false,
+      queueId: inferredQueue,
       checksum: expectedSha256?.trim() ? { algorithm: 'sha256', expected: expectedSha256.trim().toLowerCase(), verified: false } : undefined,
     };
     this.tasks.set(id, task);
@@ -635,6 +736,7 @@ export class DownloadManager {
     if (previous) this.cancelRun(task.id);
     const run: NativeRun = { nativeId: `${task.id}_${crypto.randomUUID()}`, cancelled: false, promise: Promise.resolve() };
     this.runs.set(task.id, run);
+    telemetryStore.bindNativeRun(task.id, run.nativeId);
     const current = () => !this.destroyed && !run.cancelled && this.runs.get(task.id) === run && this.tasks.get(task.id) === task && task.status === 'downloading';
     run.promise = (async () => {
       if (previous) await previous.promise;
@@ -644,9 +746,35 @@ export class DownloadManager {
       if (this.runtimeError) throw new Error(this.runtimeError);
       if (task.torrentInfo) throw new Error('محرك التورنت غير متاح في هذا الإصدار.');
       const { invoke } = await import('@tauri-apps/api/core');
+      if (task.speedLimitBytesPerSec && task.speedLimitBytesPerSec > 0) {
+        await invoke('set_task_speed_limit', { taskId: run.nativeId, bytesPerSec: task.speedLimitBytesPerSec }).catch(() => {});
+      }
       const platform = detectPlatform(task.originalUrl || task.url);
       if (!['direct', 'other'].includes(platform)) {
-        const media = await resolveMediaDownloadUrl(task.originalUrl || task.url, { isAudioOnly: !!task.mediaInfo?.isAudioOnly });
+        if (task.mediaInfo?.useYtdlpMux && task.mediaInfo.selectedFormatId) {
+          const base = this.defaultDownloadDir || 'Downloads';
+          const outPath = task.savePath || `${base}${base.includes('\\') ? '\\' : '/'}${task.filename}`;
+          task.savePath = await invoke<string>('download_media_with_ytdlp', {
+            taskId: run.nativeId,
+            url: task.originalUrl || task.url,
+            destinationPath: outPath,
+            formatSpec: task.mediaInfo.selectedFormatId
+          });
+          if (!current()) return;
+          task.filePrepared = true;
+          task.filename = task.savePath.split(/[\\/]/).pop() || task.filename;
+          if (task.totalBytes > 0) task.downloadedBytes = task.totalBytes;
+          task.status = 'completed';
+          task.completedAt = Date.now();
+          soundEngine.playCompleteChime();
+          this.showNotification('اكتمل التنزيل', `تم حفظ الملف: ${task.filename}`);
+          this.checkAutoShutdown();
+          return;
+        }
+        const media = await resolveMediaDownloadUrl(task.originalUrl || task.url, {
+          isAudioOnly: !!task.mediaInfo?.isAudioOnly,
+          formatId: task.mediaInfo?.selectedFormatId
+        });
         if (!current()) return;
         task.url = media.downloadUrl;
         task.headers = { ...task.headers, ...media.headers };
@@ -686,23 +814,64 @@ export class DownloadManager {
       this.scheduleStorageSave();
       this.notify(true);
       const transfer = async (useRange: boolean) => {
-        const results = await Promise.allSettled(task.chunks.filter((c) => c.status !== 'completed').map(async (chunk) => {
+        const failures: unknown[] = [];
+        let aborting = false;
+        const runChunk = async (chunk: (typeof task.chunks)[number]): Promise<void> => {
+          chunk.status = 'downloading';
           try {
-            const result = await invoke<{ downloaded_bytes: number; total_bytes: number }>('download_segment', {
+            const result = await invoke<{ downloaded_bytes: number; total_bytes: number; end_byte?: number }>('download_segment', {
               taskId: run.nativeId, url: task.url, destinationPath: task.savePath,
               startByte: chunk.startByte, endByte: chunk.endByte, currentDownloaded: chunk.downloaded,
               segmentIndex: chunk.index, customHeaders: task.headers || null, useRange,
               expectedTotal: probe.content_length ?? null, validator: task.etag || task.lastModified || null,
             });
-            if (current()) { chunk.downloaded = result.downloaded_bytes; chunk.status = 'completed'; if (!useRange) task.totalBytes = result.total_bytes; }
+            if (!current()) return;
+            chunk.downloaded = result.downloaded_bytes;
+            if (typeof result.end_byte === 'number' && result.end_byte >= chunk.startByte) {
+              chunk.endByte = result.end_byte;
+            }
+            chunk.status = 'completed';
+            if (!useRange) task.totalBytes = result.total_bytes;
+
+            // Dynamic work-stealing: if another active segment has > 512 KB left, split and assist it
+            if (useRange && this.dynamicWorkStealing && !aborting) {
+              const candidate = task.chunks
+                .filter((c) => c.index !== chunk.index && c.status === 'downloading')
+                .map((c) => ({ chunk: c, remaining: (c.endByte - c.startByte + 1) - c.downloaded }))
+                .sort((a, b) => b.remaining - a.remaining)[0];
+              if (candidate && candidate.remaining > 524_288) {
+                const stolen = await invoke<[number, number] | null>('split_active_segment', {
+                  taskId: run.nativeId,
+                  segmentIndex: candidate.chunk.index
+                }).catch(() => null);
+                if (stolen && current() && !aborting) {
+                  const [newStart, newEnd] = stolen;
+                  candidate.chunk.endByte = newStart - 1;
+                  const nextIndex = task.chunks.reduce((m, c) => Math.max(m, c.index), -1) + 1;
+                  const stolenChunk = {
+                    index: nextIndex,
+                    startByte: newStart,
+                    endByte: newEnd,
+                    downloaded: 0,
+                    status: 'downloading' as const
+                  };
+                  task.chunks.push(stolenChunk);
+                  await runChunk(stolenChunk);
+                }
+              }
+            }
           } catch (error) {
+            aborting = true;
+            failures.push(error);
             await invoke('cancel_task', { taskId: run.nativeId });
-            throw error;
           }
-        }));
-        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-        const cause = failures.find((r) => String(r.reason).includes('RANGE_UNSUPPORTED')) || failures.find((r) => !String(r.reason).includes('CANCELLED')) || failures[0];
-        if (cause) throw new Error(String(cause.reason));
+        };
+        const pending = task.chunks.filter((c) => c.status !== 'completed');
+        await Promise.all(pending.map((chunk) => runChunk(chunk)));
+        if (failures.length > 0) {
+          const cause = failures.find((r) => String(r).includes('RANGE_UNSUPPORTED')) || failures.find((r) => !String(r).includes('CANCELLED')) || failures[0];
+          throw new Error(String(cause));
+        }
       };
       try { await transfer(probe.accept_ranges && task.totalBytes > 0); }
       catch (error) {
@@ -725,6 +894,11 @@ export class DownloadManager {
         task.checksum.actual = hash.toLowerCase();
         task.checksum.verified = task.checksum.actual === task.checksum.expected;
         if (!task.checksum.verified) throw new Error('فشل التحقق من SHA-256؛ الملف لا يطابق البصمة المطلوبة.');
+      } else if (this.autoVerifyIntegrity && task.savePath) {
+        const hash = await invoke<string>('verify_file_sha256', { filePath: task.savePath }).catch(() => '');
+        if (hash && current()) {
+          task.checksum = { algorithm: 'sha256', actual: hash.toLowerCase(), verified: true };
+        }
       }
       if (!current()) return;
       task.status = 'completed';
@@ -743,6 +917,7 @@ export class DownloadManager {
       }
       if (this.runs.get(task.id) !== run) return;
       this.runs.delete(task.id);
+      telemetryStore.bindNativeRun(task.id, null);
       task.speedBytesPerSec = 0;
       task.etaSeconds = 0;
       this.speedSamples.delete(task.id);
@@ -767,7 +942,8 @@ export class DownloadManager {
     chunk.status = isFinished ? 'completed' : 'downloading';
     if (totalBytes > 0) task.totalBytes = totalBytes;
     task.downloadedBytes = task.chunks.reduce((sum, c) => sum + c.downloaded, 0);
-    this.scheduleStorageSave();
+    telemetryStore.applyTaskMetrics(task.id, task.downloadedBytes, task.totalBytes, task.speedBytesPerSec);
+    this.scheduleProgressCheckpoint();
     this.notify(false);
   }
 
@@ -946,7 +1122,40 @@ export class DownloadManager {
       if (hasChanges || currentTotal > 0) {
         this.notify(false);
       }
+      this.syncAndroidNotification(now);
     }, 500);
+  }
+
+  private syncAndroidNotification(now: number) {
+    if (!isTauri() || !isAndroidRuntime() || this.destroyed) return;
+    const active = this.getTasks().filter((t) => t.status === 'downloading');
+    const activeCount = active.length;
+    if (activeCount === 0 && this.lastAndroidActiveCount === 0) return;
+    if (activeCount > 0 && now - this.lastAndroidNotifyAt < 1200) return;
+    this.lastAndroidNotifyAt = now;
+    this.lastAndroidActiveCount = activeCount;
+    const totalKnown = active.reduce((s, t) => s + (t.totalBytes > 0 ? t.totalBytes : 0), 0);
+    const totalDl = active.reduce((s, t) => s + t.downloadedBytes, 0);
+    const totalSpeed = active.reduce((s, t) => s + t.speedBytesPerSec, 0);
+    const pct = totalKnown > 0 ? Math.min(100, Math.round((totalDl / totalKnown) * 100)) : 0;
+    const title = activeCount === 0
+      ? 'ARGON'
+      : activeCount === 1
+        ? active[0].filename
+        : `ARGON · ${activeCount} downloads`;
+    const speedMb = totalSpeed > 0 ? `${(totalSpeed / (1024 * 1024)).toFixed(1)} MB/s` : 'Connecting…';
+    const text = activeCount === 0 ? '' : totalKnown > 0 ? `${pct}% · ${speedMb}` : speedMb;
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) =>
+        invoke('sync_android_transfer_notification', {
+          activeCount,
+          title,
+          text,
+          progress: pct,
+          indeterminate: totalKnown <= 0
+        })
+      )
+      .catch(() => {});
   }
 
   private processScheduledQueue() {
@@ -968,6 +1177,10 @@ export class DownloadManager {
     if (this.storageSaveTimeout !== null) {
       clearTimeout(this.storageSaveTimeout);
       this.storageSaveTimeout = null;
+    }
+    if (this.progressSaveTimeout !== null) {
+      clearTimeout(this.progressSaveTimeout);
+      this.progressSaveTimeout = null;
     }
     if (this.tauriUnlisten) {
       this.tauriUnlisten();

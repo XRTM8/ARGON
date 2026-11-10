@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 
 interface ThroughputSparklineProps {
   history: number[];
@@ -13,6 +13,7 @@ export const ThroughputSparkline: React.FC<ThroughputSparklineProps> = ({
   width = 64,
   height = 20
 }) => {
+  const gradId = useId();
   if (!history || history.length < 2) return null;
 
   const max = Math.max(...history, 1);
@@ -31,17 +32,18 @@ export const ThroughputSparkline: React.FC<ThroughputSparklineProps> = ({
       className={className}
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
     >
       <defs>
-        <linearGradient id="argon-sparkline-grad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#00e5ff" stopOpacity="0.4" />
-          <stop offset="100%" stopColor="#00e5ff" stopOpacity="0.0" />
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--argon-accent, #3B82F6)" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="var(--argon-accent, #3B82F6)" stopOpacity="0.0" />
         </linearGradient>
       </defs>
-      <path d={areaD} fill="url(#argon-sparkline-grad)" />
+      <path d={areaD} fill={`url(#${gradId})`} />
       <path
         d={pathD}
-        stroke="#00e5ff"
+        stroke="var(--argon-accent, #3B82F6)"
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"

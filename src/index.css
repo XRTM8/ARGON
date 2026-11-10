@@ -4,114 +4,49 @@
 
 @layer base {
   *, ::before, ::after {
-    border-color: rgba(255, 255, 255, 0.06);
+    border-color: var(--argon-border, #222938);
   }
 
-  :root {
-    --sat: env(safe-area-inset-top, 0px);
-    --sab: env(safe-area-inset-bottom, 0px);
-    --sal: env(safe-area-inset-left, 0px);
-    --sar: env(safe-area-inset-right, 0px);
-  }
-
-  body {
+  html, body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--argon-bg, #0A0C10);
+    color: var(--argon-text, #E2E8F0);
     font-family: 'Tajawal', 'Plus Jakarta Sans Variable', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    background-color: #000000;
-    color: #e4e4e7;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    user-select: none;
     overflow-x: hidden;
   }
 
-  /* Monospace font optimization */
   code, kbd, samp, pre, .font-mono {
     font-feature-settings: 'tnum' on, 'zero' on;
-    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
   }
 
-  input, textarea {
-    user-select: auto;
+  input, textarea, select {
+    user-select: text;
   }
 
-  /* Slim, discrete scrollbar */
   ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 5px;
+    height: 5px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(148, 163, 184, 0.22);
     border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(148, 163, 184, 0.38);
   }
 }
 
-/* Hide scrollbar for clean horizontal pill bars */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
-}
-
-/* Safe area padding utilities (ensuring Android/iOS status bars and home indicators never overlap UI) */
-.pt-safe {
-  padding-top: max(2.75rem, env(safe-area-inset-top, 0px));
-}
-@media (min-width: 640px) {
-  .pt-safe {
-    padding-top: 0.75rem;
-  }
-}
-
-.pb-safe {
-  padding-bottom: max(1.75rem, env(safe-area-inset-bottom, 0px));
-}
-@media (min-width: 640px) {
-  .pb-safe {
-    padding-bottom: 0.75rem;
-  }
-}
-
-/* Subtle micro-animations */
-@keyframes fadeIn {
-  from { opacity: 0; transform: scale(0.99) translateY(4px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.animate-in-fade {
-  animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.animate-in-slide {
-  animation: slideDown 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.animate-in-slide-up {
-  animation: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-@keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
-}
-
-.animate-shimmer {
-  animation: shimmer 1.8s infinite cubic-bezier(0.4, 0, 0.6, 1);
 }

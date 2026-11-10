@@ -14,6 +14,16 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val releaseKeystorePath = providers.environmentVariable("ARGON_ANDROID_KEYSTORE_PATH").orNull?.takeIf { it.isNotBlank() }
+val releaseKeystorePassword = providers.environmentVariable("ARGON_ANDROID_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("ARGON_ANDROID_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("ARGON_ANDROID_KEY_PASSWORD").orNull
+val hasReleaseSigning = releaseKeystorePath != null &&
+    file(releaseKeystorePath).exists() &&
+    !releaseKeystorePassword.isNullOrEmpty() &&
+    !releaseKeyAlias.isNullOrEmpty() &&
+    !releaseKeyPassword.isNullOrEmpty()
+
 android {
     compileSdk = 36
     namespace = "com.otium.downloader"
@@ -24,6 +34,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +59,9 @@ android {
             }
         }
         getByName("release") {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

@@ -31,6 +31,17 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return false;
 }
 
+function parseAssetSha256(raw: any): string | undefined {
+  if (typeof raw?.sha256 === 'string' && raw.sha256.length > 0) {
+    return /^[a-f0-9]{64}$/i.test(raw.sha256) ? raw.sha256.toLowerCase() : undefined;
+  }
+  if (typeof raw?.digest === 'string') {
+    const match = /^sha256:([a-f0-9]{64})$/i.exec(raw.digest.trim());
+    if (match) return match[1].toLowerCase();
+  }
+  return undefined;
+}
+
 function asset(raw: any): ReleaseAsset | undefined {
   const url = raw?.url || raw?.browser_download_url;
   if (typeof url !== 'string') return;
@@ -38,7 +49,7 @@ function asset(raw: any): ReleaseAsset | undefined {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com' || !parsed.pathname.startsWith('/XRTM8/ARGON/releases/download/')) return;
     if (raw.sha256 && !/^[a-f0-9]{64}$/i.test(raw.sha256)) return;
-    return { url, size: raw.size, sha256: raw.sha256 };
+    return { url, size: raw.size, sha256: parseAssetSha256(raw) };
   } catch { return; }
 }
 
@@ -63,10 +74,28 @@ function release(data: any, github: boolean): ReleaseInfo {
 }
 
 export async function fetchReleaseInfo(url: string = ARGON_RELEASE_FEED_URL, signal?: AbortSignal): Promise<ReleaseInfo> {
+  if (signal?.aborted) throw new Error('Update check cancelled');
+  const hasTauriInvoke =
+    typeof window !== 'undefined' &&
+    '__TAURI_INTERNALS__' in window &&
+    typeof (window as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__?.invoke === 'function';
+  if (hasTauriInvoke && url === ARGON_RELEASE_FEED_URL) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const nativeFeed = await invoke<{ github: boolean; payload: unknown }>('fetch_release_feed');
+      if (signal?.aborted) throw new Error('Update check cancelled');
+      return release(nativeFeed.payload, !!nativeFeed.github);
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.message === 'Update check cancelled')) {
+        throw new Error('Update check cancelled');
+      }
+      /* Fall back to direct WebView fetch below if native helper failed. */
+    }
+  }
   for (const [endpoint, github] of [[url, false], [GITHUB_API_URL, true]] as const) {
     if (signal?.aborted) throw new Error('Update check cancelled');
     const controller = new AbortController();
-    const timer = globalThis.setTimeout(() => controller.abort(), 7000);
+    const timer = globalThis.setTimeout(() => controller.abort(), 12000);
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {

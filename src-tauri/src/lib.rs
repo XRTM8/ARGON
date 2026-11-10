@@ -15,69 +15,349 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::RwLock;
 
-pub const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 ARGON/1.5 (+https://github.com/XRTM8/ARGON)";
+pub const DEFAULT_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 ARGON/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/XRTM8/ARGON)"
+);
+
+#[derive(Debug, Clone, Copy)]
+pub struct SegmentBounds {
+    pub written_end: u64,
+    pub limit_end: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveTaskMetric {
+    pub downloaded: u64,
+    pub total: u64,
+    pub last_sample_at: std::time::Instant,
+    pub last_sample_bytes: u64,
+    pub speed_bps: f64,
+    pub segments: HashMap<u32, u64>,
+}
+
+pub fn dual_hash_id(id: &str) -> (u32, u32) {
+    let mut h1: u32 = 2166136261;
+    let mut h2: u32 = 5381;
+    for &b in id.as_bytes() {
+        h1 ^= b as u32;
+        h1 = h1.wrapping_mul(16777619);
+        h2 = h2.wrapping_mul(33).wrapping_add(b as u32);
+    }
+    (h1, h2)
+}
+
+/// Lock-free atomic GCRA pacing helper: computes sleep duration in nanoseconds without Mutex contention.
+fn reserve_delay_ns(next_ns: &AtomicU64, now_ns: u64, cost_ns: u64) -> u64 {
+    let mut cur = next_ns.load(Ordering::Relaxed);
+    loop {
+        let base = cur.max(now_ns);
+        let target = base.saturating_add(cost_ns);
+        match next_ns.compare_exchange_weak(cur, target, Ordering::AcqRel, Ordering::Relaxed) {
+            Ok(_) => return target.saturating_sub(now_ns),
+            Err(actual) => cur = actual,
+        }
+    }
+}
+
+pub async fn wait_cancelled(
+    rx: &mut tokio::sync::watch::Receiver<bool>,
+    flag: &AtomicBool,
+) {
+    while !flag.load(Ordering::Acquire) {
+        if *rx.borrow_and_update() {
+            break;
+        }
+        if rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct TaskManager {
     cancellations: RwLock<HashMap<String, Arc<AtomicBool>>>,
+    cancel_watches: RwLock<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     speed_limit_bytes_per_sec: AtomicU64,
+    task_speed_limits: RwLock<HashMap<String, Arc<AtomicU64>>>,
+    task_next_ns: RwLock<HashMap<String, Arc<AtomicU64>>>,
+    global_next_ns: AtomicU64,
+    epoch: std::sync::OnceLock<std::time::Instant>,
+    live_metrics: std::sync::RwLock<HashMap<String, LiveTaskMetric>>,
+    segment_bounds: RwLock<HashMap<String, Arc<std::sync::Mutex<SegmentBounds>>>>,
+    allowed_roots: RwLock<Vec<std::path::PathBuf>>,
+    shared_client: tokio::sync::OnceCell<reqwest::Client>,
     frontend_ready: AtomicBool,
     updating: AtomicBool,
     bridge_listening: AtomicBool,
     bridge_sequence: AtomicU64,
     bridge_acks: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
-    next_transfer: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl TaskManager {
+    fn now_ns(&self) -> u64 {
+        let base = self.epoch.get_or_init(std::time::Instant::now);
+        base.elapsed().as_nanos() as u64
+    }
+
+    pub async fn http_client(&self) -> Result<reqwest::Client, String> {
+        self.shared_client
+            .get_or_try_init(|| async { transfer::client() })
+            .await
+            .cloned()
+    }
+
+    pub fn record_segment_progress(
+        &self,
+        task_id: &str,
+        segment_index: u32,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+    ) {
+        if let Ok(mut map) = self.live_metrics.write() {
+            let now = std::time::Instant::now();
+            let entry = map.entry(task_id.to_string()).or_insert_with(|| LiveTaskMetric {
+                downloaded: 0,
+                total: total_bytes,
+                last_sample_at: now,
+                last_sample_bytes: 0,
+                speed_bps: 0.0,
+                segments: HashMap::new(),
+            });
+            entry.segments.insert(segment_index, downloaded_bytes);
+            if total_bytes > 0 {
+                entry.total = total_bytes;
+            }
+            let sum: u64 = entry.segments.values().sum();
+            entry.downloaded = sum;
+            let elapsed = now.duration_since(entry.last_sample_at).as_secs_f64();
+            if elapsed >= 0.25 {
+                let delta = sum.saturating_sub(entry.last_sample_bytes);
+                let inst = delta as f64 / elapsed;
+                entry.speed_bps = if entry.speed_bps <= 0.0 {
+                    inst
+                } else {
+                    entry.speed_bps * 0.65 + inst * 0.35
+                };
+                entry.last_sample_at = now;
+                entry.last_sample_bytes = sum;
+            }
+        }
+    }
+
+    pub fn snapshot_telemetry_binary(&self) -> Vec<u8> {
+        let map = match self.live_metrics.read() {
+            Ok(g) => g,
+            Err(_) => return vec![0x33, 0x47, 0x52, 0x41, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        let count = map.len() as u32;
+        let mut out = Vec::with_capacity(16 + map.len() * 32);
+        // Magic "ARG3" (0x41524733 LE)
+        out.extend_from_slice(&0x4152_4733u32.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        let total_speed: f64 = map.values().map(|m| m.speed_bps).sum();
+        out.extend_from_slice(&total_speed.to_le_bytes());
+
+        for (id, m) in map.iter() {
+            let (h1, h2) = dual_hash_id(id);
+            out.extend_from_slice(&h1.to_le_bytes());
+            out.extend_from_slice(&h2.to_le_bytes());
+            out.extend_from_slice(&(m.downloaded as f64).to_le_bytes());
+            out.extend_from_slice(&(m.total as f64).to_le_bytes());
+            out.extend_from_slice(&m.speed_bps.to_le_bytes());
+        }
+        out
+    }
+
+    pub async fn allow_root(&self, dir: std::path::PathBuf) {
+        if let Ok(canon) = tokio::fs::canonicalize(&dir).await {
+            let mut roots = self.allowed_roots.write().await;
+            if !roots.iter().any(|existing| existing == &canon) {
+                roots.push(canon);
+            }
+        }
+    }
+
+    pub async fn register_segment(
+        &self,
+        task_id: &str,
+        segment_index: u32,
+        written_end: u64,
+        limit_end: u64,
+    ) -> Arc<std::sync::Mutex<SegmentBounds>> {
+        let key = format!("{task_id}:{segment_index}");
+        let bounds = Arc::new(std::sync::Mutex::new(SegmentBounds {
+            written_end,
+            limit_end,
+        }));
+        self.segment_bounds
+            .write()
+            .await
+            .insert(key, bounds.clone());
+        bounds
+    }
+
+    pub async fn unregister_segment(&self, task_id: &str, segment_index: u32) {
+        let key = format!("{task_id}:{segment_index}");
+        self.segment_bounds.write().await.remove(&key);
+    }
+
+    /// Dynamically shrinks an active segment's upper byte bound so an idle worker can steal the tail.
+    pub async fn split_segment(
+        &self,
+        task_id: &str,
+        segment_index: u32,
+        min_remaining: u64,
+    ) -> Option<(u64, u64)> {
+        let key = format!("{task_id}:{segment_index}");
+        let bounds = self.segment_bounds.read().await.get(&key).cloned()?;
+        let mut guard = bounds.lock().ok()?;
+        if guard.limit_end <= guard.written_end.saturating_add(min_remaining) {
+            return None;
+        }
+        let old_end = guard.limit_end;
+        let split_point = guard.written_end + (old_end - guard.written_end) / 2;
+        if split_point <= guard.written_end || split_point >= old_end {
+            return None;
+        }
+        guard.limit_end = split_point;
+        Some((split_point + 1, old_end))
+    }
+
+    pub async fn set_task_speed_limit(&self, task_id: &str, bytes_per_sec: u64) {
+        let mut map = self.task_speed_limits.write().await;
+        if bytes_per_sec == 0 {
+            map.remove(task_id);
+        } else {
+            map.entry(task_id.to_string())
+                .or_insert_with(|| Arc::new(AtomicU64::new(bytes_per_sec)))
+                .store(bytes_per_sec, Ordering::Relaxed);
+        }
+    }
+
+    pub async fn throttle_task(&self, task_id: &str, bytes: u64) {
+        let limit = {
+            let map = self.task_speed_limits.read().await;
+            map.get(task_id)
+                .map(|v| v.load(Ordering::Relaxed))
+                .unwrap_or(0)
+        };
+        if limit == 0 || bytes == 0 {
+            return;
+        }
+        let pacer = {
+            let read = self.task_next_ns.read().await;
+            if let Some(p) = read.get(task_id) {
+                p.clone()
+            } else {
+                drop(read);
+                let mut write = self.task_next_ns.write().await;
+                write
+                    .entry(task_id.to_string())
+                    .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+                    .clone()
+            }
+        };
+        let cost_ns = ((bytes as u128 * 1_000_000_000u128) / (limit as u128)).min(u64::MAX as u128) as u64;
+        let delay_ns = reserve_delay_ns(&pacer, self.now_ns(), cost_ns);
+        if delay_ns > 0 {
+            tokio::time::sleep(std::time::Duration::from_nanos(delay_ns)).await;
+        }
+    }
+
+    pub async fn subscribe_cancel(&self, task_id: &str) -> tokio::sync::watch::Receiver<bool> {
+        {
+            let map = self.cancel_watches.read().await;
+            if let Some(tx) = map.get(task_id) {
+                return tx.subscribe();
+            }
+        }
+        let pre_cancelled = self
+            .cancellations
+            .read()
+            .await
+            .get(task_id)
+            .is_some_and(|f| f.load(Ordering::Relaxed));
+        let mut map = self.cancel_watches.write().await;
+        map.entry(task_id.to_string())
+            .or_insert_with(|| tokio::sync::watch::channel(pre_cancelled).0)
+            .subscribe()
+    }
+
     pub async fn begin_transfer(&self, task_id: &str) -> Result<Arc<AtomicBool>, String> {
         let mut map = self.cancellations.write().await;
         if self.updating.load(Ordering::SeqCst) {
             return Err("update_installing".into());
         }
-        Ok(map
+        let token = map
             .entry(task_id.to_string())
             .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-            .clone())
+            .clone();
+        drop(map);
+        let mut watches = self.cancel_watches.write().await;
+        watches
+            .entry(task_id.to_string())
+            .or_insert_with(|| tokio::sync::watch::channel(token.load(Ordering::Relaxed)).0);
+        Ok(token)
     }
     pub async fn get_or_create_token(&self, task_id: &str) -> Arc<AtomicBool> {
         let mut map = self.cancellations.write().await;
-        if let Some(token) = map.get(task_id) {
+        let token = if let Some(token) = map.get(task_id) {
             token.clone()
         } else {
             let token = Arc::new(AtomicBool::new(false));
             map.insert(task_id.to_string(), token.clone());
             token
-        }
+        };
+        drop(map);
+        let mut watches = self.cancel_watches.write().await;
+        watches
+            .entry(task_id.to_string())
+            .or_insert_with(|| tokio::sync::watch::channel(token.load(Ordering::Relaxed)).0);
+        token
     }
 
     pub async fn cancel(&self, task_id: &str) {
         let mut map = self.cancellations.write().await;
         map.entry(task_id.to_owned())
             .or_insert_with(|| Arc::new(AtomicBool::new(true)))
-            .store(true, Ordering::Relaxed);
+            .store(true, Ordering::Release);
+        drop(map);
+        let mut watches = self.cancel_watches.write().await;
+        if let Some(tx) = watches.get(task_id) {
+            let _ = tx.send(true);
+        } else {
+            let (tx, _) = tokio::sync::watch::channel(true);
+            watches.insert(task_id.to_owned(), tx);
+        }
     }
 
     pub async fn remove(&self, task_id: &str) {
-        let mut map = self.cancellations.write().await;
-        map.remove(task_id);
+        self.cancellations.write().await.remove(task_id);
+        self.cancel_watches.write().await.remove(task_id);
+        self.task_speed_limits.write().await.remove(task_id);
+        self.task_next_ns.write().await.remove(task_id);
+        if let Ok(mut map) = self.live_metrics.write() {
+            map.remove(task_id);
+        }
+        let prefix = format!("{task_id}:");
+        self.segment_bounds
+            .write()
+            .await
+            .retain(|k, _| !k.starts_with(&prefix));
     }
 
     pub async fn throttle(&self, bytes: u64) {
         let limit = self.get_speed_limit();
-        if limit == 0 {
+        if limit == 0 || bytes == 0 {
             return;
         }
-        let until = {
-            let mut next = self.next_transfer.lock().await;
-            let now = tokio::time::Instant::now();
-            let until = next.unwrap_or(now).max(now)
-                + std::time::Duration::from_secs_f64(bytes as f64 / limit as f64);
-            *next = Some(until);
-            until
-        };
-        tokio::time::sleep_until(until).await;
+        let cost_ns = ((bytes as u128 * 1_000_000_000u128) / (limit as u128)).min(u64::MAX as u128) as u64;
+        let delay_ns = reserve_delay_ns(&self.global_next_ns, self.now_ns(), cost_ns);
+        if delay_ns > 0 {
+            tokio::time::sleep(std::time::Duration::from_nanos(delay_ns)).await;
+        }
     }
 
     pub fn set_speed_limit(&self, bytes: u64) {
@@ -430,22 +710,30 @@ pub fn resolve_destination_path(app: &AppHandle, dest: &str) -> std::path::PathB
 }
 
 #[tauri::command]
-async fn get_default_download_directory(app: AppHandle) -> Result<String, String> {
+async fn get_default_download_directory(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<TaskManager>>,
+) -> Result<String, String> {
     let path = get_resolved_download_dir(&app);
     tokio::fs::create_dir_all(&path)
         .await
         .map_err(|e| format!("Download folder unavailable: {e}"))?;
+    state.allow_root(path.clone()).await;
     Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-async fn validate_download_directory(directory: String) -> Result<String, String> {
+async fn validate_download_directory(
+    state: tauri::State<'_, Arc<TaskManager>>,
+    directory: String,
+) -> Result<String, String> {
     let path = std::path::PathBuf::from(directory.trim());
     if !path.is_absolute() {
         return Err("أدخل مسار مجلد كاملًا، مثل C:\\Downloads".into());
     }
     #[cfg(target_os = "android")]
     {
+        let _ = state;
         return Err("تغيير مجلد الحفظ غير متاح على Android في هذا الإصدار".into());
     }
     #[cfg(not(target_os = "android"))]
@@ -470,8 +758,35 @@ async fn validate_download_directory(directory: String) -> Result<String, String
         tokio::fs::remove_file(&test)
             .await
             .map_err(|e| e.to_string())?;
+        state.allow_root(path.clone()).await;
         Ok(path.to_string_lossy().into_owned())
     }
+}
+
+#[tauri::command]
+async fn set_task_speed_limit(
+    state: tauri::State<'_, Arc<TaskManager>>,
+    task_id: String,
+    bytes_per_sec: u64,
+) -> Result<(), String> {
+    state.set_task_speed_limit(&task_id, bytes_per_sec).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn poll_telemetry_binary(
+    state: tauri::State<'_, Arc<TaskManager>>,
+) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(state.snapshot_telemetry_binary()))
+}
+
+#[tauri::command]
+async fn split_active_segment(
+    state: tauri::State<'_, Arc<TaskManager>>,
+    task_id: String,
+    segment_index: u32,
+) -> Result<Option<(u64, u64)>, String> {
+    Ok(state.split_segment(&task_id, segment_index, 524_288).await)
 }
 
 #[tauri::command]
@@ -646,27 +961,25 @@ async fn verify_file_sha256(app: AppHandle, file_path: String) -> Result<String,
         return Err("Target file does not exist or is not a regular file".to_string());
     }
 
-    let mut file = tokio::fs::File::open(&resolved)
-        .await
-        .map_err(|e| format!("Cannot open file for hashing: {}", e))?;
-
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
-
-    use tokio::io::AsyncReadExt;
-    loop {
-        let n = file
-            .read(&mut buffer)
-            .await
-            .map_err(|e| format!("Read error: {}", e))?;
-        if n == 0 {
-            break;
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut file = std::fs::File::open(&resolved)
+            .map_err(|e| format!("Cannot open file for hashing: {}", e))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+        loop {
+            let n = file
+                .read(&mut buffer)
+                .map_err(|e| format!("Read error: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
         }
-        hasher.update(&buffer[..n]);
-    }
-
-    let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+        Ok(format!("{:x}", hasher.finalize()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -676,9 +989,78 @@ async fn open_destination_folder(app: AppHandle, file_path: String) -> Result<()
         return Err("Destination path does not exist".to_string());
     }
     let target_str = target.to_string_lossy().to_string();
-    app.opener()
-        .reveal_item_in_dir(&target_str)
-        .map_err(|e| e.to_string())
+    #[cfg(target_os = "android")]
+    {
+        flow_mobile::call::<serde_json::Value>(
+            app,
+            "openFile",
+            serde_json::json!({ "path": target_str }),
+        )
+        .await?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        app.opener()
+            .reveal_item_in_dir(&target_str)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+async fn share_file_item(app: AppHandle, file_path: String) -> Result<(), String> {
+    let target = resolve_destination_path(&app, &file_path);
+    if !target.exists() {
+        return Err("File does not exist on disk".to_string());
+    }
+    let target_str = target.to_string_lossy().to_string();
+    #[cfg(target_os = "android")]
+    {
+        flow_mobile::call::<serde_json::Value>(
+            app,
+            "shareFile",
+            serde_json::json!({ "path": target_str }),
+        )
+        .await?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        app.opener()
+            .reveal_item_in_dir(&target_str)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+async fn sync_android_transfer_notification(
+    app: AppHandle,
+    active_count: u32,
+    title: String,
+    text: String,
+    progress: u32,
+    indeterminate: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        flow_mobile::call::<serde_json::Value>(
+            app,
+            "syncTransferNotification",
+            serde_json::json!({
+                "activeCount": active_count,
+                "title": title,
+                "text": text,
+                "progress": progress,
+                "indeterminate": indeterminate
+            }),
+        )
+        .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, active_count, title, text, progress, indeterminate);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -707,7 +1089,11 @@ async fn open_file_item(app: AppHandle, file_path: String) -> Result<(), String>
 }
 
 #[tauri::command]
-async fn delete_file_item(app: AppHandle, file_path: String) -> Result<(), String> {
+async fn delete_file_item(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<TaskManager>>,
+    file_path: String,
+) -> Result<(), String> {
     let clean = file_path.trim();
     if clean.is_empty() {
         return Ok(());
@@ -742,7 +1128,13 @@ async fn delete_file_item(app: AppHandle, file_path: String) -> Result<(), Strin
         }
     }
 
-    // Must be in download dir or user home directory
+    // Must be inside download dir, user home dir, resolved app download dir, app local data, or user-configured allowed roots
+    let resolved_dir = get_resolved_download_dir(&app).canonicalize().ok();
+    let local_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .and_then(|d| d.canonicalize().ok());
     let is_in_download = app
         .path()
         .download_dir()
@@ -759,7 +1151,27 @@ async fn delete_file_item(app: AppHandle, file_path: String) -> Result<(), Strin
         .map(|h| canonical_target.starts_with(&h))
         .unwrap_or(false);
 
-    if !is_in_download && !is_in_home {
+    let is_in_resolved = resolved_dir
+        .as_ref()
+        .map(|d| canonical_target.starts_with(d))
+        .unwrap_or(false);
+    let is_in_local_data = local_data_dir
+        .as_ref()
+        .map(|d| canonical_target.starts_with(d))
+        .unwrap_or(false);
+    let is_in_allowed_root = state
+        .allowed_roots
+        .read()
+        .await
+        .iter()
+        .any(|root| canonical_target.starts_with(root));
+
+    if !is_in_download
+        && !is_in_home
+        && !is_in_resolved
+        && !is_in_local_data
+        && !is_in_allowed_root
+    {
         return Err(
             "Security violation: target file is outside user allowed directories".to_string(),
         );
@@ -1154,11 +1566,16 @@ pub fn run() {
             flow::flow_copy_received,
             probe_url,
             set_global_speed_limit,
+            set_task_speed_limit,
+            split_active_segment,
+            poll_telemetry_binary,
             get_default_download_directory,
             validate_download_directory,
             prepare_download_file,
             validate_download_file,
             media::resolve_media,
+            media::list_media_formats,
+            media::download_media_with_ytdlp,
             cancel_task,
             set_browser_bridge_ready,
             acknowledge_browser_download,
@@ -1168,13 +1585,16 @@ pub fn run() {
             verify_file_sha256,
             open_destination_folder,
             open_file_item,
+            share_file_item,
+            sync_android_transfer_notification,
             delete_file_item,
             open_browser_extension_dir,
             system_shutdown,
             updater::update_status,
             updater::update_check,
             updater::update_download,
-            updater::update_install
+            updater::update_install,
+            updater::fetch_release_feed
         ])
         .build(tauri::generate_context!())
         .expect("error while building ARGON")
@@ -1349,5 +1769,47 @@ mod tests {
         assert!(is_valid(valid_magnet));
         assert!(!is_valid(invalid_file));
         assert!(!is_valid(invalid_script));
+    }
+
+    #[tokio::test]
+    async fn zero_poll_cancel_watch_notifies_immediately() {
+        let tm = TaskManager::default();
+        let flag = tm.begin_transfer("watch-task").await.unwrap();
+        let mut rx = tm.subscribe_cancel("watch-task").await;
+        let waiter = tokio::spawn(async move {
+            wait_cancelled(&mut rx, &flag).await;
+            true
+        });
+        tokio::task::yield_now().await;
+        tm.cancel("watch-task").await;
+        assert!(waiter.await.unwrap());
+    }
+
+    #[test]
+    fn binary_telemetry_frame_matches_wire_layout() {
+        let tm = TaskManager::default();
+        tm.record_segment_progress("task_1", 0, 1024, 4096);
+        tm.record_segment_progress("task_1", 1, 2048, 4096);
+        let bytes = tm.snapshot_telemetry_binary();
+        assert_eq!(&bytes[0..4], &0x4152_4733u32.to_le_bytes());
+        let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        assert_eq!(count, 1);
+        assert_eq!(bytes.len(), 16 + 32);
+        let (eh1, eh2) = dual_hash_id("task_1");
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), eh1);
+        assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), eh2);
+        let dl = f64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        let total = f64::from_le_bytes(bytes[32..40].try_into().unwrap());
+        assert_eq!(dl, 3072.0);
+        assert_eq!(total, 4096.0);
+    }
+
+    #[test]
+    fn lock_free_gcra_delay_is_non_decreasing() {
+        let next = AtomicU64::new(0);
+        let d1 = reserve_delay_ns(&next, 1_000, 500);
+        let d2 = reserve_delay_ns(&next, 1_000, 500);
+        assert_eq!(d1, 500);
+        assert_eq!(d2, 1_000);
     }
 }

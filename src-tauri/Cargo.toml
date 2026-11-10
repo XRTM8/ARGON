@@ -1,6 +1,6 @@
 [package]
 name = "otium_downloader"
-version = "2.2.0"
+version = "2.3.0"
 description = "ARGON — Sovereign, High-Performance Multi-Segment Download Accelerator"
 authors = ["XRTM8"]
 edition = "2021"
@@ -41,6 +41,12 @@ minisign-verify = "0.3"
 
 [profile.release]
 strip = "symbols"
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+opt-level = 3
+panic = "abort"
+
+[profile.release-android]
+inherits = "release"
 opt-level = "s"
+lto = "thin"

@@ -22,3 +22,7 @@
 
 # The native sharing adapter is loaded by the Rust plugin registry.
 -keep class com.otium.downloader.FlowFilesPlugin { *; }
+-keep class com.otium.downloader.DownloadForegroundService { *; }
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}

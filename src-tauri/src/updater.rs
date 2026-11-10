@@ -5,7 +5,9 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
+#[cfg(desktop)]
+use tauri::Emitter;
 #[cfg(desktop)]
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::Mutex;
@@ -41,25 +43,71 @@ struct CachedPackage {
     sha256: String,
 }
 
+#[cfg(any(test, all(windows, target_arch = "x86_64")))]
+fn extract_install_dir_from_uninstall_values(
+    install_location: Option<&str>,
+    uninstall_string: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(loc) = install_location {
+        let trimmed = loc.trim().trim_matches('"').trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    if let Some(cmd) = uninstall_string {
+        let trimmed = cmd.trim();
+        let exe_path = if let Some(rest) = trimmed.strip_prefix('"') {
+            rest.split('"').next().unwrap_or("")
+        } else {
+            trimmed.split_whitespace().next().unwrap_or("")
+        };
+        if !exe_path.is_empty() {
+            if let Some(parent) = PathBuf::from(exe_path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    return Some(parent.to_path_buf());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn package_mode() -> &'static str {
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
         use winreg::{
-            enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WOW64_64KEY},
+            enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY},
             RegKey,
         };
         let installed = || -> Option<bool> {
-            let key = RegKey::predef(HKEY_CURRENT_USER)
-                .open_subkey_with_flags(
-                    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ARGON",
-                    KEY_READ | KEY_WOW64_64KEY,
-                )
-                .ok()?;
-            let location: String = key.get_value("InstallLocation").ok()?;
-            let registered = std::fs::canonicalize(location.trim_matches('"')).ok()?;
             let executable = std::env::current_exe().ok()?;
             let running = std::fs::canonicalize(executable.parent()?).ok()?;
-            Some(registered == running && running.join("uninstall.exe").is_file())
+            if !running.join("uninstall.exe").is_file() {
+                return Some(false);
+            }
+            for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+                for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+                    let Ok(key) = RegKey::predef(root).open_subkey_with_flags(
+                        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ARGON",
+                        KEY_READ | view,
+                    ) else {
+                        continue;
+                    };
+                    let loc: Option<String> = key.get_value("InstallLocation").ok();
+                    let uninst: Option<String> = key.get_value("UninstallString").ok();
+                    if let Some(dir) = extract_install_dir_from_uninstall_values(
+                        loc.as_deref(),
+                        uninst.as_deref(),
+                    ) {
+                        if let Ok(registered) = std::fs::canonicalize(dir) {
+                            if registered == running {
+                                return Some(true);
+                            }
+                        }
+                    }
+                }
+            }
+            Some(false)
         };
         return if installed() == Some(true) {
             "installed"
@@ -205,10 +253,11 @@ pub async fn update_check(
         }
         let updater = app
             .updater_builder()
+            .target("windows-x86_64-nsis")
             .timeout(Duration::from_secs(600))
             .build()
             .map_err(|e| e.to_string())?;
-        let update = tokio::time::timeout(Duration::from_secs(20), updater.check())
+        let update = tokio::time::timeout(Duration::from_secs(30), updater.check())
             .await
             .map_err(|_| "update_check_timeout")?
             .map_err(|e| e.to_string())?;
@@ -290,6 +339,10 @@ pub async fn update_download(
                 return Err(error.to_string());
             }
         };
+        if let Err(error) = update.verify(&bytes) {
+            state.cache.lock().await.phase = "available".into();
+            return Err(error.to_string());
+        }
         if let Err(error) = save_package(&app, &update.version, &update.signature, &bytes).await {
             state.cache.lock().await.phase = "available".into();
             return Err(error);
@@ -388,7 +441,12 @@ pub async fn update_install(
             result
         }
         .await;
-        tasks.updating.store(false, Ordering::SeqCst);
+        if result.is_err() {
+            tasks.updating.store(false, Ordering::SeqCst);
+        } else {
+            // Ensure host process exits cleanly so Windows NSIS installer can overwrite binaries and relaunch.
+            app.exit(0);
+        }
         result
     }
     #[cfg(not(desktop))]
@@ -396,6 +454,56 @@ pub async fn update_install(
         let _ = (app, tasks);
         Err("unsupported_package".into())
     }
+}
+
+/// Fetches the latest ARGON release metadata via Rust reqwest (bypassing WebView CORS/CSP limits).
+#[tauri::command]
+pub async fn fetch_release_feed(
+    tasks: tauri::State<'_, Arc<crate::TaskManager>>,
+) -> Result<serde_json::Value, String> {
+    let client = tasks.http_client().await?;
+    let endpoints = [
+        (
+            "https://github.com/XRTM8/ARGON/releases/latest/download/latest.json",
+            false,
+        ),
+        (
+            "https://api.github.com/repos/XRTM8/ARGON/releases/latest",
+            true,
+        ),
+    ];
+    let mut last_error = String::from("release_feed_unreachable");
+    for (url, github) in endpoints {
+        let req = client
+            .get(url)
+            .timeout(Duration::from_secs(12))
+            .header(
+                reqwest::header::ACCEPT,
+                if github {
+                    "application/vnd.github+json"
+                } else {
+                    "application/json"
+                },
+            );
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(payload) => {
+                    return Ok(serde_json::json!({
+                        "github": github,
+                        "payload": payload,
+                    }));
+                }
+                Err(e) => last_error = format!("Invalid release feed JSON: {e}"),
+            },
+            Ok(resp) => {
+                last_error = format!("HTTP {}", resp.status());
+            }
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
+    }
+    Err(last_error)
 }
 
 #[cfg(test)]
@@ -434,6 +542,24 @@ mod tests {
         ));
         assert!(!cache_matches(&record, "2.4.0", "signature", b"package"));
         assert!(!cache_matches(&record, "2.3.0", "signature", b"tampered"));
+    }
+    #[test]
+    fn extracts_install_dir_from_location_or_uninstall_string() {
+        assert_eq!(
+            extract_install_dir_from_uninstall_values(Some(r#""C:\Users\demo\AppData\Local\ARGON""#), None),
+            Some(PathBuf::from(r"C:\Users\demo\AppData\Local\ARGON"))
+        );
+        assert_eq!(
+            extract_install_dir_from_uninstall_values(
+                None,
+                Some(r#""C:\Program Files\ARGON\uninstall.exe" /allusers"#),
+            ),
+            Some(PathBuf::from(r"C:\Program Files\ARGON"))
+        );
+        assert_eq!(
+            extract_install_dir_from_uninstall_values(Some(""), Some("")),
+            None
+        );
     }
     #[test]
     #[ignore = "release pipeline provides the real signed installer"]

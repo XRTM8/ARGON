@@ -5,7 +5,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.webkit.WebView
 import android.webkit.MimeTypeMap
 import androidx.activity.result.ActivityResult
@@ -106,16 +110,75 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    private fun resolveAllowedFile(rawPath: String): File {
+        val file = File(rawPath).canonicalFile
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val roots = listOfNotNull(
+            activity.filesDir,
+            activity.cacheDir,
+            activity.getExternalFilesDir(null),
+            downloadsDir
+        ).map { it.canonicalPath + File.separator }
+        require(file.isFile && roots.any { file.path.startsWith(it) }) { "File is outside ARGON storage" }
+        return file
+    }
+
     @Command
     fun openFile(invoke: Invoke) {
         try {
-            val file = File(invoke.getArgs().getString("path") ?: "").canonicalFile
-            val roots = listOfNotNull(activity.filesDir, activity.cacheDir, activity.getExternalFilesDir(null)).map { it.canonicalPath + File.separator }
-            require(file.isFile && roots.any { file.path.startsWith(it) }) { "File is outside ARGON storage" }
+            val file = resolveAllowedFile(invoke.getArgs().getString("path") ?: "")
             val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+            if (file.extension.lowercase() == "apk") {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
+                    val settingsIntent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${activity.packageName}")
+                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    activity.startActivity(settingsIntent)
+                    invoke.reject("android_install_permission_required")
+                    return
+                }
+                val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                activity.startActivity(installIntent)
+                invoke.resolve()
+                return
+            }
             val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
             val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, mime); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             activity.startActivity(Intent.createChooser(intent, "ARGON"))
+            invoke.resolve()
+        } catch (error: Exception) { invoke.reject(error.message) }
+    }
+
+    @Command
+    fun shareFile(invoke: Invoke) {
+        try {
+            val file = resolveAllowedFile(invoke.getArgs().getString("path") ?: "")
+            val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            activity.startActivity(Intent.createChooser(intent, file.name))
+            invoke.resolve()
+        } catch (error: Exception) { invoke.reject(error.message) }
+    }
+
+    @Command
+    fun syncTransferNotification(invoke: Invoke) {
+        try {
+            val args = invoke.getArgs()
+            val activeCount = args.optInt("activeCount", 0)
+            val title = args.optString("title", "ARGON")
+            val text = args.optString("text", "")
+            val progress = args.optInt("progress", 0)
+            val indeterminate = args.optBoolean("indeterminate", true)
+            DownloadForegroundService.syncState(activity, activeCount, title, text, progress, indeterminate)
             invoke.resolve()
         } catch (error: Exception) { invoke.reject(error.message) }
     }

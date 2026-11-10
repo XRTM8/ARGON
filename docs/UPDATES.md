@@ -16,4 +16,9 @@ Portable updates are explicit downloads; close the previous app and extract into
 
 CI tests the frontend and native download/sharing engines before building. The Windows build uses the existing `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets. Publishing fails if the generated installer signature does not verify with ARGON's embedded public key or does not contain the built version. Installer, signature, complete Portable ZIP, extension ZIP, feed and checksums are uploaded to a draft and checked before publication.
 
-Updater artifact signing is separate from Windows Authenticode code signing. The first upgrade from 2.1.0 to 2.2.0 is manual because the previous version lacks this updater implementation.
+Updater artifact signing is separate from Windows Authenticode code signing. The first upgrade from 2.1.0 to 2.2.0+ is manual because older versions lack this updater implementation.
+
+## Android APK signing & package compatibility
+
+- Keep `applicationId = "com.otium.downloader"` and strictly monotonic `versionCode` across releases.
+- Android release builds in CI require persistent keystore secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`) so every APK shares the exact same signing certificate and never causes `INSTALL_FAILED_UPDATE_INCOMPATIBLE` conflicts on future upgrades.

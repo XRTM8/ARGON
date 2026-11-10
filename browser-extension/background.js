@@ -29,7 +29,7 @@ function updateTab(id, operation) {
     if (list === null) await chrome.storage.session.remove(key);
     else await chrome.storage.session.set({ [key]: list });
     await chrome.action.setBadgeText({ tabId: id, text: list?.filter((item) => item.supported).length ? String(list.filter((item) => item.supported).length) : '' }).catch(() => {});
-    await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#587849' }).catch(() => {});
+    await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#2563EB' }).catch(() => {});
     if (typeof chrome.tabs.sendMessage === 'function') void chrome.tabs.sendMessage(id, { type: 'ARGON_MEDIA_CHANGED' }).catch(() => {});
   });
   writes.set(id, next);

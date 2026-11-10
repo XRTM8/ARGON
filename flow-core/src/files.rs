@@ -7,7 +7,7 @@ use std::{
         Arc,
     },
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 pub fn sanitize_filename(raw: &str) -> String {
     let leaf = raw.rsplit(['/', '\\']).next().unwrap_or("file");
@@ -44,34 +44,37 @@ pub async fn hash_file(
     until: Option<u64>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(u64, Sha256), String> {
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut read = 0;
-    let mut buf = vec![0; 256 * 1024];
-    loop {
-        check_cancel(cancel)?;
-        let count = until.map_or(buf.len(), |size| {
-            (size.saturating_sub(read).min(buf.len() as u64)) as usize
-        });
-        if count == 0 {
-            break;
+    let path = path.to_path_buf();
+    let cancel = cancel.clone();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+        let mut hasher = Sha256::new();
+        let mut read = 0u64;
+        // Single 1 MiB reusable buffer eliminates per-chunk spawn_blocking overhead
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            check_cancel(&cancel)?;
+            let count = until.map_or(buf.len(), |size| {
+                size.saturating_sub(read).min(buf.len() as u64) as usize
+            });
+            if count == 0 {
+                break;
+            }
+            let n = file.read(&mut buf[..count]).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            read += n as u64;
         }
-        let n = file
-            .read(&mut buf[..count])
-            .await
-            .map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
+        if until.is_some_and(|size| size != read) {
+            return Err("File changed during resume verification".into());
         }
-        hasher.update(&buf[..n]);
-        read += n as u64;
-    }
-    if until.is_some_and(|size| size != read) {
-        return Err("File changed during resume verification".into());
-    }
-    Ok((read, hasher))
+        Ok((read, hasher))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 pub fn digest(hasher: Sha256) -> String {
     hex(&hasher.finalize())

@@ -38,6 +38,31 @@ describe('published release discovery', () => {
     await expect(fetchReleaseInfo(undefined, controller.signal)).rejects.toThrow('cancelled');
     expect(fetch).not.toHaveBeenCalled();
   });
+  it('extracts sha256 checksums from GitHub REST API digest fields', async () => {
+    const hash = 'b'.repeat(64);
+    const fetch = vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v2.3.0',
+        assets: [
+          {
+            name: 'argon-2.3.0-portable.zip',
+            browser_download_url: 'https://github.com/XRTM8/ARGON/releases/download/v2.3.0/argon-2.3.0-portable.zip',
+            digest: `sha256:${hash}`,
+          },
+          {
+            name: 'ARGON_2.3.0_arm64.apk',
+            browser_download_url: 'https://github.com/XRTM8/ARGON/releases/download/v2.3.0/ARGON_2.3.0_arm64.apk',
+            digest: `SHA256:${'C'.repeat(64)}`,
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetch);
+    const release = await fetchReleaseInfo();
+    expect(release.assets.windowsPortable?.sha256).toBe(hash);
+    expect(release.assets.androidApk?.sha256).toBe('c'.repeat(64));
+  });
   it('requires complete stable versions', () => {
     expect(isNewerVersion('1.6.0-beta', '1.5.1')).toBe(false);
     expect(isNewerVersion('nonsense', '1.5.1')).toBe(false);

@@ -73,4 +73,45 @@ describe('optional updater coordination', () => {
     release.assets.windowsPortable.url = 'https://github.com/XRTM8/ARGON/releases/download/v2.2.0/argon-2.3.0-portable.zip';
     expect(compatibleManualAsset(release)).toBeUndefined();
   });
+  it('reports android_apk_unavailable when a GitHub release omits an Android APK', async () => {
+    const storage = { getItem: (key: string) => memory.get(key) || null, setItem: (key: string, value: string) => { memory.set(key, value); } } as Storage;
+    const manager = new UpdateManager({
+      native: true,
+      version: '2.2.0',
+      android: true,
+      backend: async () => status('idle', 'unsupported') as any,
+      storage: () => storage,
+      fetchRelease: async () => ({
+        version: '2.3.0',
+        notes: '',
+        pubDate: '',
+        assets: { windowsPortable: { url: 'https://github.com/XRTM8/ARGON/releases/download/v2.3.0/argon-2.3.0-portable.zip', sha256: 'a'.repeat(64) } },
+      }),
+      listen: async () => () => {},
+    });
+    const result = await manager.check();
+    expect(result.phase).toBe('error');
+    expect(result.error).toContain('android_apk_unavailable');
+  });
+  it('accepts valid Android APK releases and queues APK download on Android', async () => {
+    const storage = { getItem: (key: string) => memory.get(key) || null, setItem: (key: string, value: string) => { memory.set(key, value); } } as Storage;
+    const apk = { url: 'https://github.com/XRTM8/ARGON/releases/download/v2.3.0/ARGON_2.3.0_arm64.apk', sha256: 'd'.repeat(64) };
+    const queuePortable = vi.fn(() => 'apk-task-1');
+    const manager = new UpdateManager({
+      native: true,
+      version: '2.2.0',
+      android: true,
+      backend: async () => status('idle', 'unsupported') as any,
+      storage: () => storage,
+      fetchRelease: async () => ({ version: '2.3.0', notes: '', pubDate: '', assets: { androidApk: apk } }),
+      queuePortable,
+      listen: async () => () => {},
+    });
+    const checked = await manager.check();
+    expect(checked.phase).toBe('available');
+    const downloaded = await manager.download();
+    expect(downloaded.phase).toBe('queued');
+    expect(downloaded.taskId).toBe('apk-task-1');
+    expect(queuePortable).toHaveBeenCalledWith(apk);
+  });
 });

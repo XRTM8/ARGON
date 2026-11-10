@@ -253,4 +253,38 @@ describe('ARGON real download lifecycle', () => {
     expect(calls('prepare_download_file')[0][1].destinationPath).toBe('C:\\ARGON Downloads\\file.zip');
     expect(manager.getSettings().defaultDirectory).toBe('C:\\ARGON Downloads');
   });
+  it('steals tail bytes from a slower active segment dynamically', async () => {
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    implementation = async (name, args) => {
+      if (name === 'probe_url') return { content_length: 2_000_000, accept_ranges: true, etag: '"big"' };
+      if (name === 'split_active_segment') {
+        releaseSlow();
+        return [1_500_000, 1_999_999];
+      }
+      if (name === 'download_segment') {
+        if (args.segmentIndex === 1) {
+          await slowGate;
+          return { downloaded_bytes: 500_000, total_bytes: 2_000_000, end_byte: 1_499_999 };
+        }
+        return { downloaded_bytes: args.endByte - args.startByte + 1, total_bytes: 2_000_000, end_byte: args.endByte };
+      }
+      return defaultInvoke(name, args);
+    };
+    const id = manager.addTask('https://example.com/large.bin', undefined, 2);
+    await settle(id);
+    expect(task(id).status).toBe('completed');
+    expect(task(id).downloadedBytes).toBe(2_000_000);
+    expect(calls('split_active_segment')).toHaveLength(1);
+    expect(task(id).chunks).toHaveLength(3);
+  });
+  it('applies per-task speed cap and theme preference persistence', async () => {
+    await manager.updateSettings({ theme: 'light' });
+    expect(manager.getSettings().theme).toBe('light');
+    const id = manager.addTask('https://example.com/capped.zip');
+    await manager.setTaskSpeedLimit(id, 1024 * 1024);
+    await settle(id);
+    expect(task(id).speedLimitBytesPerSec).toBe(1024 * 1024);
+    expect(calls('set_task_speed_limit').some((c) => c[1].bytesPerSec === 1048576)).toBe(true);
+  });
 });

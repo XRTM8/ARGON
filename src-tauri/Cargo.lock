@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "otium_downloader"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "arboard",
  "argon-flow-core",

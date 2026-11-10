@@ -4,12 +4,15 @@ export type TaskStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'er
 
 export type TaskCategory = 'programs' | 'media' | 'documents' | 'archives' | 'torrents' | 'other';
 
+export type QueueId = 'main' | 'night' | 'media';
+
 export interface DownloadChunk {
   index: number;
   startByte: number;
   endByte: number;
   downloaded: number;
   status: 'pending' | 'downloading' | 'completed' | 'error';
+  speedBytesPerSec?: number;
 }
 
 export interface ChecksumInfo {
@@ -17,6 +20,28 @@ export interface ChecksumInfo {
   expected?: string;
   actual?: string;
   verified?: boolean;
+}
+
+export interface MediaFormatInfo {
+  id: string;
+  ext: string;
+  resolution: string;
+  fps?: number;
+  filesize?: number;
+  vcodec: string;
+  acodec: string;
+  hasVideo: boolean;
+  hasAudio: boolean;
+  label: string;
+}
+
+export interface MediaMetadataInfo {
+  title: string;
+  uploader?: string;
+  thumbnail?: string;
+  duration?: number;
+  hasFfmpeg: boolean;
+  formats: MediaFormatInfo[];
 }
 
 export interface MediaMetadata {
@@ -27,6 +52,8 @@ export interface MediaMetadata {
   quality?: string;
   duration?: number;
   isAudioOnly?: boolean;
+  selectedFormatId?: string;
+  useYtdlpMux?: boolean;
 }
 
 export interface DownloadTask {
@@ -56,6 +83,9 @@ export interface DownloadTask {
   etag?: string;
   lastModified?: string;
   probed?: boolean;
+  queueId?: QueueId;
+  speedLimitBytesPerSec?: number;
+  mirrors?: string[];
 }
 
 export interface DownloadStats {
@@ -79,4 +109,8 @@ export interface AppSettings {
   nightSchedulerEnabled?: boolean;
   nightSchedulerStartHour?: number;
   nightSchedulerEndHour?: number;
+  theme?: 'dark' | 'light';
+  dynamicWorkStealing?: boolean;
+  clipboardMonitorEnabled?: boolean;
+  autoVerifyIntegrity?: boolean;
 }

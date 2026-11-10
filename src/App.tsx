@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Globe,
   Wifi,
@@ -15,20 +15,29 @@ import {
   Pause,
   Play,
   Trash2,
-  Search
+  Search,
+  Sun,
+  Moon,
+  Command,
+  Plus
 } from 'lucide-react';
 import { Header, CURRENT_VERSION, type MainViewTab } from './components/Header';
+import { ArgonMark } from './components/ArgonMark';
 import { QuickAddBar } from './components/QuickAddBar';
 import { TaskList } from './components/TaskList';
-import { SettingsView } from './components/SettingsView';
+import { TaskInspector } from './components/TaskInspector';
+import { CommandPalette } from './components/CommandPalette';
+import { SettingsView, type SettingsTab } from './components/SettingsView';
 import { BrowserView } from './components/BrowserView';
-import { SharingView, ClipboardView, FlowDialogs, SharingSettings, flowStatus } from './components/FlowPanels';
+import { SharingView, ClipboardView, FlowDialogs, flowStatus } from './components/FlowPanels';
+import { ThroughputSparkline } from './components/ThroughputSparkline';
 import { downloadManager } from './core/downloadManager';
 import { updateManager } from './core/updates/updateManager';
 import { useFlow } from './core/useFlow';
 import { nativeRuntime } from './core/flowClient';
 import { formatBytes, formatSpeed } from './core/segmentation';
-import type { DownloadTask } from './types/downloader';
+import { consumeInitialAndroidSharedUrl, syncSystemBarTheme } from './core/safeArea';
+import type { DownloadTask, MediaMetadata, QueueId } from './types/downloader';
 
 export function App() {
   const [lang, setLang] = useState<'ar' | 'en'>(() => {
@@ -42,15 +51,41 @@ export function App() {
   const [activeView, setActiveView] = useState<MainViewTab>('downloads');
   const [tasks, setTasks] = useState(downloadManager.getTasks());
   const [stats, setStats] = useState(downloadManager.getStats());
+  const [speedHistory, setSpeedHistory] = useState(downloadManager.getSpeedHistory());
   const [finished, setFinished] = useState(false);
+  const [inspectedId, setInspectedId] = useState<string | null>(null);
   const [clipboardUrl, setClipboardUrl] = useState<{ text: string; key: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [runtime, setRuntime] = useState(downloadManager.getRuntimeStatus());
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => downloadManager.getSettings().theme ?? 'dark');
+  const [showMobileFab, setShowMobileFab] = useState(false);
+  const [settingsTabRequest, setSettingsTabRequest] = useState<{ tab: SettingsTab; key: number } | null>(null);
+  const openSettingsTab = (tab: SettingsTab) => {
+    setSettingsTabRequest({ tab, key: performance.now() });
+    setActiveView('settings');
+  };
 
   const flow = useFlow();
+  const inspectedIdRef = useRef<string | null>(inspectedId);
+  inspectedIdRef.current = inspectedId;
+  const flowClientRef = useRef(flow.client);
+  flowClientRef.current = flow.client;
+  const lastStructSigRef = useRef('');
   const update = useSyncExternalStore(updateManager.subscribe, updateManager.getState);
   const ar = lang === 'ar';
+
   useEffect(() => updateManager.start(), []);
+
+  useEffect(() => {
+    const onScroll = () => setShowMobileFab(window.scrollY > 150);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  useEffect(() => {
+    syncSystemBarTheme(theme);
+  }, [theme]);
 
   const viewNames: Record<MainViewTab, string> = {
     downloads: ar ? 'التنزيلات' : 'Downloads',
@@ -62,21 +97,76 @@ export function App() {
   };
 
   useEffect(() => {
+    const computeSig = (list: DownloadTask[]) =>
+      list
+        .map((t) => {
+          const phase =
+            t.status !== 'downloading'
+              ? ''
+              : t.downloadedBytes === 0
+                ? '0'
+                : t.totalBytes > 0 && t.downloadedBytes >= t.totalBytes
+                  ? '2'
+                  : '1';
+          return `${t.id}:${t.status}:${phase}:${t.probed ? t.chunks.length : 0}:${t.filename}:${t.errorMessage || ''}`;
+        })
+        .join('|');
+
+    const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
     return downloadManager.subscribe(() => {
-      setTasks([...downloadManager.getTasks()]);
+      const nextTasks = downloadManager.getTasks();
+      const sig = computeSig(nextTasks);
+      if (!inTauri || inspectedIdRef.current !== null || sig !== lastStructSigRef.current) {
+        lastStructSigRef.current = sig;
+        setTasks([...nextTasks]);
+      }
       setStats({ ...downloadManager.getStats() });
+      setSpeedHistory(downloadManager.getSpeedHistory());
       setRuntime(downloadManager.getRuntimeStatus());
+      const nextTheme = downloadManager.getSettings().theme ?? 'dark';
+      setTheme((prev) => (prev !== nextTheme ? nextTheme : prev));
     });
   }, []);
 
   useEffect(() => {
-    const search = (event: KeyboardEvent) => {
-      if (activeView === 'downloads' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
-        event.preventDefault(); document.getElementById('download-search')?.focus();
+    if (inspectedId) {
+      setTasks([...downloadManager.getTasks()]);
+    }
+  }, [inspectedId]);
+
+  // Android Share Sheet support (cold start & warm onNewIntent)
+  useEffect(() => {
+    const initial = consumeInitialAndroidSharedUrl();
+    if (initial) {
+      setClipboardUrl({ text: initial, key: performance.now() });
+      setActiveView('downloads');
+      setFinished(false);
+    }
+    const onShared = (event: Event) => {
+      const text = (event as CustomEvent<string>).detail?.trim();
+      if (text) {
+        setClipboardUrl({ text, key: performance.now() });
+        setActiveView('downloads');
+        setFinished(false);
       }
     };
-    window.addEventListener('keydown', search);
-    return () => window.removeEventListener('keydown', search);
+    window.addEventListener('argon-share-url', onShared);
+    return () => window.removeEventListener('argon-share-url', onShared);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if (activeView === 'downloads' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        document.getElementById('download-search')?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [activeView]);
 
   useEffect(() => {
@@ -116,7 +206,8 @@ export function App() {
       const urls = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '')
         .trim()
         .split(/\r?\n/)
-        .filter((line) => /^https?:\/\//i.test(line)).join('\n');
+        .filter((line) => /^https?:\/\//i.test(line))
+        .join('\n');
       if (urls) {
         setClipboardUrl({ text: urls, key: performance.now() });
         setActiveView('downloads');
@@ -137,25 +228,46 @@ export function App() {
     };
   }, []);
 
-  const add = (url: string, filename?: string, segments?: number) => {
-    downloadManager.addTask(url, filename, segments);
+  const add = (
+    url: string,
+    filename?: string,
+    segments?: number,
+    expectedSha256?: string,
+    mediaInfo?: MediaMetadata,
+    queueId?: QueueId
+  ) => {
+    const id = downloadManager.addTask(url, filename, segments, expectedSha256, undefined, undefined, mediaInfo, false, queueId);
     setFinished(false);
     setActiveView('downloads');
+    setInspectedId(id);
   };
 
   const share = (task: DownloadTask) => {
     setActiveView('sharing');
-    void flow.client.chooseFiles(task.savePath).catch(() => {});
+    void flowClientRef.current.chooseFiles(task.savePath).catch(() => {});
   };
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    void downloadManager.updateSettings({ theme: next });
+  };
+
+  const inspectedTask = inspectedId ? tasks.find((t) => t.id === inspectedId) || null : null;
 
   const taskProps = {
     tasks,
     lang,
+    inspectedId,
+    onInspect: (id: string) => setInspectedId((prev) => (prev === id ? null : id)),
     onPause: (id: string) => downloadManager.pauseTask(id),
     onResume: (id: string) => downloadManager.resumeTask(id),
     onStartImmediately: (id: string) => downloadManager.startTaskImmediately(id),
     onRestart: (id: string) => downloadManager.restartTask(id),
-    onRemove: (id: string, disk?: boolean) => downloadManager.removeTask(id, disk),
+    onRemove: (id: string, disk?: boolean) => {
+      if (inspectedId === id) setInspectedId(null);
+      void downloadManager.removeTask(id, disk);
+    },
     onClearCompleted: () => downloadManager.clearCompleted(),
     onPauseAll: () => downloadManager.pauseAll(),
     onResumeAll: () => downloadManager.resumeAll(),
@@ -169,29 +281,45 @@ export function App() {
       <Header lang={lang} activeTab={activeView} onTabChange={setActiveView} stats={stats} runtime={runtime} />
 
       <div className="argon-content">
-        {/* Topbar */}
         <header className="argon-topbar">
-          <div className="breadcrumb">
-            <span>ARGON</span>
-            <span>/</span>
-            <strong>{viewNames[activeView]}</strong>
+          <div className="topbar-leading">
+            <div className="mobile-brand-pill" dir="ltr">
+              <ArgonMark size={18} />
+              <span>ARGON</span>
+            </div>
+            <div className="breadcrumb">
+              <span>ARGON</span>
+              <span>/</span>
+              <strong>{viewNames[activeView]}</strong>
+            </div>
           </div>
 
           <div className="topbar-actions">
             {stats.currentTotalSpeed > 0 && (
-              <span className="download-speed" dir="ltr">
-                <ArrowDownToLine size={13} />
-                {formatSpeed(stats.currentTotalSpeed)}
-              </span>
+              <div className="topbar-sparkline-pill" dir="ltr">
+                <ThroughputSparkline history={speedHistory} width={56} height={18} />
+                <span className="download-speed">
+                  <ArrowDownToLine size={13} />
+                  {formatSpeed(stats.currentTotalSpeed)}
+                </span>
+              </div>
             )}
 
             <button
+              type="button"
+              className="topbar-chip command-trigger"
+              onClick={() => setPaletteOpen(true)}
+              aria-label={ar ? 'لوحة الأوامر' : 'Command Palette'}
+            >
+              <Command size={13} />
+              <span>{ar ? 'أوامر' : 'Commands'}</span>
+              <kbd dir="ltr">Ctrl+K</kbd>
+            </button>
+
+            <button
+              type="button"
               className={`sharing-indicator ${flow.snapshot?.enabled ? 'is-enabled' : ''}`}
-              disabled={
-                !nativeRuntime() ||
-                flow.pending.includes('flow_start') ||
-                flow.pending.includes('flow_stop')
-              }
+              disabled={!nativeRuntime() || flow.pending.includes('flow_start') || flow.pending.includes('flow_stop')}
               onClick={() => {
                 void flow.client.execute(flow.snapshot?.enabled ? 'flow_stop' : 'flow_start').catch(() => {});
               }}
@@ -200,17 +328,24 @@ export function App() {
               <span className="presence" />
               <span>
                 {flow.snapshot?.enabled
-                  ? ar
-                    ? 'المشاركة مفعّلة'
-                    : 'Sharing active'
-                  : ar
-                    ? 'المشاركة متوقفة'
-                    : 'Sharing inactive'}
+                  ? ar ? 'المشاركة مفعّلة' : 'Sharing active'
+                  : ar ? 'المشاركة متوقفة' : 'Sharing off'}
               </span>
               <Power size={12} />
             </button>
 
             <button
+              type="button"
+              className="topbar-chip"
+              onClick={toggleTheme}
+              aria-label={ar ? 'تبديل المظهر' : 'Toggle theme'}
+              title={ar ? 'تبديل المظهر' : 'Toggle theme'}
+            >
+              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+
+            <button
+              type="button"
               className="language-button"
               onClick={() => setLang(ar ? 'en' : 'ar')}
               aria-label={ar ? 'Switch to English' : 'التبديل إلى العربية'}
@@ -221,56 +356,59 @@ export function App() {
           </div>
         </header>
 
-        {update.phase === 'ready' && activeView !== 'settings' && <div className="update-ready-notice" role="status"><span>{ar ? `تحديث ${update.version} جاهز للتثبيت عندما تنتهي عملياتك.` : `Update ${update.version} is ready to install after your transfers finish.`}</span><button className="text-button" onClick={() => setActiveView('settings')}>{ar ? 'عرض التحديث' : 'View update'}</button></div>}
-        {/* Global Error Banner */}
+        {(update.phase === 'ready' || update.phase === 'available') && activeView !== 'settings' && (
+          <div className="update-ready-notice" role="status">
+            <span>
+              {update.phase === 'ready'
+                ? ar
+                  ? `تحديث ${update.version} جاهز للتثبيت عندما تنتهي عملياتك.`
+                  : `Update ${update.version} is ready to install after your transfers finish.`
+                : ar
+                  ? `يتوفر إصدار جديد (${update.version}) للتنزيل والتثبيت.`
+                  : `A new update (${update.version}) is available to download.`}
+            </span>
+            <button className="text-button" onClick={() => openSettingsTab('updates')}>
+              {ar ? 'عرض التحديث' : 'View update'}
+            </button>
+          </div>
+        )}
+
         {flow.error && (
           <div className="global-error" role="alert">
             <AlertCircle size={16} />
             <span dir="auto">{flow.error}</span>
-            <button
-              className="icon-button"
-              aria-label={ar ? 'إغلاق التنبيه' : 'Dismiss notice'}
-              onClick={flow.client.clearError}
-            >
+            <button className="icon-button" aria-label={ar ? 'إغلاق التنبيه' : 'Dismiss notice'} onClick={flow.client.clearError}>
               <X size={14} />
             </button>
           </div>
         )}
 
-        {/* Main Content Workspace */}
         <main className="argon-main" id="main-content">
           {activeView === 'downloads' && (
             <>
-              {/* Functional View Header */}
               <div className="view-header">
                 <div className="view-heading">
-                <span className="eyebrow">{ar ? 'مساحة العمل' : 'YOUR WORKSPACE'}</span>
-                <div className="view-header-title">
-                  <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
-                  <span className="count-badge" dir="ltr">
-                    {tasks.length}
-                  </span>
-                </div>
-                <p className="view-description">{ar ? 'ملفاتك، من أول رابط لآخر بايت.' : 'Your files, from the first link to the last byte.'}</p>
+                  <span className="eyebrow">{ar ? 'إدارة النقل المتقدم' : 'TRANSFER WORKSPACE'}</span>
+                  <div className="view-header-title">
+                    <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
+                    <span className="count-badge" dir="ltr">
+                      {tasks.length}
+                    </span>
+                  </div>
+                  <p className="view-description">
+                    {ar ? 'تسريع متعدد المسارات مع تقسيم ديناميكي وتحقق كامل من الملفات.' : 'Multi-segment acceleration with dynamic work-stealing and integrity verification.'}
+                  </p>
                 </div>
 
                 <div className="view-header-actions">
                   {stats.activeCount > 0 ? (
-                    <button
-                      className="action-button"
-                      onClick={() => downloadManager.pauseAll()}
-                      title={ar ? 'إيقاف مؤقت للكل' : 'Pause all downloads'}
-                    >
+                    <button className="action-button" onClick={() => downloadManager.pauseAll()} title={ar ? 'إيقاف مؤقت للكل' : 'Pause all downloads'}>
                       <Pause size={13} />
                       <span>{ar ? 'إيقاف الكل' : 'Pause All'}</span>
                     </button>
                   ) : (
                     tasks.some((t) => t.status === 'paused') && (
-                      <button
-                        className="action-button"
-                        onClick={() => downloadManager.resumeAll()}
-                        title={ar ? 'استئناف الكل' : 'Resume all downloads'}
-                      >
+                      <button className="action-button" onClick={() => downloadManager.resumeAll()} title={ar ? 'استئناف الكل' : 'Resume all downloads'}>
                         <Play size={13} />
                         <span>{ar ? 'استئناف الكل' : 'Resume All'}</span>
                       </button>
@@ -278,11 +416,7 @@ export function App() {
                   )}
 
                   {stats.completedCount > 0 && (
-                    <button
-                      className="action-button"
-                      onClick={() => downloadManager.clearCompleted()}
-                      title={ar ? 'مسح التنزيلات المكتملة من القائمة' : 'Clear completed from list'}
-                    >
+                    <button className="action-button" onClick={() => downloadManager.clearCompleted()} title={ar ? 'مسح التنزيلات المكتملة من القائمة' : 'Clear completed from list'}>
                       <Trash2 size={13} />
                       <span>{ar ? 'مسح المكتملة' : 'Clear Completed'}</span>
                     </button>
@@ -290,13 +424,50 @@ export function App() {
                 </div>
               </div>
 
-              {runtime !== 'ready' && <div className="runtime-notice" role="status"><AlertCircle size={16} /><span>{runtime === 'preview' ? (ar ? 'هذه معاينة للواجهة. افتح تطبيق ARGON لتنزيل الملفات والاتصال بإضافة المتصفح.' : 'Interface preview. Open the ARGON desktop app to download files and connect your browser.') : runtime === 'error' ? (ar ? 'تعذّرت تهيئة المحرك. أعد فتح التطبيق وتحقق من مجلد الحفظ.' : 'The engine could not start. Reopen the app and check the download directory.') : (ar ? 'جارٍ تهيئة المحرك ومجلد الحفظ…' : 'Preparing the engine and download folder…')}</span></div>}
+              {runtime !== 'ready' && (
+                <div className="runtime-notice" role="status">
+                  <AlertCircle size={16} />
+                  <span>
+                    {runtime === 'preview'
+                      ? ar
+                        ? 'هذه معاينة للواجهة. افتح تطبيق ARGON لتنزيل الملفات والاتصال بإضافة المتصفح.'
+                        : 'Interface preview. Open the ARGON desktop app to download files and connect your browser.'
+                      : runtime === 'error'
+                        ? ar
+                          ? 'تعذّرت تهيئة المحرك. أعد فتح التطبيق وتحقق من مجلد الحفظ.'
+                          : 'The engine could not start. Reopen the app and check the download directory.'
+                        : ar
+                          ? 'جارٍ تهيئة المحرك ومجلد الحفظ…'
+                          : 'Preparing the engine and download folder…'}
+                  </span>
+                </div>
+              )}
+
               <div className="transfer-overview" aria-label={ar ? 'ملخص التنزيلات' : 'Transfer overview'}>
-                <div><span>{ar ? 'السرعة الحالية' : 'TRANSFER SPEED'}</span><strong dir="ltr">{formatSpeed(stats.currentTotalSpeed)}</strong></div>
-                <div><span>{ar ? 'جارٍ التنزيل' : 'DOWNLOADING'}</span><strong>{stats.activeCount}<small>{ar ? 'ملفات' : 'files'}</small></strong></div>
-                <div><span>{ar ? 'في الانتظار' : 'IN QUEUE'}</span><strong>{stats.queuedCount}<small>{ar ? 'ملفات' : 'files'}</small></strong></div>
-                <div><span>{ar ? 'البيانات المحمّلة' : 'DATA DOWNLOADED'}</span><strong dir="ltr">{formatBytes(stats.totalBytesDownloaded)}</strong></div>
+                <div>
+                  <span>{ar ? 'السرعة' : 'SPEED'}</span>
+                  <strong dir="ltr">{formatSpeed(stats.currentTotalSpeed)}</strong>
+                </div>
+                <div>
+                  <span>{ar ? 'جارٍ التنزيل' : 'ACTIVE'}</span>
+                  <strong>
+                    {stats.activeCount}
+                    <small>{ar ? 'ملفات' : 'files'}</small>
+                  </strong>
+                </div>
+                <div>
+                  <span>{ar ? 'الانتظار' : 'QUEUED'}</span>
+                  <strong>
+                    {stats.queuedCount}
+                    <small>{ar ? 'ملفات' : 'files'}</small>
+                  </strong>
+                </div>
+                <div>
+                  <span>{ar ? 'المحمّل' : 'DOWNLOADED'}</span>
+                  <strong dir="ltr">{formatBytes(stats.totalBytesDownloaded)}</strong>
+                </div>
               </div>
+
               <QuickAddBar
                 lang={lang}
                 onAdd={add}
@@ -305,53 +476,81 @@ export function App() {
                 onClearClipboardUrl={() => setClipboardUrl(null)}
               />
 
-              {/* Tabs */}
-              <div className="download-toolbar">
-                <div className="download-tabs">
-                  <button aria-pressed={!finished} onClick={() => setFinished(false)}>
-                    <span>{ar ? 'قائمة التنزيل' : 'In progress'}</span>
-                    <span>{activeTasksCount}</span>
-                  </button>
-                  <button aria-pressed={finished} onClick={() => setFinished(true)}>
-                    <span>{ar ? 'المكتملة' : 'Completed'}</span>
-                    <span>{stats.completedCount}</span>
-                  </button>
-                </div>
-                <button className="text-button" onClick={() => setActiveView('browser')}><Puzzle size={14} />{ar ? 'ربط المتصفح' : 'Connect browser'}<ArrowUpRight size={13} /></button>
-              </div>
+              <div className={`workspace-split ${inspectedTask ? 'has-inspector' : ''}`}>
+                <div className="workspace-primary">
+                  <div className="download-toolbar">
+                    <div className="download-tabs">
+                      <button aria-pressed={!finished} onClick={() => setFinished(false)}>
+                        <span>{ar ? 'قائمة التنزيل' : 'In progress'}</span>
+                        <span>{activeTasksCount}</span>
+                      </button>
+                      <button aria-pressed={finished} onClick={() => setFinished(true)}>
+                        <span>{ar ? 'المكتملة' : 'Completed'}</span>
+                        <span>{stats.completedCount}</span>
+                      </button>
+                    </div>
+                    <button className="text-button hide-on-mobile" onClick={() => setActiveView('browser')}>
+                      <Puzzle size={14} />
+                      {ar ? 'ربط المتصفح' : 'Connect browser'}
+                      <ArrowUpRight size={13} />
+                    </button>
+                  </div>
 
-              {/* Task List */}
-              <TaskList
-                {...taskProps}
-                mode={finished ? 'finished' : 'downloads'}
-                onSwitchToDownloads={() => setFinished(false)}
-              />
+                  <TaskList {...taskProps} mode={finished ? 'finished' : 'downloads'} onSwitchToDownloads={() => setFinished(false)} />
+                </div>
+
+                {inspectedTask && (
+                  <TaskInspector task={inspectedTask} lang={lang} onClose={() => setInspectedId(null)} />
+                )}
+              </div>
             </>
           )}
 
-          {activeView === 'sharing' && <SharingView lang={lang} />}
-          {activeView === 'clipboard' && <ClipboardView lang={lang} onDownload={(url) => add(url)} />}
+          {activeView === 'sharing' && <SharingView lang={lang} onSwitchTab={setActiveView} />}
+          {activeView === 'clipboard' && <ClipboardView lang={lang} onDownload={(url) => add(url)} onSwitchTab={setActiveView} />}
           {activeView === 'history' && <UnifiedHistory lang={lang} tasks={tasks} />}
           {activeView === 'browser' && <BrowserView lang={lang} />}
-          {activeView === 'settings' && (
-            <div className="settings-layout">
-              <SettingsView lang={lang} />
-              <SharingSettings lang={lang} />
-            </div>
-          )}
+          {activeView === 'settings' && <SettingsView lang={lang} requestedTab={settingsTabRequest} />}
         </main>
 
-        {/* Clean Footer Status Bar */}
         <footer className="workspace-footer">
           <span>
             <HardDrive size={13} />
             <span>{ar ? 'الملفات تُحفظ على جهازك' : 'Files are saved on your device'}</span>
           </span>
-          <span dir="ltr">ARGON ENGINE v{CURRENT_VERSION}</span>
+          <span dir="ltr">ARGON CORE v{CURRENT_VERSION}</span>
         </footer>
       </div>
 
+      {activeView === 'downloads' && showMobileFab && (
+        <button
+          type="button"
+          className="mobile-fab-add"
+          aria-label={ar ? 'إضافة رابط' : 'Add link'}
+          onClick={() => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            document.getElementById('download-url')?.focus();
+          }}
+        >
+          <Plus size={22} />
+        </button>
+      )}
+
       <FlowDialogs lang={lang} />
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        lang={lang}
+        theme={theme}
+        onNavigate={setActiveView}
+        onPauseAll={() => downloadManager.pauseAll()}
+        onResumeAll={() => downloadManager.resumeAll()}
+        onToggleTheme={toggleTheme}
+        onToggleLang={() => setLang(ar ? 'en' : 'ar')}
+        onSetSpeedLimit={(limit) => void downloadManager.updateSettings({ globalSpeedLimitBytes: limit })}
+        onFocusIntake={() => setTimeout(() => document.getElementById('download-url')?.focus(), 40)}
+      />
 
       {dragging && (
         <div className="url-drop-overlay">
@@ -404,21 +603,22 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 rtl:right-2.5 rtl:left-auto top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder={ar ? 'بحث في السجل...' : 'Filter activity...'}
-              className="text-xs bg-zinc-900 border border-white/[0.08] rounded-lg pl-8 pr-3 rtl:pr-8 rtl:pl-3 py-1.5 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500 w-44 sm:w-56"
-            />
-          </div>
+        <div className="search-field" style={{ maxWidth: 260 }}>
+          <Search size={14} />
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={ar ? 'بحث في السجل…' : 'Filter activity…'}
+          />
         </div>
       </div>
 
-      {actionError && <p className="inline-error" role="alert">{actionError}</p>}
+      {actionError && (
+        <p className="inline-error" role="alert">
+          {actionError}
+        </p>
+      )}
       <div className="glass-panel">
         {entries.length > 0 ? (
           entries.map((entry) => (
@@ -437,9 +637,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
                 <strong dir="auto">{entry.name}</strong>
                 <span>
                   {entry.kind === 'download'
-                    ? ar
-                      ? 'تنزيل'
-                      : 'Download'
+                    ? ar ? 'تنزيل' : 'Download'
                     : `${entry.kind === 'send' ? (ar ? 'إلى' : 'To') : ar ? 'من' : 'From'} ${entry.peer}`}{' '}
                   · {formatBytes(entry.size)} ·{' '}
                   {new Date(entry.date).toLocaleString(ar ? 'ar-IQ' : 'en', {
@@ -451,7 +649,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
                 </span>
               </div>
 
-              <small className={entry.status === 'error' ? 'text-rose-400' : ''}>
+              <small className={entry.status === 'error' ? 'status-danger' : ''}>
                 {entry.kind === 'download'
                   ? {
                       downloading: ar ? 'جارٍ التنزيل' : 'Downloading',
@@ -474,7 +672,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
                   <FolderOpen size={15} />
                 </button>
               ) : entry.status === 'completed' ? (
-                <CheckCircle2 size={15} className="text-emerald-400" />
+                <CheckCircle2 size={15} className="status-ok" />
               ) : (
                 <span />
               )}

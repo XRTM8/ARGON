@@ -30,6 +30,7 @@ import { nativeRuntime } from '../core/flowClient';
 import { downloadManager } from '../core/downloadManager';
 import { formatBytes, formatSpeed } from '../core/segmentation';
 import type { FlowTransfer } from '../types/flow';
+import type { MainViewTab } from './Header';
 
 type Lang = 'ar' | 'en';
 const run = (promise: Promise<unknown>) => {
@@ -167,14 +168,14 @@ function TransferRow({
         ) : null}
 
         {t.status === 'completed' && t.sha256 && (
-          <ShieldCheck size={16} className="text-emerald-400" aria-label="SHA-256 verified" />
+          <ShieldCheck size={16} className="status-ok" aria-label="SHA-256 verified" />
         )}
       </div>
     </article>
   );
 }
 
-export function SharingView({ lang }: { lang: Lang }) {
+export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (tab: MainViewTab) => void }) {
   const { snapshot, selectedFiles, selectedPeerId, pending, client } = useFlow();
   const ar = lang === 'ar';
   const [address, setAddress] = useState('');
@@ -192,12 +193,22 @@ export function SharingView({ lang }: { lang: Lang }) {
 
   return (
     <div className="sharing-view">
-      {/* Functional View Header */}
+      {onSwitchTab && (
+        <div className="mobile-flow-switch">
+          <button type="button" className="is-active" onClick={() => onSwitchTab('sharing')}>
+            {ar ? 'مشاركة الملفات' : 'Local Sharing'}
+          </button>
+          <button type="button" onClick={() => onSwitchTab('clipboard')}>
+            {ar ? 'الحافظة المشفرة' : 'Clipboard'}
+          </button>
+        </div>
+      )}
+
       <div className="view-header">
         <div className="view-header-title">
           <h1>{ar ? 'المشاركة المحلية المشفرة' : 'Encrypted Local Sharing'}</h1>
           <span className="count-badge" dir="ltr">
-            {snapshot?.peers.length || 0} {ar ? 'أجهزة مكتشفة' : 'devices'}
+            {snapshot?.peers.length || 0} {ar ? 'أجهزة' : 'devices'}
           </span>
         </div>
 
@@ -212,18 +223,22 @@ export function SharingView({ lang }: { lang: Lang }) {
       </div>
 
       {!nativeRuntime() && (
-        <div className="global-error" style={{ margin: '0 0 16px', background: 'rgba(234, 179, 8, 0.1)', borderColor: 'rgba(234, 179, 8, 0.3)', color: '#fef08a' }}>
+        <div className="runtime-notice" role="status">
           <AlertCircle size={16} />
-          <span>{ar ? 'معاينة للواجهة: بروتوكول Flow يتطلب تشغيل تطبيق ARGON المكتبي أو المحمول.' : 'Preview mode: Flow protocol operates natively inside ARGON desktop and mobile builds.'}</span>
+          <span>
+            {ar
+              ? 'معاينة للواجهة: بروتوكول Flow يتطلب تشغيل تطبيق ARGON المكتبي أو المحمول.'
+              : 'Preview mode: Flow protocol operates natively inside ARGON desktop and mobile builds.'}
+          </span>
         </div>
       )}
 
       {enabled && snapshot && (
         <div className="connection-strip glass-panel">
           <div>
-            <Wifi size={16} className="text-cyan-400" />
-            <span className="font-semibold text-zinc-100">{snapshot.name}</span>
-            <span className="text-zinc-500">·</span>
+            <Wifi size={16} className="accent-text" />
+            <span style={{ fontWeight: 600 }}>{snapshot.name}</span>
+            <span style={{ color: 'var(--argon-subtle)' }}>·</span>
             <code dir="ltr">{snapshot.addresses[0] || '127.0.0.1:54127'}</code>
           </div>
 
@@ -237,7 +252,7 @@ export function SharingView({ lang }: { lang: Lang }) {
               setTimeout(() => setCopied(false), 1600);
             }}
           >
-            {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+            {copied ? <Check size={13} className="status-ok" /> : <Copy size={13} />}
             <span>{copied ? (ar ? 'تم النسخ' : 'Copied') : ar ? 'نسخ العنوان' : 'Copy Address'}</span>
           </button>
         </div>
@@ -269,18 +284,14 @@ export function SharingView({ lang }: { lang: Lang }) {
                     <strong dir="auto">{device.name}</strong>
                     <span className="peer-status">
                       {device.trusted ? (
-                        <ShieldCheck size={13} className="text-emerald-400" />
+                        <ShieldCheck size={13} className="status-ok" />
                       ) : (
-                        <ShieldQuestion size={13} className="text-amber-400" />
+                        <ShieldQuestion size={13} className="status-warn" />
                       )}
                       <span>
                         {device.trusted
-                          ? ar
-                            ? 'مقترن وموثوق'
-                            : 'Paired & Verified'
-                          : ar
-                            ? 'غير مقترن'
-                            : 'Not paired'}
+                          ? ar ? 'مقترن وموثوق' : 'Paired & Verified'
+                          : ar ? 'غير مقترن' : 'Not paired'}
                       </span>
                       <i className={`presence ${device.online ? 'online' : ''}`} />
                     </span>
@@ -302,8 +313,8 @@ export function SharingView({ lang }: { lang: Lang }) {
             </div>
           ) : (
             <div className="device-empty glass-panel">
-              <Cable size={24} className="text-zinc-500" />
-              <strong>{enabled ? (ar ? 'لم يتم العثور على أجهزة بعد' : 'Searching for local devices...') : (ar ? 'المشاركة المحلية متوقفة' : 'Local Sharing is Off')}</strong>
+              <Cable size={24} />
+              <strong>{enabled ? (ar ? 'لم يتم العثور على أجهزة بعد' : 'Searching for local devices...') : ar ? 'المشاركة المحلية متوقفة' : 'Local Sharing is Off'}</strong>
               <p>
                 {enabled
                   ? ar
@@ -316,7 +327,6 @@ export function SharingView({ lang }: { lang: Lang }) {
             </div>
           )}
 
-          {/* Manual IP Connect */}
           <div className="manual-connect">
             <label htmlFor="flow-address">{ar ? 'اتصال مباشر بعنوان IP' : 'Direct IP Connect'}</label>
             <div>
@@ -342,7 +352,6 @@ export function SharingView({ lang }: { lang: Lang }) {
             </div>
           </div>
 
-          {/* Send Box */}
           <div className="send-drop glass-panel">
             <div>
               <h2>{peer ? (ar ? `إرسال إلى: ${peer.name}` : `Target: ${peer.name}`) : ar ? 'إرسال ملفات' : 'Send Files'}</h2>
@@ -366,7 +375,6 @@ export function SharingView({ lang }: { lang: Lang }) {
             </button>
           </div>
 
-          {/* Staged files */}
           {selectedFiles.length > 0 && (
             <div className="glass-panel" style={{ marginTop: 14, padding: 16 }}>
               <div className="section-title">
@@ -385,22 +393,18 @@ export function SharingView({ lang }: { lang: Lang }) {
                       alignItems: 'center',
                       gap: 10,
                       padding: '8px 10px',
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      borderRadius: 8
+                      background: 'var(--argon-surface)',
+                      borderRadius: 7
                     }}
                   >
-                    <FileText size={15} className="text-cyan-400" />
-                    <span dir="auto" style={{ flex: 1, fontSize: 12 }}>
+                    <FileText size={15} className="accent-text" />
+                    <span dir="auto" style={{ flex: 1, fontSize: 12.5 }}>
                       {file.name}
                     </span>
                     <small dir="ltr" style={{ color: 'var(--argon-subtle)', fontFamily: 'monospace' }}>
                       {formatBytes(file.size)}
                     </small>
-                    <button
-                      className="icon-button"
-                      aria-label={ar ? 'إزالة' : 'Remove'}
-                      onClick={() => client.removeSelected(file.id)}
-                    >
+                    <button className="icon-button" aria-label={ar ? 'إزالة' : 'Remove'} onClick={() => client.removeSelected(file.id)}>
                       <X size={13} />
                     </button>
                   </div>
@@ -408,14 +412,10 @@ export function SharingView({ lang }: { lang: Lang }) {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTop: '1px solid var(--argon-border)' }}>
-                <span style={{ fontSize: 11, color: 'var(--argon-subtle)' }}>
+                <span style={{ fontSize: 11.5, color: 'var(--argon-subtle)' }}>
                   {peer?.trusted
-                    ? ar
-                      ? 'سيتلقى الطرف الآخر طلب قبول قبل الحفظ.'
-                      : 'Receiver must confirm prompt before transfer.'
-                    : ar
-                      ? 'يلزم اقتران الجهاز أولاً.'
-                      : 'Pair device before sending.'}
+                    ? ar ? 'سيتلقى الطرف الآخر طلب قبول قبل الحفظ.' : 'Receiver must confirm prompt before transfer.'
+                    : ar ? 'يلزم اقتران الجهاز أولاً.' : 'Pair device before sending.'}
                 </span>
 
                 <button
@@ -430,41 +430,39 @@ export function SharingView({ lang }: { lang: Lang }) {
             </div>
           )}
 
-          {/* Transfers */}
-          <div className="section-title" style={{ marginTop: 24 }}>
+          <div className="section-title" style={{ marginTop: 22 }}>
             <h2>{ar ? 'عمليات النقل النشطة' : 'Live Transfers'}</h2>
             <span>Flow Protocol v2</span>
           </div>
-          <FlowTransferList lang={lang} />
+          <div className="glass-panel">
+            <FlowTransferList lang={lang} />
+          </div>
         </section>
 
-        {/* Aside Info Panel */}
         <aside className="sharing-aside glass-panel">
-          <ShieldCheck size={20} className="text-cyan-400" />
+          <ShieldCheck size={20} className="accent-text" />
           <h2>{ar ? 'حماية مشفرة نقطة لنقطة' : 'Zero-Knowledge Security'}</h2>
           <p>
             {ar
               ? 'تتم جميع الاتصالات محلياً عبر بروتوكول Noise XX دون المرور عبر أي خوادم أو طرف ثالث.'
               : 'All communication is direct peer-to-peer over encrypted Noise XX sockets without intermediary servers.'}
           </p>
-
           <div className="aside-rule" />
-
           <div className="sharing-feature-list">
             <span>
-              <Check size={13} className="text-emerald-400" />
+              <Check size={13} className="status-ok" />
               <span>{ar ? 'تشفير ChaChaPoly مع توثيق BLAKE2s' : 'ChaCha20-Poly1305 + BLAKE2s'}</span>
             </span>
             <span>
-              <Check size={13} className="text-emerald-400" />
+              <Check size={13} className="status-ok" />
               <span>{ar ? 'فحص تلقائي لبصمة SHA-256 للملفات' : 'Mandatory SHA-256 integrity'}</span>
             </span>
             <span>
-              <Check size={13} className="text-emerald-400" />
+              <Check size={13} className="status-ok" />
               <span>{ar ? 'رمز اقتران بصري 6 أرقام' : '6-digit visual handshake'}</span>
             </span>
             <span>
-              <Check size={13} className="text-emerald-400" />
+              <Check size={13} className="status-ok" />
               <span>{ar ? 'استئناف تلقائي للملفات بعد الانقطاع' : 'Resume on reconnection'}</span>
             </span>
           </div>
@@ -474,7 +472,15 @@ export function SharingView({ lang }: { lang: Lang }) {
   );
 }
 
-export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (url: string) => void }) {
+export function ClipboardView({
+  lang,
+  onDownload,
+  onSwitchTab
+}: {
+  lang: Lang;
+  onDownload: (url: string) => void;
+  onSwitchTab?: (tab: MainViewTab) => void;
+}) {
   const { snapshot, selectedPeerId, pending, client } = useFlow();
   const ar = lang === 'ar';
   const [text, setText] = useState('');
@@ -506,6 +512,17 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
 
   return (
     <div className="clipboard-view">
+      {onSwitchTab && (
+        <div className="mobile-flow-switch">
+          <button type="button" onClick={() => onSwitchTab('sharing')}>
+            {ar ? 'مشاركة الملفات' : 'Local Sharing'}
+          </button>
+          <button type="button" className="is-active" onClick={() => onSwitchTab('clipboard')}>
+            {ar ? 'الحافظة المشفرة' : 'Clipboard'}
+          </button>
+        </div>
+      )}
+
       <div className="view-header">
         <div className="view-header-title">
           <h1>{ar ? 'الحافظة المشفرة' : 'Secure Clipboard'}</h1>
@@ -542,11 +559,7 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
         />
 
         <div className="compose-controls">
-          <select
-            aria-label={ar ? 'جهاز استقبال النص' : 'Recipient device'}
-            value={selectedPeerId}
-            onChange={(e) => client.selectPeer(e.target.value)}
-          >
+          <select aria-label={ar ? 'جهاز استقبال النص' : 'Recipient device'} value={selectedPeerId} onChange={(e) => client.selectPeer(e.target.value)}>
             <option value="">{ar ? 'اختر الجهاز المستقبل...' : 'Select Target Device...'}</option>
             {snapshot?.peers
               .filter((p) => p.trusted)
@@ -578,7 +591,7 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
 
         {clean !== null && (
           <div className="clean-preview">
-            <span style={{ fontSize: 11, color: 'var(--argon-cyan)', fontWeight: 600 }}>
+            <span style={{ fontSize: 11.5, color: 'var(--argon-accent)', fontWeight: 600 }}>
               {ar ? 'معاينة النص بعد إزالة التتبع:' : 'Cleaned Text Preview:'}
             </span>
             <pre dir="auto">{clean}</pre>
@@ -589,7 +602,7 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
                 setClean(null);
               }}
             >
-              <Check size={13} className="text-emerald-400" />
+              <Check size={13} className="status-ok" />
               <span>{ar ? 'تطبيق النص المنظف' : 'Apply Cleaned Text'}</span>
             </button>
           </div>
@@ -602,8 +615,7 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
         </p>
       </div>
 
-      {/* Received clips */}
-      <div className="section-title" style={{ marginTop: 24 }}>
+      <div className="section-title" style={{ marginTop: 22 }}>
         <h2>{ar ? 'النصوص المستلمة' : 'Received Snippets'}</h2>
         <span>{snapshot?.clipboard.length || 0}</span>
       </div>
@@ -613,10 +625,10 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
           {snapshot.clipboard.map((item) => (
             <article className="received-clip glass-panel" key={item.id}>
               <div className="section-title">
-                <span>
-                  <ArrowDownLeft size={13} className="text-cyan-400" /> {item.peerName}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <ArrowDownLeft size={13} className="accent-text" /> {item.peerName}
                 </span>
-                <time style={{ fontFamily: 'monospace', fontSize: 10 }}>
+                <time style={{ fontFamily: 'monospace', fontSize: 10.5 }}>
                   {new Date(item.receivedAt).toLocaleTimeString(ar ? 'ar-IQ' : 'en', {
                     hour: '2-digit',
                     minute: '2-digit'
@@ -629,11 +641,9 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
               <div className="clip-actions">
                 <button
                   className="action-button"
-                  onClick={() =>
-                    run(client.execute('flow_copy_received', { itemId: item.id }).then(() => setCopied(item.id)))
-                  }
+                  onClick={() => run(client.execute('flow_copy_received', { itemId: item.id }).then(() => setCopied(item.id)))}
                 >
-                  {copied === item.id ? <ClipboardCheck size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                  {copied === item.id ? <ClipboardCheck size={14} className="status-ok" /> : <Copy size={14} />}
                   <span>{copied === item.id ? (ar ? 'تم النسخ' : 'Copied') : ar ? 'نسخ للحافظة' : 'Copy'}</span>
                 </button>
 
@@ -648,7 +658,7 @@ export function ClipboardView({ lang, onDownload }: { lang: Lang; onDownload: (u
           ))}
         </div>
       ) : (
-        <div className="quiet-empty">
+        <div className="quiet-empty glass-panel">
           <Clipboard size={20} />
           <p>{ar ? 'لا توجد نصوص مستلمة في هذه الجلسة.' : 'No snippets received in this session.'}</p>
         </div>
@@ -674,13 +684,7 @@ export function FlowDialogs({ lang }: { lang: Lang }) {
     <div className="dialog-backdrop">
       <section className="flow-dialog glass-panel" role="dialog" aria-modal="true" aria-labelledby="flow-dialog-title">
         <div className="dialog-symbol">
-          {pair ? (
-            <ShieldCheck size={24} />
-          ) : incoming?.kind === 'text' ? (
-            <Clipboard size={24} />
-          ) : (
-            <ArrowDownLeft size={24} />
-          )}
+          {pair ? <ShieldCheck size={24} /> : incoming?.kind === 'text' ? <Clipboard size={24} /> : <ArrowDownLeft size={24} />}
         </div>
 
         <h2 id="flow-dialog-title">
@@ -704,11 +708,11 @@ export function FlowDialogs({ lang }: { lang: Lang }) {
             </p>
           </>
         ) : (
-          <div className="incoming-summary" style={{ padding: '12px 0' }}>
-            <strong dir="auto" style={{ fontSize: 13, display: 'block' }}>
+          <div style={{ padding: '12px 0' }}>
+            <strong dir="auto" style={{ fontSize: 13.5, display: 'block' }}>
               {incoming!.kind === 'text' ? (ar ? 'نص حافظة' : 'Clipboard payload') : incoming!.name}
             </strong>
-            <span dir="ltr" style={{ fontFamily: 'monospace', color: 'var(--argon-cyan)', fontSize: 12 }}>
+            <span dir="ltr" style={{ fontFamily: 'monospace', color: 'var(--argon-accent)', fontSize: 12 }}>
               {formatBytes(incoming!.size)}
             </span>
           </div>
@@ -733,29 +737,30 @@ export function SharingSettings({ lang }: { lang: Lang }) {
   const ar = lang === 'ar';
 
   return (
-    <section className="glass-panel" style={{ padding: 20 }}>
+    <section className="glass-panel" style={{ padding: 18 }}>
       <div className="section-title">
         <h2>
-          <HardDrive size={16} className="text-cyan-400" />
+          <HardDrive size={16} className="accent-text" />
           <span>{ar ? 'مسار استلام ملفات المشاركة' : 'Sharing Storage'}</span>
         </h2>
         <span>Flow v2.0</span>
       </div>
 
-      <label style={{ fontSize: 11, color: 'var(--argon-muted)', display: 'block', marginBottom: 8 }}>
+      <label style={{ fontSize: 12, color: 'var(--argon-muted)', display: 'block', marginBottom: 8 }}>
         {ar ? 'مجلد حفظ الملفات المستلمة عبر الشبكة المحلية:' : 'Directory for files received over local network:'}
       </label>
 
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <code
           dir="ltr"
           style={{
             flex: 1,
-            padding: '8px 12px',
-            background: 'var(--argon-surface)',
-            borderRadius: 8,
+            minWidth: 180,
+            padding: '8px 11px',
+            background: 'var(--argon-input-bg)',
+            borderRadius: 7,
             border: '1px solid var(--argon-border)',
-            fontSize: 11,
+            fontSize: 11.5,
             color: 'var(--argon-bright)',
             fontFamily: 'monospace'
           }}
