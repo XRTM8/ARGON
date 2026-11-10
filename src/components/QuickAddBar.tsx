@@ -2,15 +2,12 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowDownToLine,
   Clipboard,
-  ChevronDown,
-  Link2,
-  ListPlus,
-  Sparkles,
+  SlidersHorizontal,
   Loader2,
   Film
 } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
-import { expandWildcardPattern, parseDownloadInput } from '../core/downloadInput';
+import { expandWildcardPattern, extractSharedUrl, parseDownloadInput } from '../core/downloadInput';
 import { detectPlatform, listMediaFormats } from '../core/mediaResolver';
 import { formatBytes } from '../core/segmentation';
 import type { MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
@@ -23,22 +20,21 @@ interface Props {
     segments?: number,
     expectedSha256?: string,
     mediaInfo?: MediaMetadata,
-    queueId?: QueueId
+    queueId?: QueueId,
+    mirrors?: string[]
   ) => void;
   detectedClipboardUrl?: string | null;
   intakeKey?: number;
   onClearClipboardUrl?: () => void;
 }
 
-type IntakeMode = 'single' | 'batch' | 'wildcard';
-
 export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onClearClipboardUrl }: Props) {
   const ar = lang === 'ar';
   const [value, setValue] = useState('');
-  const [mode, setMode] = useState<IntakeMode>('single');
   const [advanced, setAdvanced] = useState(false);
   const [filename, setFilename] = useState('');
   const [expectedHash, setExpectedHash] = useState('');
+  const [mirrorsText, setMirrorsText] = useState('');
   const [queueId, setQueueId] = useState<QueueId>('main');
   const [segments, setSegments] = useState(() => downloadManager.getSettings().defaultSegmentCount || 8);
   const [error, setError] = useState('');
@@ -48,16 +44,18 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   const [selectedFormatId, setSelectedFormatId] = useState<string>('');
   const input = useRef<HTMLTextAreaElement>(null);
 
+  const trimmed = value.trim();
+  const isMultiline = value.includes('\n');
+  const looksLikeWildcard = !isMultiline && /\[(\d+\.\.\d+|[a-zA-Z]\.\.[a-zA-Z])\]/.test(trimmed);
+  const wildcard = looksLikeWildcard ? expandWildcardPattern(trimmed) : null;
   const parsed = parseDownloadInput(value);
-  const wildcard = mode === 'wildcard' ? expandWildcardPattern(value) : null;
-  const singleUrl = mode === 'single' && parsed.urls.length === 1 ? parsed.urls[0] : '';
+  const singleUrl = !isMultiline && !looksLikeWildcard && parsed.urls.length === 1 ? parsed.urls[0] : '';
   const platform = singleUrl ? detectPlatform(singleUrl) : 'other';
   const isMediaPlatform = !['direct', 'other'].includes(platform);
 
   useEffect(() => {
     if (detectedClipboardUrl) {
       setValue(detectedClipboardUrl);
-      setMode(detectedClipboardUrl.includes('\n') ? 'batch' : 'single');
       setError('');
       setMediaMeta(null);
       setSelectedFormatId('');
@@ -94,35 +92,40 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (mode === 'wildcard') {
+    if (looksLikeWildcard) {
       if (!wildcard || wildcard.error || !wildcard.urls.length) {
-        const msg =
+        setError(
           wildcard?.error === 'range_too_large'
-            ? ar ? 'الحد الأقصى للنمط المتسلسل 100 رابط.' : 'Wildcard range is limited to 100 links.'
-            : ar ? 'اكتب نمطاً صحيحاً مثل https://example.com/part_[01..10].zip' : 'Enter a valid pattern like https://example.com/part_[01..10].zip';
-        setError(msg);
+            ? ar ? 'الحد الأقصى للنمط المتسلسل 100 رابط.' : 'Pattern range is limited to 100 links.'
+            : ar ? 'نمط غير صالح. مثال: https://example.com/part_[01..10].zip' : 'Invalid pattern. Example: https://example.com/part_[01..10].zip'
+        );
         return;
       }
       for (const url of wildcard.urls) {
         onAdd(url, undefined, segments, undefined, undefined, queueId);
       }
-      setNotice(ar ? `تمت إضافة ${wildcard.urls.length} روابط متسلسلة.` : `Added ${wildcard.urls.length} pattern links.`);
+      setNotice(ar ? `تمت إضافة ${wildcard.urls.length} روابط.` : `Added ${wildcard.urls.length} links.`);
       setValue('');
       setError('');
       onClearClipboardUrl?.();
       return;
     }
 
-    if (parsed.invalid.length || !parsed.urls.length) {
+    const candidateList =
+      !isMultiline && !parsed.urls.length && trimmed
+        ? parseDownloadInput(extractSharedUrl(trimmed))
+        : parsed;
+
+    if (candidateList.invalid.length || !candidateList.urls.length) {
       setError(
         ar
-          ? 'أدخل رابط HTTP أو HTTPS كامل في كل سطر. صحّح الروابط غير الصالحة أولاً.'
-          : 'Use a complete HTTP or HTTPS URL on each line. Fix invalid links first.'
+          ? 'أدخل رابط HTTP أو HTTPS صحيح.'
+          : 'Enter a valid HTTP or HTTPS URL.'
       );
       return;
     }
-    if (parsed.urls.length > 100) {
-      setError(ar ? 'الحد الأقصى 100 رابط في الدفعة.' : 'Add up to 100 links at a time.');
+    if (candidateList.urls.length > 100) {
+      setError(ar ? 'الحد الأقصى 100 رابط في الدفعة.' : 'Maximum 100 links at once.');
       return;
     }
 
@@ -143,21 +146,31 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
         }
       : undefined;
 
-    for (const url of parsed.urls) {
+    const mirrors =
+      candidateList.urls.length === 1 && mirrorsText.trim()
+        ? mirrorsText
+            .split(/\r?\n/)
+            .map((u) => u.trim())
+            .filter((u) => /^https?:\/\/.+/i.test(u))
+        : undefined;
+
+    for (const url of candidateList.urls) {
       onAdd(
         url,
-        parsed.urls.length === 1 ? filename.trim() || undefined : undefined,
+        candidateList.urls.length === 1 ? filename.trim() || undefined : undefined,
         segments,
-        parsed.urls.length === 1 ? expectedHash.trim() || undefined : undefined,
-        parsed.urls.length === 1 ? mediaInfo : undefined,
-        queueId
+        candidateList.urls.length === 1 ? expectedHash.trim() || undefined : undefined,
+        candidateList.urls.length === 1 ? mediaInfo : undefined,
+        queueId,
+        mirrors?.length ? mirrors : undefined
       );
     }
 
-    setNotice(ar ? `تمت إضافة ${parsed.urls.length} إلى القائمة.` : `${parsed.urls.length} added to the list.`);
+    setNotice(ar ? `تمت الإضافة (${candidateList.urls.length}).` : `Added (${candidateList.urls.length}).`);
     setValue('');
     setFilename('');
     setExpectedHash('');
+    setMirrorsText('');
     setMediaMeta(null);
     setSelectedFormatId('');
     setError('');
@@ -165,74 +178,48 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     input.current?.focus();
   };
 
-  const countToSubmit = mode === 'wildcard' ? wildcard?.urls.length || 0 : parsed.urls.length;
+  const countToSubmit = looksLikeWildcard ? wildcard?.urls.length || 0 : parsed.urls.length;
+
+  const platformNames: Record<string, string> = {
+    youtube: 'YouTube',
+    instagram: 'Instagram',
+    tiktok: 'TikTok',
+    twitter: 'X / Twitter',
+    facebook: 'Facebook',
+    reddit: 'Reddit',
+    threads: 'Threads',
+    vimeo: 'Vimeo',
+    soundcloud: 'SoundCloud'
+  };
 
   return (
     <section className="quick-add" aria-label={ar ? 'إضافة تنزيل' : 'Add download'}>
       <form onSubmit={submit}>
-        <div className="quick-add-heading">
-          <label htmlFor="download-url">
-            <Link2 size={15} className="accent-text" />
-            <span>{ar ? 'إدخال رابط جديد' : 'Add download'}</span>
-          </label>
-
-          <div className="intake-mode-tabs" role="group" aria-label={ar ? 'وضع الإدخال' : 'Intake mode'}>
-            <button
-              type="button"
-              aria-pressed={mode === 'single'}
-              onClick={() => { setMode('single'); setError(''); }}
-            >
-              {ar ? 'مباشر' : 'Single'}
-            </button>
-            <button
-              type="button"
-              aria-pressed={mode === 'batch'}
-              onClick={() => { setMode('batch'); setError(''); }}
-            >
-              <ListPlus size={13} />
-              {ar ? 'متعدد' : 'Batch'}
-            </button>
-            <button
-              type="button"
-              aria-pressed={mode === 'wildcard'}
-              onClick={() => { setMode('wildcard'); setError(''); }}
-            >
-              <Sparkles size={13} />
-              {ar ? 'نمط [01..N]' : 'Pattern'}
-            </button>
-          </div>
-        </div>
-
         <div className="quick-add-row">
           <div className="url-field">
             <textarea
               ref={input}
               id="download-url"
               dir="ltr"
-              rows={mode === 'batch' ? 4 : 1}
+              rows={isMultiline ? 3 : 1}
               value={value}
               spellCheck={false}
               autoCapitalize="off"
               autoComplete="off"
               placeholder={
-                mode === 'batch'
-                  ? 'https://example.com/file.zip\nhttps://example.com/video.mp4'
-                  : mode === 'wildcard'
-                    ? 'https://example.com/archive_[01..12].zip'
-                    : 'https://example.com/file.zip'
+                ar
+                  ? 'الصق رابط ملف أو فيديو من إنستغرام، تيك توك، يوتيوب، X…'
+                  : 'Paste a file link or YouTube, Instagram, TikTok, X URL…'
               }
               aria-invalid={!!error}
-              aria-describedby="download-input-help"
               onChange={(event) => {
-                const next = event.target.value;
-                setValue(next);
+                setValue(event.target.value);
                 setError('');
                 setNotice('');
                 setMediaMeta(null);
-                if (next.includes('\n') && mode === 'single') setMode('batch');
               }}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && (mode !== 'batch' || event.ctrlKey || event.metaKey)) {
+                if (event.key === 'Enter' && (!isMultiline || event.ctrlKey || event.metaKey)) {
                   event.preventDefault();
                   submit(event);
                 }
@@ -241,22 +228,22 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
             <button
               type="button"
               className="icon-button"
-              aria-label={ar ? 'لصق الروابط' : 'Paste links'}
+              aria-label={ar ? 'لصق' : 'Paste'}
               title={ar ? 'لصق' : 'Paste'}
               onClick={async () => {
                 try {
                   const text = await navigator.clipboard.readText();
-                  const trimmed = text.trim();
-                  setValue(trimmed);
-                  setMode(trimmed.includes('\n') ? 'batch' : 'single');
+                  const next = text.includes('\n') ? text.trim() : extractSharedUrl(text);
+                  setValue(next);
                   setError('');
+                  setNotice('');
                   setMediaMeta(null);
                   input.current?.focus();
                 } catch {
                   setError(
                     ar
-                      ? 'تعذّرت قراءة الحافظة. استخدم Ctrl+V داخل حقل الرابط.'
-                      : 'Clipboard unavailable. Paste with Ctrl+V in the link field.'
+                      ? 'تعذّرت قراءة الحافظة. الصق الرابط يدوياً.'
+                      : 'Clipboard unavailable. Paste manually.'
                   );
                 }
               }}
@@ -265,21 +252,21 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
             </button>
           </div>
 
-          <button type="submit" className="action-button primary" disabled={!value.trim()}>
+          <button type="submit" className="action-button primary" disabled={!trimmed}>
             <ArrowDownToLine size={16} />
             <span>
               {ar
                 ? countToSubmit > 1
-                  ? `إضافة ${countToSubmit} روابط`
+                  ? `تنزيل (${countToSubmit})`
                   : 'تنزيل'
                 : countToSubmit > 1
-                  ? `Add ${countToSubmit} links`
+                  ? `Download (${countToSubmit})`
                   : 'Download'}
             </span>
           </button>
         </div>
 
-        <div className="quick-add-foot" id="download-input-help">
+        <div className="quick-add-foot">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -288,55 +275,62 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               aria-controls="download-options"
               onClick={() => setAdvanced(!advanced)}
             >
-              <ChevronDown size={14} className={advanced ? 'rotate-180' : ''} />
-              {ar ? 'خيارات التنزيل' : 'Download options'}
+              <SlidersHorizontal size={13} />
+              <span>{ar ? 'خيارات' : 'Options'}</span>
             </button>
 
             {isMediaPlatform && (
               <button
                 type="button"
-                className="text-button"
+                className="media-pill-btn"
                 disabled={probingMedia}
                 onClick={() => void inspectMedia()}
               >
                 {probingMedia ? <Loader2 size={13} className="animate-spin" /> : <Film size={13} />}
-                <span>{ar ? 'جلب الدقات المتاحة' : 'Inspect qualities'}</span>
+                <span>
+                  {probingMedia
+                    ? ar ? `جاري فحص ${platformNames[platform] || 'الفيديو'}…` : `Inspecting ${platformNames[platform] || 'media'}…`
+                    : ar ? `${platformNames[platform] || 'وسائط'} · اختيار الجودة` : `${platformNames[platform] || 'Media'} · Quality`}
+                </span>
               </button>
             )}
           </div>
 
-          <span>
-            {value.trim() && mode === 'batch'
-              ? ar
-                ? `${parsed.urls.length} صالحة · ${parsed.invalid.length} غير صالحة · ${parsed.duplicates} مكررة`
-                : `${parsed.urls.length} valid · ${parsed.invalid.length} invalid · ${parsed.duplicates} duplicates`
-              : mode === 'wildcard'
+          {(isMultiline || looksLikeWildcard) && trimmed && (
+            <span>
+              {looksLikeWildcard
                 ? wildcard?.urls.length
-                  ? ar
-                    ? `سيتم توليد ${wildcard.urls.length} رابط متسلسل`
-                    : `${wildcard.urls.length} sequential links ready`
-                  : ar
-                    ? 'يدعم الأرقام [01..20] والأحرف [a..f]'
-                    : 'Supports [01..20] and [a..f] ranges'
-                : typeof window !== 'undefined' && window.innerWidth <= 760
-                  ? ar
-                    ? 'يدعم الروابط المباشرة أو لصق عدة روابط'
-                    : 'Direct links or batch paste supported'
-                  : ar
-                    ? 'الصق رابطاً أو اسحبه هنا · Ctrl+N · Ctrl+K'
-                    : 'Paste or drop a link · Ctrl+N · Ctrl+K'}
-          </span>
+                  ? ar ? `${wildcard.urls.length} رابط متسلسل` : `${wildcard.urls.length} pattern links`
+                  : ar ? 'نمط غير مكتمل' : 'Incomplete pattern'
+                : ar
+                  ? `${parsed.urls.length} روابط`
+                  : `${parsed.urls.length} links`}
+            </span>
+          )}
         </div>
 
         {mediaMeta && mediaMeta.formats.length > 0 && (
           <div className="media-probe-box">
             <div className="media-probe-head">
-              <strong dir="auto">{mediaMeta.title}</strong>
-              <span style={{ fontSize: 11, color: 'var(--argon-subtle)' }}>
-                {mediaMeta.hasFfmpeg
-                  ? ar ? 'دمج HD/4K مفعّل' : 'FFmpeg HD mux ready'
-                  : ar ? 'صيغ مباشرة' : 'Direct formats'}
-              </span>
+              {mediaMeta.thumbnail && (
+                <img
+                  src={mediaMeta.thumbnail}
+                  alt=""
+                  className="media-probe-thumb"
+                  loading="lazy"
+                />
+              )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <strong dir="auto">{mediaMeta.title}</strong>
+                {mediaMeta.uploader && (
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--argon-muted)' }} dir="auto">
+                    {mediaMeta.uploader}
+                  </span>
+                )}
+              </div>
+              {mediaMeta.hasFfmpeg && (
+                <span className="queue-pill">FFmpeg HD</span>
+              )}
             </div>
             <div className="media-format-chips">
               {mediaMeta.formats.slice(0, 12).map((fmt) => (
@@ -357,17 +351,17 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
         {advanced && (
           <div className="download-options" id="download-options">
             <label>
-              {ar ? 'اسم الملف (لرابط واحد)' : 'Filename (single link)'}
+              {ar ? 'اسم الملف' : 'Filename'}
               <input
                 value={filename}
                 onChange={(event) => setFilename(event.target.value)}
-                disabled={parsed.urls.length > 1 || mode === 'wildcard'}
+                disabled={parsed.urls.length > 1 || looksLikeWildcard}
                 placeholder="filename.ext"
                 dir="ltr"
               />
             </label>
             <label>
-              {ar ? 'الحد الأقصى للاتصالات' : 'Maximum connections'}
+              {ar ? 'الاتصالات المتوازية' : 'Connections'}
               <select value={segments} onChange={(event) => setSegments(Number(event.target.value))}>
                 {[1, 4, 8, 16, 32].map((count) => (
                   <option key={count} value={count}>
@@ -377,28 +371,33 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               </select>
             </label>
             <label>
-              {ar ? 'الطابور المستهدف' : 'Target queue'}
+              {ar ? 'الطابور' : 'Queue'}
               <select value={queueId} onChange={(event) => setQueueId(event.target.value as QueueId)}>
-                <option value="main">{ar ? 'الطابور الرئيسي' : 'Main Queue'}</option>
-                <option value="night">{ar ? 'الجدول الليلي' : 'Night Queue'}</option>
-                <option value="media">{ar ? 'طابور الوسائط' : 'Media Queue'}</option>
+                <option value="main">{ar ? 'رئيسي' : 'Main'}</option>
+                <option value="night">{ar ? 'ليلي' : 'Night'}</option>
+                <option value="media">{ar ? 'وسائط' : 'Media'}</option>
               </select>
             </label>
             <label>
-              {ar ? 'بصمة SHA-256 المتوقعة (اختياري)' : 'Expected SHA-256 (optional)'}
+              {ar ? 'بصمة SHA-256 (اختياري)' : 'Expected SHA-256'}
               <input
                 value={expectedHash}
                 onChange={(event) => setExpectedHash(event.target.value)}
-                disabled={parsed.urls.length > 1 || mode === 'wildcard'}
+                disabled={parsed.urls.length > 1 || looksLikeWildcard}
                 placeholder="64 hex chars"
                 dir="ltr"
               />
             </label>
-            <p>
-              {ar
-                ? 'يقسّم المحرك الملف ديناميكياً إذا دعم الخادم النطاقات؛ ويتراجع تلقائياً لاتصال واحد عند الحاجة.'
-                : 'The engine dynamically splits supported byte-range transfers and safely falls back to single stream when required.'}
-            </p>
+            <label style={{ gridColumn: '1 / -1' }}>
+              {ar ? 'روابط المرايا البديلة (اختياري)' : 'Mirror URLs (optional)'}
+              <input
+                value={mirrorsText}
+                onChange={(event) => setMirrorsText(event.target.value)}
+                disabled={parsed.urls.length > 1 || looksLikeWildcard}
+                placeholder="https://mirror.example.com/file.zip"
+                dir="ltr"
+              />
+            </label>
           </div>
         )}
 
@@ -407,9 +406,9 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
             {error}
           </p>
         )}
-        <span className="inline-notice" role="status">
+        <output className="inline-notice" aria-live="polite">
           {notice}
-        </span>
+        </output>
       </form>
     </section>
   );

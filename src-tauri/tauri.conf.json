@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ARGON",
   "mainBinaryName": "ARGON",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "identifier": "com.otium.downloader",
   "build": {
     "frontendDist": "../dist",
@@ -30,7 +30,7 @@
         "default-src": "'self' https://tauri.localhost",
         "connect-src": "'self' ipc: http://ipc.localhost https://ipc.localhost https://tauri.localhost https://api.github.com https://github.com https://raw.githubusercontent.com https://release-assets.githubusercontent.com https://objects.githubusercontent.com",
         "font-src": "'self' data: https://tauri.localhost",
-        "img-src": "'self' data: blob: https://tauri.localhost",
+        "img-src": "'self' data: blob: https://tauri.localhost https:",
         "media-src": "'self' blob: data: https://tauri.localhost",
         "style-src": "'self' 'unsafe-inline'",
         "script-src": "'self'",

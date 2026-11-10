@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Globe,
-  Wifi,
   AlertCircle,
   X,
   ArrowDownToLine,
@@ -9,8 +8,6 @@ import {
   ArrowDownLeft,
   FolderOpen,
   CheckCircle2,
-  Power,
-  HardDrive,
   Puzzle,
   Pause,
   Play,
@@ -18,10 +15,9 @@ import {
   Search,
   Sun,
   Moon,
-  Command,
-  Plus
+  Command
 } from 'lucide-react';
-import { Header, CURRENT_VERSION, type MainViewTab } from './components/Header';
+import { Header, type MainViewTab } from './components/Header';
 import { ArgonMark } from './components/ArgonMark';
 import { QuickAddBar } from './components/QuickAddBar';
 import { TaskList } from './components/TaskList';
@@ -34,7 +30,7 @@ import { ThroughputSparkline } from './components/ThroughputSparkline';
 import { downloadManager } from './core/downloadManager';
 import { updateManager } from './core/updates/updateManager';
 import { useFlow } from './core/useFlow';
-import { nativeRuntime } from './core/flowClient';
+import { extractSharedUrl } from './core/downloadInput';
 import { formatBytes, formatSpeed } from './core/segmentation';
 import { consumeInitialAndroidSharedUrl, syncSystemBarTheme } from './core/safeArea';
 import type { DownloadTask, MediaMetadata, QueueId } from './types/downloader';
@@ -59,7 +55,6 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [runtime, setRuntime] = useState(downloadManager.getRuntimeStatus());
   const [theme, setTheme] = useState<'dark' | 'light'>(() => downloadManager.getSettings().theme ?? 'dark');
-  const [showMobileFab, setShowMobileFab] = useState(false);
   const [settingsTabRequest, setSettingsTabRequest] = useState<{ tab: SettingsTab; key: number } | null>(null);
   const openSettingsTab = (tab: SettingsTab) => {
     setSettingsTabRequest({ tab, key: performance.now() });
@@ -76,12 +71,6 @@ export function App() {
   const ar = lang === 'ar';
 
   useEffect(() => updateManager.start(), []);
-
-  useEffect(() => {
-    const onScroll = () => setShowMobileFab(window.scrollY > 150);
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
 
   useEffect(() => {
     syncSystemBarTheme(theme);
@@ -139,14 +128,14 @@ export function App() {
   useEffect(() => {
     const initial = consumeInitialAndroidSharedUrl();
     if (initial) {
-      setClipboardUrl({ text: initial, key: performance.now() });
+      setClipboardUrl({ text: extractSharedUrl(initial), key: performance.now() });
       setActiveView('downloads');
       setFinished(false);
     }
     const onShared = (event: Event) => {
       const text = (event as CustomEvent<string>).detail?.trim();
       if (text) {
-        setClipboardUrl({ text, key: performance.now() });
+        setClipboardUrl({ text: extractSharedUrl(text), key: performance.now() });
         setActiveView('downloads');
         setFinished(false);
       }
@@ -180,7 +169,8 @@ export function App() {
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
       if ((event.target as HTMLElement)?.closest('input,textarea,[contenteditable="true"]')) return;
-      const text = event.clipboardData?.getData('text/plain')?.trim();
+      const raw = event.clipboardData?.getData('text/plain')?.trim();
+      const text = raw ? extractSharedUrl(raw) : '';
       if (text && /^https?:\/\//i.test(text)) {
         event.preventDefault();
         setClipboardUrl({ text, key: performance.now() });
@@ -234,12 +224,12 @@ export function App() {
     segments?: number,
     expectedSha256?: string,
     mediaInfo?: MediaMetadata,
-    queueId?: QueueId
+    queueId?: QueueId,
+    mirrors?: string[]
   ) => {
-    const id = downloadManager.addTask(url, filename, segments, expectedSha256, undefined, undefined, mediaInfo, false, queueId);
     setFinished(false);
     setActiveView('downloads');
-    setInspectedId(id);
+    void downloadManager.addTaskAsync(url, filename, segments, expectedSha256, undefined, mediaInfo, queueId, mirrors);
   };
 
   const share = (task: DownloadTask) => {
@@ -307,6 +297,17 @@ export function App() {
 
             <button
               type="button"
+              className="topbar-chip hide-on-mobile"
+              onClick={() => setActiveView('browser')}
+              aria-label={ar ? 'إضافة المتصفح' : 'Browser extension'}
+              title={ar ? 'إضافة المتصفح' : 'Browser extension'}
+            >
+              <Puzzle size={14} />
+              <span>{ar ? 'المتصفح' : 'Extension'}</span>
+            </button>
+
+            <button
+              type="button"
               className="topbar-chip command-trigger"
               onClick={() => setPaletteOpen(true)}
               aria-label={ar ? 'لوحة الأوامر' : 'Command Palette'}
@@ -314,24 +315,6 @@ export function App() {
               <Command size={13} />
               <span>{ar ? 'أوامر' : 'Commands'}</span>
               <kbd dir="ltr">Ctrl+K</kbd>
-            </button>
-
-            <button
-              type="button"
-              className={`sharing-indicator ${flow.snapshot?.enabled ? 'is-enabled' : ''}`}
-              disabled={!nativeRuntime() || flow.pending.includes('flow_start') || flow.pending.includes('flow_stop')}
-              onClick={() => {
-                void flow.client.execute(flow.snapshot?.enabled ? 'flow_stop' : 'flow_start').catch(() => {});
-              }}
-              title={ar ? 'مفتاح المشاركة المحلية' : 'Local Sharing Switch'}
-            >
-              <span className="presence" />
-              <span>
-                {flow.snapshot?.enabled
-                  ? ar ? 'المشاركة مفعّلة' : 'Sharing active'
-                  : ar ? 'المشاركة متوقفة' : 'Sharing off'}
-              </span>
-              <Power size={12} />
             </button>
 
             <button
@@ -387,17 +370,13 @@ export function App() {
           {activeView === 'downloads' && (
             <>
               <div className="view-header">
-                <div className="view-heading">
-                  <span className="eyebrow">{ar ? 'إدارة النقل المتقدم' : 'TRANSFER WORKSPACE'}</span>
-                  <div className="view-header-title">
-                    <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
+                <div className="view-header-title">
+                  <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
+                  {tasks.length > 0 && (
                     <span className="count-badge" dir="ltr">
                       {tasks.length}
                     </span>
-                  </div>
-                  <p className="view-description">
-                    {ar ? 'تسريع متعدد المسارات مع تقسيم ديناميكي وتحقق كامل من الملفات.' : 'Multi-segment acceleration with dynamic work-stealing and integrity verification.'}
-                  </p>
+                  )}
                 </div>
 
                 <div className="view-header-actions">
@@ -430,43 +409,18 @@ export function App() {
                   <span>
                     {runtime === 'preview'
                       ? ar
-                        ? 'هذه معاينة للواجهة. افتح تطبيق ARGON لتنزيل الملفات والاتصال بإضافة المتصفح.'
-                        : 'Interface preview. Open the ARGON desktop app to download files and connect your browser.'
+                        ? 'معاينة الواجهة فقط — التنزيل يتطلب تشغيل التطبيق.'
+                        : 'Interface preview only — open ARGON app to download.'
                       : runtime === 'error'
                         ? ar
                           ? 'تعذّرت تهيئة المحرك. أعد فتح التطبيق وتحقق من مجلد الحفظ.'
-                          : 'The engine could not start. Reopen the app and check the download directory.'
+                          : 'Engine could not start. Check download folder.'
                         : ar
-                          ? 'جارٍ تهيئة المحرك ومجلد الحفظ…'
-                          : 'Preparing the engine and download folder…'}
+                          ? 'جارٍ تهيئة المحرك…'
+                          : 'Preparing engine…'}
                   </span>
                 </div>
               )}
-
-              <div className="transfer-overview" aria-label={ar ? 'ملخص التنزيلات' : 'Transfer overview'}>
-                <div>
-                  <span>{ar ? 'السرعة' : 'SPEED'}</span>
-                  <strong dir="ltr">{formatSpeed(stats.currentTotalSpeed)}</strong>
-                </div>
-                <div>
-                  <span>{ar ? 'جارٍ التنزيل' : 'ACTIVE'}</span>
-                  <strong>
-                    {stats.activeCount}
-                    <small>{ar ? 'ملفات' : 'files'}</small>
-                  </strong>
-                </div>
-                <div>
-                  <span>{ar ? 'الانتظار' : 'QUEUED'}</span>
-                  <strong>
-                    {stats.queuedCount}
-                    <small>{ar ? 'ملفات' : 'files'}</small>
-                  </strong>
-                </div>
-                <div>
-                  <span>{ar ? 'المحمّل' : 'DOWNLOADED'}</span>
-                  <strong dir="ltr">{formatBytes(stats.totalBytesDownloaded)}</strong>
-                </div>
-              </div>
 
               <QuickAddBar
                 lang={lang}
@@ -500,7 +454,9 @@ export function App() {
                 </div>
 
                 {inspectedTask && (
-                  <TaskInspector task={inspectedTask} lang={lang} onClose={() => setInspectedId(null)} />
+                  <div className="desktop-inspector-wrap">
+                    <TaskInspector task={inspectedTask} lang={lang} onClose={() => setInspectedId(null)} />
+                  </div>
                 )}
               </div>
             </>
@@ -512,29 +468,7 @@ export function App() {
           {activeView === 'browser' && <BrowserView lang={lang} />}
           {activeView === 'settings' && <SettingsView lang={lang} requestedTab={settingsTabRequest} />}
         </main>
-
-        <footer className="workspace-footer">
-          <span>
-            <HardDrive size={13} />
-            <span>{ar ? 'الملفات تُحفظ على جهازك' : 'Files are saved on your device'}</span>
-          </span>
-          <span dir="ltr">ARGON CORE v{CURRENT_VERSION}</span>
-        </footer>
       </div>
-
-      {activeView === 'downloads' && showMobileFab && (
-        <button
-          type="button"
-          className="mobile-fab-add"
-          aria-label={ar ? 'إضافة رابط' : 'Add link'}
-          onClick={() => {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-            document.getElementById('download-url')?.focus();
-          }}
-        >
-          <Plus size={22} />
-        </button>
-      )}
 
       <FlowDialogs lang={lang} />
 
@@ -639,7 +573,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
                   {entry.kind === 'download'
                     ? ar ? 'تنزيل' : 'Download'
                     : `${entry.kind === 'send' ? (ar ? 'إلى' : 'To') : ar ? 'من' : 'From'} ${entry.peer}`}{' '}
-                  · {formatBytes(entry.size)} ·{' '}
+                  · <span dir="ltr">{formatBytes(entry.size)}</span> ·{' '}
                   {new Date(entry.date).toLocaleString(ar ? 'ar-IQ' : 'en', {
                     month: 'short',
                     day: 'numeric',
@@ -680,8 +614,7 @@ function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTas
           ))
         ) : (
           <div className="quiet-empty">
-            <Wifi size={22} />
-            <p>{ar ? 'لا توجد عمليات مسجلة حتى الآن.' : 'No recorded activity yet.'}</p>
+            <p>{ar ? 'لا توجد عمليات مسجلة حتى الآن.' : 'No activity yet.'}</p>
           </div>
         )}
       </div>

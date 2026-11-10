@@ -74,12 +74,15 @@ jobs:
         with:
           workspaces: |
             src-tauri -> target
+            downloader-core -> target
             flow-core -> target
       - run: npm ci
       - run: npm run prepare:tools
       - run: npm run build
       - name: Test native download and sharing engines
         run: |
+          cargo test --locked --manifest-path downloader-core/Cargo.toml -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --manifest-path src-tauri/Cargo.toml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --manifest-path flow-core/Cargo.toml -- --test-threads=1
@@ -156,6 +159,7 @@ jobs:
         with:
           workspaces: |
             src-tauri -> target
+            downloader-core -> target
             flow-core -> target
       - run: npm ci
       - run: npm run build

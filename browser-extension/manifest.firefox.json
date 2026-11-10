@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "ARGON Integration",
+  "version": "2.4.0",
+  "description": "Send downloads to ARGON, choose files from a page, and control automatic capture per website.",
+  "author": "XRTM8",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "argon@xrtm8.github.io",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "contextMenus",
+    "downloads",
+    "storage",
+    "notifications",
+    "webRequest",
+    "activeTab",
+    "scripting"
+  ],
+  "optional_permissions": [
+    "cookies"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:41523/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "video-button.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ARGON",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

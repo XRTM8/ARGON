@@ -206,10 +206,12 @@ export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (
 
       <div className="view-header">
         <div className="view-header-title">
-          <h1>{ar ? 'المشاركة المحلية المشفرة' : 'Encrypted Local Sharing'}</h1>
-          <span className="count-badge" dir="ltr">
-            {snapshot?.peers.length || 0} {ar ? 'أجهزة' : 'devices'}
-          </span>
+          <h1>{ar ? 'المشاركة المحلية' : 'Local Sharing'}</h1>
+          {Boolean(snapshot?.peers.length) && (
+            <span className="count-badge" dir="ltr">
+              {snapshot?.peers.length}
+            </span>
+          )}
         </div>
 
         <button
@@ -218,7 +220,7 @@ export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (
           onClick={toggle}
         >
           <Power size={15} />
-          <span>{enabled ? (ar ? 'إيقاف الخدمة' : 'Stop Service') : ar ? 'تشغيل المشاركة' : 'Enable Sharing'}</span>
+          <span>{enabled ? (ar ? 'إيقاف' : 'Turn off') : ar ? 'تشغيل المشاركة' : 'Enable sharing'}</span>
         </button>
       </div>
 
@@ -260,10 +262,12 @@ export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (
 
       <div className="sharing-grid">
         <section className="sharing-workspace">
-          <div className="section-title">
-            <h2>{ar ? 'الأجهزة المتصلة' : 'Local Network Devices'}</h2>
-            <span>{enabled ? (ar ? 'شبكة Wi-Fi المحلية' : 'LAN / Hotspot') : ar ? 'الخدمة غير مفعّلة' : 'Offline'}</span>
-          </div>
+          {enabled && (
+            <div className="section-title">
+              <h2>{ar ? 'الأجهزة القريبة' : 'Nearby Devices'}</h2>
+              <span>{ar ? 'Wi-Fi محلي' : 'Local Wi-Fi'}</span>
+            </div>
+          )}
 
           {snapshot?.peers.length ? (
             <div className="peer-grid">
@@ -430,13 +434,16 @@ export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (
             </div>
           )}
 
-          <div className="section-title" style={{ marginTop: 22 }}>
-            <h2>{ar ? 'عمليات النقل النشطة' : 'Live Transfers'}</h2>
-            <span>Flow Protocol v2</span>
-          </div>
-          <div className="glass-panel">
-            <FlowTransferList lang={lang} />
-          </div>
+          {(enabled || (snapshot?.transfers.length ?? 0) > 0) && (
+            <>
+              <div className="section-title" style={{ marginTop: 18 }}>
+                <h2>{ar ? 'عمليات النقل' : 'Transfers'}</h2>
+              </div>
+              <div className="glass-panel">
+                <FlowTransferList lang={lang} />
+              </div>
+            </>
+          )}
         </section>
 
         <aside className="sharing-aside glass-panel">

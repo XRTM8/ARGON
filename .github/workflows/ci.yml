@@ -41,9 +41,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "src-tauri -> target"
+          workspaces: |
+            src-tauri -> target
+            downloader-core -> target
+            flow-core -> target
       - name: Cargo Check
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Test native download engine
+        run: cargo test --locked --manifest-path downloader-core/Cargo.toml -- --test-threads=1
       - name: Cargo Test
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Test encrypted sharing

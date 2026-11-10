@@ -1,25 +1,32 @@
-import type { DownloadTask, DownloadStats, AppSettings, QueueId } from '../types/downloader';
+import type {
+  AppSettings,
+  DownloadStats,
+  DownloadTask,
+  DownloaderSnapshot,
+  MediaMetadata,
+  MediaToolsStatus,
+  QueueId
+} from '../types/downloader';
 import {
   calculateSegments,
-  extractFilename,
-  sanitizeFilename,
+  deduplicateFilename,
   detectCategory,
-  deduplicateFilename
+  extractFilename,
+  sanitizeFilename
 } from './segmentation';
 import { resolveUniversalLink } from './linkResolver';
-import { detectPlatform, resolveMediaDownloadUrl } from './mediaResolver';
 import { isAndroidRuntime, syncSystemBarTheme } from './safeArea';
 import { soundEngine } from './sound';
 import { telemetryStore } from './telemetryStore';
 import { isMagnetUri, parseMagnetUri, type TorrentMetadata } from './torrent';
 import {
-  loadTasksFromStorage,
-  saveTasksToStorage,
+  getStorage,
   loadSettingsFromStorage,
-  saveSettingsToStorage
+  loadTasksFromStorage
 } from './storage';
 
-// Check for Tauri native runtime
+const MIGRATED_KEY = 'argon_migrated_to_rust_v1';
+
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -33,263 +40,268 @@ export interface ProbeResult {
   last_modified?: string;
 }
 
-interface SpeedSample {
-  lastBytes: number;
-  lastTime: number;
-}
-
-interface NativeRun {
-  nativeId: string;
-  cancelled: boolean;
-  promise: Promise<void>;
-}
+const DEFAULT_SETTINGS: AppSettings = {
+  maxConcurrentDownloads: 3,
+  maxConnectionsPerHost: 4,
+  globalSpeedLimitBytes: 0,
+  enableNotifications: true,
+  enableSound: true,
+  soundVolume: 0.5,
+  defaultDirectory: 'Downloads',
+  defaultSegmentCount: 8,
+  autoShutdownOnComplete: false,
+  nightSchedulerEnabled: false,
+  nightSchedulerStartHour: 2,
+  nightSchedulerEndHour: 8,
+  theme: 'dark',
+  dynamicWorkStealing: true,
+  clipboardMonitorEnabled: false,
+  autoVerifyIntegrity: false,
+  autoRetryEnabled: true,
+  maxAutoRetries: 3,
+  minimizeToTray: true,
+  startWithWindows: false
+};
 
 export class DownloadManager {
   private ready: Promise<void>;
   private runtimeError?: string;
   private runtimeReady = false;
-  private runs = new Map<string, NativeRun>();
-  private pendingBrowserTasks = new Set<string>();
   private destroyed = false;
-  private batchPausing = false;
-  private updateInstallation = false;
   private tasks: Map<string, DownloadTask> = new Map();
   private listeners: Set<() => void> = new Set();
-  private speedSamples: Map<string, SpeedSample> = new Map();
-  private speedInterval: number | null = null;
   private tauriUnlisten: (() => void) | null = null;
-  private defaultDownloadDir: string | null = null;
   private notifyTimeout: number | null = null;
-  private storageSaveTimeout: number | null = null;
-  private progressSaveTimeout: number | null = null;
+  private refreshTimeout: number | null = null;
+  private refreshing = false;
+  private refreshQueued = false;
   private speedHistory: number[] = new Array(20).fill(0);
+  private stats: DownloadStats = {
+    activeCount: 0,
+    queuedCount: 0,
+    completedCount: 0,
+    totalBytesDownloaded: 0,
+    currentTotalSpeed: 0,
+    speedLimitBytesPerSec: 0
+  };
+  private settings: AppSettings = { ...DEFAULT_SETTINGS };
+  private boundActiveIds = new Set<string>();
   private lastAndroidNotifyAt = 0;
   private lastAndroidActiveCount = 0;
 
-  // App Settings
-  private maxConcurrentDownloads = 3;
-  private speedLimitBytes = 0;
-  private notificationsEnabled = true;
-  private soundEnabled = true;
-  private defaultSegmentCount = 8;
-  private autoShutdownOnComplete = false;
-  private nightSchedulerEnabled = false;
-  private nightSchedulerStartHour = 2; // 02:00
-  private nightSchedulerEndHour = 8;   // 08:00
-  private theme: 'dark' | 'light' = 'dark';
-  private dynamicWorkStealing = true;
-  private clipboardMonitorEnabled = false;
-  private autoVerifyIntegrity = false;
-
   constructor() {
-    this.loadSettings();
-    this.loadFromStorage();
-    this.startSpeedLoop();
-    this.ready = Promise.all([this.initTauriListeners(), this.initDefaultDirectory()]).then(async () => {
-      if (isTauri() && !this.destroyed) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('set_browser_bridge_ready');
+    this.loadLocalPreviewFallback();
+    this.ready = this.initNative()
+      .then(() => {
+        this.runtimeReady = true;
+        this.notify(true);
+      })
+      .catch((error) => {
+        this.runtimeError = String(error);
+        this.notify(true);
+      });
+  }
+
+  private loadLocalPreviewFallback() {
+    const saved = loadSettingsFromStorage();
+    if (saved) {
+      this.settings = { ...this.settings, ...saved };
+    }
+    soundEngine.enabled = this.settings.enableSound;
+    soundEngine.volume = this.settings.soundVolume ?? 0.5;
+    syncSystemBarTheme(this.settings.theme ?? 'dark');
+
+    if (!isTauri()) {
+      for (const t of loadTasksFromStorage()) {
+        this.tasks.set(t.id, t);
       }
-      this.runtimeReady = true; this.notify(true);
-    }).catch((error) => {
-      this.runtimeError = String(error);
-      this.notify(true);
+      this.recomputePreviewStats();
+    }
+  }
+
+  private async initNative(): Promise<void> {
+    if (!isTauri()) return;
+    const [{ invoke }, { listen }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/event')
+    ]);
+
+    const unlistenState = await listen('download-state-changed', () => {
+      this.scheduleRefresh();
     });
-  }
 
-  private loadSettings() {
-    const parsed = loadSettingsFromStorage();
-    if (!parsed) return;
+    const unlistenEvent = await listen<{
+      type: string;
+      data?: { taskId?: string; filename?: string; error?: string };
+    }>('download-event', (event) => {
+      const payload = event.payload;
+      if (!payload) return;
+      if (payload.type === 'taskCompleted') {
+        soundEngine.playCompleteChime();
+        this.showNotification('اكتمل التنزيل', `تم حفظ الملف: ${payload.data?.filename || ''}`);
+      } else if (payload.type === 'taskFailed') {
+        soundEngine.playErrorTone();
+      } else if (payload.type === 'allIdleShutdownPending') {
+        this.showNotification('إيقاف التشغيل المجدول', 'اكتملت جميع التحميلات، جاري إيقاف تشغيل الكمبيوتر...');
+      }
+      this.scheduleRefresh();
+    });
 
-    if (typeof parsed.maxConcurrentDownloads === 'number') {
-      this.maxConcurrentDownloads = Math.max(1, parsed.maxConcurrentDownloads);
-    }
-    if (typeof parsed.globalSpeedLimitBytes === 'number') {
-      this.speedLimitBytes = Math.max(0, parsed.globalSpeedLimitBytes);
-    }
-    if (typeof parsed.enableNotifications === 'boolean') {
-      this.notificationsEnabled = parsed.enableNotifications;
-    }
-    if (typeof parsed.enableSound === 'boolean') {
-      this.soundEnabled = parsed.enableSound;
-      soundEngine.enabled = this.soundEnabled;
-    }
-    if (typeof parsed.soundVolume === 'number') {
-      soundEngine.volume = Math.max(0, Math.min(1, parsed.soundVolume));
-    }
-    if (typeof parsed.defaultSegmentCount === 'number') {
-      this.defaultSegmentCount = Math.max(1, Math.min(32, parsed.defaultSegmentCount));
-    }
-    if (typeof parsed.autoShutdownOnComplete === 'boolean') {
-      this.autoShutdownOnComplete = parsed.autoShutdownOnComplete;
-    }
-    if (typeof parsed.nightSchedulerEnabled === 'boolean') {
-      this.nightSchedulerEnabled = parsed.nightSchedulerEnabled;
-    }
-    if (typeof parsed.nightSchedulerStartHour === 'number') {
-      this.nightSchedulerStartHour = Math.max(0, Math.min(23, parsed.nightSchedulerStartHour));
-    }
-    if (typeof parsed.nightSchedulerEndHour === 'number') {
-      this.nightSchedulerEndHour = Math.max(0, Math.min(23, parsed.nightSchedulerEndHour));
-    }
-    if (parsed.theme === 'light' || parsed.theme === 'dark') {
-      this.theme = parsed.theme;
-    }
-    syncSystemBarTheme(this.theme);
-    if (typeof parsed.dynamicWorkStealing === 'boolean') {
-      this.dynamicWorkStealing = parsed.dynamicWorkStealing;
-    }
-    if (typeof parsed.clipboardMonitorEnabled === 'boolean') {
-      this.clipboardMonitorEnabled = parsed.clipboardMonitorEnabled;
-    }
-    if (typeof parsed.autoVerifyIntegrity === 'boolean') {
-      this.autoVerifyIntegrity = parsed.autoVerifyIntegrity;
-    }
-  }
-
-  private saveSettingsToStorage() {
-    const payload: AppSettings = {
-      maxConcurrentDownloads: this.maxConcurrentDownloads,
-      globalSpeedLimitBytes: this.speedLimitBytes,
-      enableNotifications: this.notificationsEnabled,
-      enableSound: this.soundEnabled,
-      soundVolume: soundEngine.volume,
-      defaultDirectory: this.defaultDownloadDir || 'Downloads',
-      defaultSegmentCount: this.defaultSegmentCount,
-      autoShutdownOnComplete: this.autoShutdownOnComplete,
-      nightSchedulerEnabled: this.nightSchedulerEnabled,
-      nightSchedulerStartHour: this.nightSchedulerStartHour,
-      nightSchedulerEndHour: this.nightSchedulerEndHour,
-      theme: this.theme,
-      dynamicWorkStealing: this.dynamicWorkStealing,
-      clipboardMonitorEnabled: this.clipboardMonitorEnabled,
-      autoVerifyIntegrity: this.autoVerifyIntegrity
+    this.tauriUnlisten = () => {
+      unlistenState();
+      unlistenEvent();
     };
-    saveSettingsToStorage(payload);
+    if (this.destroyed) {
+      this.tauriUnlisten();
+      this.tauriUnlisten = null;
+      return;
+    }
+
+    // One-time migration from legacy localStorage to Rust persistence
+    const storage = getStorage();
+    if (storage && !storage.getItem(MIGRATED_KEY)) {
+      const legacyTasks = loadTasksFromStorage().filter((t) => !t.torrentInfo);
+      if (legacyTasks.length > 0) {
+        await invoke('dl_migrate_legacy', { tasks: legacyTasks }).catch(() => {});
+      }
+      const legacySettings = loadSettingsFromStorage();
+      if (legacySettings) {
+        await invoke('dl_update_settings', {
+          patch: {
+            maxConcurrentDownloads: legacySettings.maxConcurrentDownloads,
+            globalSpeedLimitBytes: legacySettings.globalSpeedLimitBytes,
+            enableNotifications: legacySettings.enableNotifications,
+            enableSound: legacySettings.enableSound,
+            soundVolume: legacySettings.soundVolume,
+            defaultSegmentCount: legacySettings.defaultSegmentCount,
+            autoShutdownOnComplete: legacySettings.autoShutdownOnComplete,
+            nightSchedulerEnabled: legacySettings.nightSchedulerEnabled,
+            nightSchedulerStartHour: legacySettings.nightSchedulerStartHour,
+            nightSchedulerEndHour: legacySettings.nightSchedulerEndHour,
+            theme: legacySettings.theme,
+            dynamicWorkStealing: legacySettings.dynamicWorkStealing,
+            clipboardMonitorEnabled: legacySettings.clipboardMonitorEnabled,
+            autoVerifyIntegrity: legacySettings.autoVerifyIntegrity
+          }
+        }).catch(() => {});
+      }
+      try {
+        storage.setItem(MIGRATED_KEY, '1');
+      } catch {
+        // Ignore storage errors
+      }
+    }
+
+    await invoke('get_default_download_directory');
+    await this.refreshFromNative();
+    await invoke('set_browser_bridge_ready').catch(() => {});
   }
 
-  private loadFromStorage() {
-    const restored = loadTasksFromStorage();
-    for (const task of restored) {
-      this.tasks.set(task.id, task);
+  private scheduleRefresh() {
+    if (this.destroyed || this.refreshTimeout !== null) return;
+    this.refreshTimeout = globalThis.setTimeout(() => {
+      this.refreshTimeout = null;
+      void this.refreshFromNative();
+    }, 80) as unknown as number;
+  }
+
+  public async refreshFromNative(): Promise<void> {
+    if (!isTauri() || this.destroyed) return;
+    if (this.refreshing) {
+      this.refreshQueued = true;
+      return;
+    }
+    this.refreshing = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const snap = await invoke<DownloaderSnapshot>('dl_snapshot');
+      if (this.destroyed) return;
+      this.applySnapshot(snap);
+    } catch {
+      // Transient IPC read error
+    } finally {
+      this.refreshing = false;
+      if (this.refreshQueued && !this.destroyed) {
+        this.refreshQueued = false;
+        void this.refreshFromNative();
+      }
     }
   }
 
-  private scheduleStorageSave() {
-    if (this.progressSaveTimeout !== null) {
-      globalThis.clearTimeout(this.progressSaveTimeout);
-      this.progressSaveTimeout = null;
+  private applySnapshot(snap: DownloaderSnapshot) {
+    // Keep any in-flight optimistic pending tasks that haven't resolved yet
+    const next = new Map<string, DownloadTask>();
+    for (const t of snap.tasks) {
+      next.set(t.id, t);
     }
-    if (this.storageSaveTimeout !== null) return;
+    for (const [id, existing] of this.tasks.entries()) {
+      if (id.startsWith('pending_') && !next.has(id)) {
+        next.set(id, existing);
+      }
+    }
+    this.tasks = next;
+    this.stats = snap.stats;
+    this.settings = { ...DEFAULT_SETTINGS, ...snap.settings };
+    this.speedHistory = snap.speedHistory?.length ? snap.speedHistory : new Array(20).fill(0);
 
-    this.storageSaveTimeout = (typeof window !== 'undefined' ? globalThis.setTimeout : setTimeout)(() => {
-      this.storageSaveTimeout = null;
-      saveTasksToStorage(Array.from(this.tasks.values()));
-    }, 400) as unknown as number;
+    soundEngine.enabled = this.settings.enableSound;
+    soundEngine.volume = this.settings.soundVolume ?? 0.5;
+    syncSystemBarTheme(this.settings.theme ?? 'dark');
+
+    const activeIds = new Set<string>();
+    for (const t of snap.tasks) {
+      if (t.status === 'downloading') {
+        activeIds.add(t.id);
+        if (!this.boundActiveIds.has(t.id)) {
+          this.boundActiveIds.add(t.id);
+          telemetryStore.bindNativeRun(t.id, t.id);
+        }
+      }
+    }
+    for (const prev of Array.from(this.boundActiveIds)) {
+      if (!activeIds.has(prev)) {
+        this.boundActiveIds.delete(prev);
+        telemetryStore.bindNativeRun(prev, null);
+      }
+    }
+
+    this.syncAndroidNotification(Date.now());
+    this.notify(false);
   }
 
-  /** Low-frequency progress checkpoint to prevent JSON.stringify GC spikes during fast transfers. */
-  private scheduleProgressCheckpoint() {
-    if (this.progressSaveTimeout !== null || this.storageSaveTimeout !== null) return;
-    this.progressSaveTimeout = (typeof window !== 'undefined' ? globalThis.setTimeout : setTimeout)(() => {
-      this.progressSaveTimeout = null;
-      saveTasksToStorage(Array.from(this.tasks.values()));
-    }, 4000) as unknown as number;
+  private recomputePreviewStats() {
+    let activeCount = 0;
+    let queuedCount = 0;
+    let completedCount = 0;
+    let totalBytesDownloaded = 0;
+    let currentTotalSpeed = 0;
+    for (const t of this.tasks.values()) {
+      if (t.status === 'downloading') {
+        activeCount++;
+        currentTotalSpeed += t.speedBytesPerSec;
+      } else if (t.status === 'queued') queuedCount++;
+      else if (t.status === 'completed') completedCount++;
+      totalBytesDownloaded += t.downloadedBytes;
+    }
+    this.stats = {
+      activeCount,
+      queuedCount,
+      completedCount,
+      totalBytesDownloaded,
+      currentTotalSpeed,
+      speedLimitBytesPerSec: this.settings.globalSpeedLimitBytes
+    };
   }
 
   private showNotification(title: string, body: string) {
-    if (!this.notificationsEnabled || typeof window === 'undefined') return;
+    if (!this.settings.enableNotifications || typeof window === 'undefined') return;
     try {
-      if ('Notification' in window) {
-        if (Notification.permission === 'granted') {
-          new Notification(title, { body });
-        }
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(title, { body });
       }
     } catch {
       // Notification unsupported
     }
-  }
-
-  private async initDefaultDirectory() {
-    if (!isTauri()) return;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      this.defaultDownloadDir = await invoke<string>('get_default_download_directory');
-      const savedDirectory = loadSettingsFromStorage()?.defaultDirectory;
-      if (savedDirectory && savedDirectory !== 'Downloads') {
-        try { this.defaultDownloadDir = await invoke<string>('validate_download_directory', { directory: savedDirectory }); }
-        catch { /* An unavailable saved directory falls back to the native Downloads folder. */ }
-      }
-      if (this.speedLimitBytes > 0) {
-        await invoke('set_global_speed_limit', { bytesPerSec: this.speedLimitBytes });
-      }
-      this.notify(true);
-    } catch (error) {
-      throw new Error(`تعذر تهيئة مجلد التنزيل: ${String(error)}`);
-    }
-  }
-
-  private async initTauriListeners() {
-    if (!isTauri()) return;
-    try {
-      const { listen } = await import('@tauri-apps/api/event');
-      const unlistenProgress = await listen<{
-        task_id: string;
-        segment_index: number;
-        delta_bytes: number;
-        downloaded_bytes: number;
-        total_bytes: number;
-        is_finished: boolean;
-      }>('download-progress', (event) => {
-        const { task_id, segment_index, delta_bytes, downloaded_bytes, total_bytes, is_finished } = event.payload;
-        this.handleTauriChunkProgress(task_id, segment_index, delta_bytes, downloaded_bytes, total_bytes, is_finished);
-      });
-
-      const unlistenBrowser = await listen<{
-        url: string;
-        filename?: string;
-        headers?: Record<string, string>;
-        request_id?: string;
-      }>('browser-add-download', (event) => {
-        if (event.payload?.url) {
-          void this.acceptBrowserDownload(event.payload);
-        }
-      });
-      this.tauriUnlisten = () => {
-        unlistenProgress();
-        unlistenBrowser();
-      };
-      if (this.destroyed) { this.tauriUnlisten(); this.tauriUnlisten = null; return; }
-    } catch (error) {
-      throw new Error(`تعذر تهيئة أحداث التنزيل: ${String(error)}`);
-    }
-  }
-
-  private async acceptBrowserDownload(payload: { url: string; filename?: string; headers?: Record<string, string>; request_id?: string }) {
-    await this.ready;
-    if (this.runtimeError || this.destroyed) {
-      if (payload.request_id) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('acknowledge_browser_download', { requestId: payload.request_id, accepted: false }).catch(() => {});
-      }
-      return;
-    }
-    // Persist before acknowledging: the browser must never cancel on an event emission alone.
-    const id = this.addTask(payload.url, payload.filename, this.defaultSegmentCount, undefined, payload.headers, undefined, undefined, true);
-    const task = this.tasks.get(id)!;
-    const accepted = !task.errorMessage && saveTasksToStorage(this.getTasks());
-    if (!accepted) { this.tasks.delete(id); this.pendingBrowserTasks.delete(id); this.notify(true); }
-    if (payload.request_id) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('acknowledge_browser_download', { requestId: payload.request_id, accepted });
-      } catch {
-        // No acknowledgement means the browser keeps its download. Avoid starting a duplicate.
-        this.tasks.delete(id); this.pendingBrowserTasks.delete(id); saveTasksToStorage(this.getTasks()); this.notify(true); return;
-      }
-    }
-    this.pendingBrowserTasks.delete(id);
-    if (accepted) { this.processQueue(); this.notify(true); }
   }
 
   public getRuntimeStatus(): 'preview' | 'starting' | 'ready' | 'error' {
@@ -310,15 +322,14 @@ export class DownloadManager {
       this.listeners.forEach((l) => l());
       return;
     }
-
     if (this.notifyTimeout !== null) return;
     this.notifyTimeout = globalThis.setTimeout(() => {
       this.notifyTimeout = null;
       this.listeners.forEach((l) => l());
-    }, 220);
+    }, 120) as unknown as number;
   }
 
-  public async triggerShutdown(cancel: boolean = false): Promise<boolean> {
+  public async triggerShutdown(cancel = false): Promise<boolean> {
     if (!isTauri()) return false;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -333,156 +344,392 @@ export class DownloadManager {
     return [...this.speedHistory];
   }
 
-  public refreshTaskUrl(id: string, value: string) {
-    const task = this.tasks.get(id);
-    if (!task || !['paused', 'error'].includes(task.status)) throw new Error('Pause the download before replacing its URL.');
-    let next: URL;
-    try { next = new URL(value.trim()); if (!['http:', 'https:'].includes(next.protocol)) throw new Error(); }
-    catch { throw new Error('Enter a complete HTTP or HTTPS URL.'); }
-    let previous: URL | undefined;
-    try { previous = new URL(task.url); } catch { /* Invalid original links restart from zero. */ }
-    // A different resource cannot reuse the partial file, even if an unrelated server reuses an ETag.
-    if (previous?.origin !== next.origin || previous?.pathname !== next.pathname) task.probed = false;
-    const resolved = resolveUniversalLink(value.trim());
-    task.originalUrl = value.trim(); task.url = resolved.resolvedUrl;
-    task.torrentInfo = undefined; task.mediaInfo = undefined;
-    // Never carry credentials or Referer headers to the replacement URL.
-    task.headers = resolved.suggestedHeaders;
-    task.errorMessage = undefined;
-    if (task.checksum) { task.checksum.actual = undefined; task.checksum.verified = false; }
-    this.resumeTask(id);
-  }
-
-  public restartTask(id: string) {
-    const task = this.tasks.get(id);
-    if (!task) return;
-    this.cancelRun(id);
-    task.downloadedBytes = 0;
-    task.completedAt = undefined;
-    task.errorMessage = undefined;
-    task.probed = false;
-    if (task.checksum) { task.checksum.actual = undefined; task.checksum.verified = false; }
-    task.chunks = calculateSegments(0, 1);
-    task.status = 'queued';
-    this.scheduleStorageSave();
-    this.processQueue();
-    this.notify(true);
-  }
-
   public getTasks(): DownloadTask[] {
     return Array.from(this.tasks.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  public getSettings(): AppSettings {
-    return {
-      maxConcurrentDownloads: this.maxConcurrentDownloads,
-      globalSpeedLimitBytes: this.speedLimitBytes,
-      enableNotifications: this.notificationsEnabled,
-      enableSound: this.soundEnabled,
-      soundVolume: soundEngine.volume,
-      defaultDirectory: this.defaultDownloadDir || 'Downloads',
-      defaultSegmentCount: this.defaultSegmentCount,
-      autoShutdownOnComplete: this.autoShutdownOnComplete,
-      nightSchedulerEnabled: this.nightSchedulerEnabled,
-      nightSchedulerStartHour: this.nightSchedulerStartHour,
-      nightSchedulerEndHour: this.nightSchedulerEndHour,
-      theme: this.theme,
-      dynamicWorkStealing: this.dynamicWorkStealing,
-      clipboardMonitorEnabled: this.clipboardMonitorEnabled,
-      autoVerifyIntegrity: this.autoVerifyIntegrity
-    };
+  public getStats(): DownloadStats {
+    return { ...this.stats };
   }
 
-  public async updateSettings(settings: Partial<AppSettings>) {
-    if (settings.defaultDirectory !== undefined) {
-      if (!isTauri()) throw new Error('تغيير مجلد الحفظ يتطلب تطبيق ARGON لسطح المكتب.');
-      const { invoke } = await import('@tauri-apps/api/core');
-      this.defaultDownloadDir = await invoke<string>('validate_download_directory', { directory: settings.defaultDirectory.trim() });
-    }
-    if (settings.maxConcurrentDownloads !== undefined) {
-      this.maxConcurrentDownloads = Math.max(1, Math.min(32, Math.floor(settings.maxConcurrentDownloads) || 1));
-    }
-    if (settings.globalSpeedLimitBytes !== undefined) {
-      this.speedLimitBytes = Math.max(0, settings.globalSpeedLimitBytes);
-      if (isTauri()) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('set_global_speed_limit', { bytesPerSec: this.speedLimitBytes });
-        } catch {
-          // Fallback
-        }
+  public getSettings(): AppSettings {
+    return { ...this.settings };
+  }
+
+  public async updateSettings(patch: Partial<AppSettings>) {
+    if (!isTauri()) {
+      this.settings = { ...this.settings, ...patch };
+      if (patch.theme === 'light' || patch.theme === 'dark') {
+        syncSystemBarTheme(patch.theme);
       }
-    }
-    if (settings.enableNotifications !== undefined) {
-      this.notificationsEnabled = settings.enableNotifications;
-      if (this.notificationsEnabled && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
+      this.notify(true);
+      if (patch.defaultDirectory !== undefined) {
+        throw new Error('تغيير مجلد الحفظ يتطلب تطبيق ARGON لسطح المكتب.');
       }
+      return;
     }
-    if (settings.enableSound !== undefined) {
-      this.soundEnabled = settings.enableSound;
-      soundEngine.enabled = this.soundEnabled;
+    if (
+      patch.enableNotifications &&
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'default'
+    ) {
+      Notification.requestPermission().catch(() => {});
     }
-    if (settings.soundVolume !== undefined) {
-      soundEngine.volume = Math.max(0, Math.min(1, settings.soundVolume));
-    }
-    if (settings.defaultSegmentCount !== undefined) {
-      this.defaultSegmentCount = Math.max(1, Math.min(32, settings.defaultSegmentCount));
-    }
-    if (settings.autoShutdownOnComplete !== undefined) {
-      this.autoShutdownOnComplete = Boolean(settings.autoShutdownOnComplete);
-    }
-    if (settings.nightSchedulerEnabled !== undefined) {
-      this.nightSchedulerEnabled = Boolean(settings.nightSchedulerEnabled);
-    }
-    if (settings.nightSchedulerStartHour !== undefined) {
-      this.nightSchedulerStartHour = Math.max(0, Math.min(23, settings.nightSchedulerStartHour));
-    }
-    if (settings.nightSchedulerEndHour !== undefined) {
-      this.nightSchedulerEndHour = Math.max(0, Math.min(23, settings.nightSchedulerEndHour));
-    }
-    if (settings.theme === 'light' || settings.theme === 'dark') {
-      this.theme = settings.theme;
-      syncSystemBarTheme(this.theme);
-    }
-    if (settings.dynamicWorkStealing !== undefined) {
-      this.dynamicWorkStealing = Boolean(settings.dynamicWorkStealing);
-    }
-    if (settings.clipboardMonitorEnabled !== undefined) {
-      this.clipboardMonitorEnabled = Boolean(settings.clipboardMonitorEnabled);
-    }
-    if (settings.autoVerifyIntegrity !== undefined) {
-      this.autoVerifyIntegrity = Boolean(settings.autoVerifyIntegrity);
-    }
-    this.saveSettingsToStorage();
+    await this.ready;
+    const { invoke } = await import('@tauri-apps/api/core');
+    const updated = await invoke<AppSettings>('dl_update_settings', { patch });
+    this.settings = { ...DEFAULT_SETTINGS, ...updated };
+    soundEngine.enabled = this.settings.enableSound;
+    soundEngine.volume = this.settings.soundVolume ?? 0.5;
+    syncSystemBarTheme(this.settings.theme ?? 'dark');
     this.notify(true);
-    this.processQueue();
+  }
+
+  public addTask(
+    url: string,
+    customFilename?: string,
+    segmentCount: number = this.settings.defaultSegmentCount || 8,
+    expectedSha256?: string,
+    customHeaders?: Record<string, string>,
+    torrentMeta?: TorrentMetadata,
+    mediaInfo?: MediaMetadata,
+    _deferStart = false,
+    queueId: QueueId = 'main',
+    mirrors?: string[]
+  ): string {
+    const originalUrl = url.trim();
+    const resolved = resolveUniversalLink(originalUrl);
+    const isMagnet = isMagnetUri(originalUrl);
+    const meta = torrentMeta || (isMagnet ? parseMagnetUri(originalUrl) || undefined : undefined);
+    const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const filename = deduplicateFilename(
+      sanitizeFilename(customFilename?.trim() || meta?.name || mediaInfo?.title || extractFilename(resolved.resolvedUrl)),
+      this.getTasks().map((t) => t.filename)
+    );
+
+    let localError: string | undefined;
+    if (meta || isMagnet) {
+      localError = 'روابط Magnet والتورنت تحتاج محرك P2P غير متاح في هذا الإصدار؛ استخدم رابط HTTP/HTTPS مباشر.';
+    } else if (!/^https?:\/\/.+/i.test(resolved.resolvedUrl)) {
+      localError = 'يُدعم فقط روابط HTTP و HTTPS الصالحة.';
+    } else if (!isTauri()) {
+      localError = 'التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.';
+    }
+
+    if (localError) {
+      const errTask: DownloadTask = {
+        id: tempId,
+        originalUrl,
+        url: resolved.resolvedUrl,
+        filename,
+        category: meta ? 'torrents' : detectCategory(filename),
+        torrentInfo: meta,
+        mediaInfo,
+        headers: { ...resolved.suggestedHeaders, ...customHeaders },
+        totalBytes: meta?.totalLength || 0,
+        downloadedBytes: 0,
+        status: 'error',
+        errorMessage: localError,
+        speedBytesPerSec: 0,
+        etaSeconds: 0,
+        chunks: calculateSegments(0, 1),
+        createdAt: Date.now(),
+        requestedSegments: Math.max(1, Math.min(32, Math.floor(segmentCount) || 1)),
+        customFilename: !!customFilename?.trim(),
+        filePrepared: false,
+        queueId,
+        mirrors
+      };
+      this.tasks.set(tempId, errTask);
+      this.recomputePreviewStats();
+      this.notify(true);
+      return tempId;
+    }
+
+    soundEngine.playStartSweep();
+    const optimistic: DownloadTask = {
+      id: tempId,
+      originalUrl,
+      url: resolved.resolvedUrl,
+      filename,
+      category: detectCategory(filename),
+      mediaInfo,
+      headers: { ...resolved.suggestedHeaders, ...customHeaders },
+      totalBytes: 0,
+      downloadedBytes: 0,
+      status: 'queued',
+      speedBytesPerSec: 0,
+      etaSeconds: 0,
+      chunks: calculateSegments(0, 1),
+      createdAt: Date.now(),
+      requestedSegments: Math.max(1, Math.min(32, Math.floor(segmentCount) || 1)),
+      customFilename: !!customFilename?.trim(),
+      filePrepared: false,
+      queueId,
+      mirrors
+    };
+    this.tasks.set(tempId, optimistic);
+    this.notify(true);
+
+    void this.ready
+      .then(async () => {
+        if (this.destroyed) return;
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (this.destroyed) return;
+        const created = await invoke<DownloadTask>('dl_add_task', {
+          request: {
+            url: originalUrl,
+            filename: customFilename?.trim() || null,
+            segmentCount,
+            expectedSha256: expectedSha256?.trim() || null,
+            headers: customHeaders || null,
+            mediaInfo: mediaInfo || null,
+            queueId,
+            mirrors: mirrors?.length ? mirrors : null
+          }
+        });
+        if (this.destroyed) return;
+        this.tasks.delete(tempId);
+        this.tasks.set(created.id, created);
+        this.notify(true);
+        await this.refreshFromNative();
+      })
+      .catch((err) => {
+        if (this.destroyed) return;
+        const current = this.tasks.get(tempId);
+        if (current) {
+          current.status = 'error';
+          current.errorMessage = String(err);
+          this.notify(true);
+        }
+      });
+
+    return tempId;
+  }
+
+  public async addTaskAsync(
+    url: string,
+    customFilename?: string,
+    segmentCount?: number,
+    expectedSha256?: string,
+    customHeaders?: Record<string, string>,
+    mediaInfo?: MediaMetadata,
+    queueId: QueueId = 'main',
+    mirrors?: string[]
+  ): Promise<string> {
+    const resolved = resolveUniversalLink(url.trim());
+    if (!isTauri() || isMagnetUri(url) || !/^https?:\/\/.+/i.test(resolved.resolvedUrl)) {
+      return this.addTask(url, customFilename, segmentCount, expectedSha256, customHeaders, undefined, mediaInfo, false, queueId, mirrors);
+    }
+    await this.ready;
+    soundEngine.playStartSweep();
+    const { invoke } = await import('@tauri-apps/api/core');
+    const created = await invoke<DownloadTask>('dl_add_task', {
+      request: {
+        url: url.trim(),
+        filename: customFilename?.trim() || null,
+        segmentCount: segmentCount ?? this.settings.defaultSegmentCount ?? 8,
+        expectedSha256: expectedSha256?.trim() || null,
+        headers: customHeaders || null,
+        mediaInfo: mediaInfo || null,
+        queueId,
+        mirrors: mirrors?.length ? mirrors : null
+      }
+    });
+    this.tasks.set(created.id, created);
+    this.notify(true);
+    void this.refreshFromNative();
+    return created.id;
+  }
+
+  public addTorrentTask(meta: TorrentMetadata, segmentCount?: number): string {
+    const rawUrl = meta.isMagnet
+      ? `magnet:?xt=urn:btih:${meta.infoHash}&dn=${encodeURIComponent(meta.name)}`
+      : `torrent://${meta.infoHash}`;
+    return this.addTask(rawUrl, meta.name, segmentCount || this.settings.defaultSegmentCount, undefined, undefined, meta);
+  }
+
+  public addBatchTasks(urls: string[], segmentCount?: number): string[] {
+    const valid = urls.map((u) => u.trim()).filter((u) => /^https?:\/\/.+/i.test(u));
+    if (!valid.length) return [];
+    if (!isTauri()) {
+      return valid.map((u) => this.addTask(u, undefined, segmentCount));
+    }
+    void this.ready
+      .then(async () => {
+        if (this.destroyed) return;
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (this.destroyed) return;
+        await invoke('dl_add_batch', { urls: valid, segmentCount: segmentCount ?? null, queueId: null });
+        await this.refreshFromNative();
+      })
+      .catch(() => {});
+    return [];
+  }
+
+  private fireNativeCommand(command: string, args?: Record<string, unknown>) {
+    if (!isTauri() || this.destroyed) return;
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => (this.destroyed ? undefined : invoke(command, args)))
+      .then(() => {
+        if (!this.destroyed) return this.refreshFromNative();
+      })
+      .catch(() => {});
+  }
+
+  public pauseTask(id: string) {
+    this.fireNativeCommand('dl_pause_task', { id });
+  }
+
+  public startTaskImmediately(id: string) {
+    this.resumeTask(id, true);
+  }
+
+  public resumeTask(id: string, force = false) {
+    this.fireNativeCommand('dl_resume_task', { id, force });
+  }
+
+  public restartTask(id: string) {
+    this.fireNativeCommand('dl_restart_task', { id });
+  }
+
+  public refreshTaskUrl(id: string, value: string): Promise<void> {
+    const task = this.tasks.get(id);
+    if (!task || !['paused', 'error'].includes(task.status)) {
+      throw new Error('Pause the download before replacing its URL.');
+    }
+    let next: URL;
+    try {
+      next = new URL(value.trim());
+      if (!['http:', 'https:'].includes(next.protocol)) throw new Error();
+    } catch {
+      throw new Error('Enter a complete HTTP or HTTPS URL.');
+    }
+    if (!isTauri()) return Promise.resolve();
+    return import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('dl_refresh_url', { id, url: value.trim() }))
+      .then(() => this.refreshFromNative());
+  }
+
+  public pauseAll() {
+    this.fireNativeCommand('dl_pause_all');
+  }
+
+  public resumeAll() {
+    this.fireNativeCommand('dl_resume_all');
+  }
+
+  public async removeTask(id: string, deleteFileFromDisk = false) {
+    if (!isTauri()) {
+      this.tasks.delete(id);
+      this.recomputePreviewStats();
+      this.notify(true);
+      return;
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      await invoke('dl_remove_task', { id, deleteFileFromDisk });
+      this.tasks.delete(id);
+      telemetryStore.bindNativeRun(id, null);
+      this.boundActiveIds.delete(id);
+      this.notify(true);
+      await this.refreshFromNative();
+    } catch (error) {
+      const task = this.tasks.get(id);
+      if (task) {
+        task.errorMessage = `Could not delete file: ${String(error)}`;
+        this.notify(true);
+      }
+    }
+  }
+
+  public pauseTasks(ids: string[]) {
+    for (const id of ids) this.pauseTask(id);
+  }
+
+  public resumeTasks(ids: string[]) {
+    for (const id of ids) this.resumeTask(id);
+  }
+
+  public removeTasks(ids: string[], deleteFiles = false) {
+    for (const id of ids) void this.removeTask(id, deleteFiles);
+  }
+
+  public clearCompleted() {
+    if (!isTauri()) {
+      for (const [id, task] of this.tasks.entries()) {
+        if (task.status === 'completed') this.tasks.delete(id);
+      }
+      this.recomputePreviewStats();
+      this.notify(true);
+      return;
+    }
+    this.fireNativeCommand('dl_clear_completed');
   }
 
   public setTaskQueue(id: string, queueId: QueueId) {
-    const task = this.tasks.get(id);
-    if (!task) return;
-    task.queueId = queueId;
-    this.scheduleStorageSave();
-    this.notify(true);
-    this.processQueue();
+    this.fireNativeCommand('dl_set_task_queue', { id, queueId });
   }
 
   public async setTaskSpeedLimit(id: string, bytesPerSec: number) {
-    const task = this.tasks.get(id);
-    if (!task) return;
-    task.speedLimitBytesPerSec = Math.max(0, Math.floor(bytesPerSec));
-    const run = this.runs.get(id);
-    if (run && !run.cancelled && isTauri()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('set_task_speed_limit', { taskId: run.nativeId, bytesPerSec: task.speedLimitBytesPerSec });
-      } catch {
-        // Ignore if runtime unavailable
-      }
+    if (!isTauri()) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('dl_set_task_speed_limit', { id, bytesPerSec: Math.max(0, Math.floor(bytesPerSec)) });
+    await this.refreshFromNative();
+  }
+
+  public async verifyHash(id: string): Promise<string | null> {
+    if (!isTauri()) return null;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const hash = await invoke<string | null>('dl_verify_hash', { id });
+      await this.refreshFromNative();
+      return hash;
+    } catch {
+      return null;
     }
-    this.scheduleStorageSave();
-    this.notify(true);
+  }
+
+  public async probe(url: string, customHeaders?: Record<string, string>): Promise<ProbeResult> {
+    if (!isTauri()) throw new Error('التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<ProbeResult>('probe_url', { url, customHeaders: customHeaders || null });
+  }
+
+  public async mediaToolsStatus(): Promise<MediaToolsStatus> {
+    if (!isTauri()) return { hasYtdlp: false, hasNode: false, hasFfmpeg: false, toolsDir: '' };
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<MediaToolsStatus>('media_tools_status');
+  }
+
+  public async installFfmpegTool(): Promise<MediaToolsStatus> {
+    if (!isTauri()) throw new Error('يتطلب تطبيق سطح المكتب.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<MediaToolsStatus>('install_ffmpeg_tool');
+  }
+
+  public async updateYtdlpTool(): Promise<MediaToolsStatus> {
+    if (!isTauri()) throw new Error('يتطلب تطبيق سطح المكتب.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<MediaToolsStatus>('update_ytdlp_tool');
+  }
+
+  public beginUpdateInstallation() {
+    if (this.stats.activeCount > 0) throw new Error('transfers_active');
+    if (isTauri()) {
+      void import('@tauri-apps/api/core').then(({ invoke }) =>
+        invoke('dl_set_updating', { active: true }).catch(() => {})
+      );
+    }
+  }
+
+  public endUpdateInstallation() {
+    if (isTauri()) {
+      void import('@tauri-apps/api/core').then(({ invoke }) =>
+        invoke('dl_set_updating', { active: false }).catch(() => {})
+      );
+    }
   }
 
   public async shareFile(filePath?: string) {
@@ -491,32 +738,16 @@ export class DownloadManager {
     await invoke('share_file_item', { filePath });
   }
 
-  public isNightSchedulerActive(): boolean {
-    if (!this.nightSchedulerEnabled) return true;
-    const hour = new Date().getHours();
-    if (this.nightSchedulerStartHour <= this.nightSchedulerEndHour) {
-      return hour >= this.nightSchedulerStartHour && hour < this.nightSchedulerEndHour;
-    } else {
-      return hour >= this.nightSchedulerStartHour || hour < this.nightSchedulerEndHour;
-    }
-  }
-
-  private checkAutoShutdown() {
-    if (this.updateInstallation) return;
-    if (!this.autoShutdownOnComplete) return;
-    const remainingActiveOrQueued = Array.from(this.tasks.values()).filter(
-      (t) => t.status !== 'completed'
-    );
-    if (remainingActiveOrQueued.length === 0) {
-      this.showNotification('إيقاف التشغيل المجدول', 'اكتملت جميع التحميلات، جاري إيقاف تشغيل الكمبيوتر...');
-      this.triggerShutdown(false);
-    }
-  }
-
   public async openFile(filePath?: string) {
     if (!filePath || !isTauri()) throw new Error('Open the ARGON app to access saved files.');
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('open_file_item', { filePath });
+  }
+
+  public async openFolder(filePath?: string) {
+    if (!filePath || !isTauri()) throw new Error('Open the ARGON app to access saved folders.');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_destination_folder', { filePath });
   }
 
   public async openBrowserExtensionDir() {
@@ -525,20 +756,8 @@ export class DownloadManager {
     await invoke('open_browser_extension_dir');
   }
 
-  public addBatchTasks(urls: string[], segmentCount?: number): string[] {
-    const ids: string[] = [];
-    for (const raw of urls) {
-      const trimmed = raw.trim();
-      if (trimmed && /^https?:\/\/.+/i.test(trimmed)) {
-        const id = this.addTask(trimmed, undefined, segmentCount);
-        ids.push(id);
-      }
-    }
-    return ids;
-  }
-
   public exportUrls(filter?: 'all' | 'active' | 'completed'): string {
-    const tasks = Array.from(this.tasks.values());
+    const tasks = this.getTasks();
     const filtered = tasks.filter((t) => {
       if (filter === 'active') return t.status === 'downloading' || t.status === 'queued' || t.status === 'paused';
       if (filter === 'completed') return t.status === 'completed';
@@ -548,7 +767,7 @@ export class DownloadManager {
   }
 
   public exportTasksJson(): string {
-    const list = Array.from(this.tasks.values()).map((t) => ({
+    const list = this.getTasks().map((t) => ({
       url: t.url,
       filename: t.filename,
       category: t.category,
@@ -562,10 +781,8 @@ export class DownloadManager {
   public importTasks(rawText: string, segmentCount?: number): number {
     const trimmed = rawText.trim();
     if (!trimmed) return 0;
-
     let addedCount = 0;
 
-    // 1. Try parsing as JSON array
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
       try {
         const parsed = JSON.parse(trimmed);
@@ -589,541 +806,14 @@ export class DownloadManager {
       }
     }
 
-    // 2. Parse as newline-separated plain text / URLs
-    const lines = trimmed.split(/[\r\n]+/);
-    for (const line of lines) {
+    for (const line of trimmed.split(/[\r\n]+/)) {
       const match = line.match(/https?:\/\/[^\s"']+/i);
       if (match) {
         this.addTask(match[0].trim(), undefined, segmentCount);
         addedCount++;
       }
     }
-
     return addedCount;
-  }
-
-  public getStats(): DownloadStats {
-    let activeCount = 0;
-    let queuedCount = 0;
-    let completedCount = 0;
-    let totalBytesDownloaded = 0;
-    let currentTotalSpeed = 0;
-
-    for (const task of this.tasks.values()) {
-      if (task.status === 'downloading') {
-        activeCount++;
-        currentTotalSpeed += task.speedBytesPerSec;
-      } else if (task.status === 'queued') {
-        queuedCount++;
-      } else if (task.status === 'completed') {
-        completedCount++;
-      }
-      totalBytesDownloaded += task.downloadedBytes;
-    }
-
-    return {
-      activeCount,
-      queuedCount,
-      completedCount,
-      totalBytesDownloaded,
-      currentTotalSpeed,
-      speedLimitBytesPerSec: this.speedLimitBytes
-    };
-  }
-
-  public async probe(url: string, customHeaders?: Record<string, string>): Promise<ProbeResult> {
-    if (!isTauri()) throw new Error('التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.');
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke<ProbeResult>('probe_url', { url, customHeaders: customHeaders || null });
-  }
-
-  public processQueue() {
-    if (this.destroyed || this.batchPausing || this.updateInstallation || !this.isNightSchedulerActive()) return;
-    let active = this.getTasks().filter((t) => t.status === 'downloading').length;
-    for (const task of this.getTasks()
-      .filter((t) => t.status === 'queued' && !this.pendingBrowserTasks.has(t.id))
-      .sort((a, b) => a.createdAt - b.createdAt)) {
-      if (active >= this.maxConcurrentDownloads) break;
-      if (task.queueId === 'night' && !this.isWithinNightWindow()) continue;
-      task.status = 'downloading';
-      task.errorMessage = undefined;
-      active++;
-      this.startNativeDownload(task);
-    }
-    this.scheduleStorageSave();
-    this.notify(true);
-  }
-
-  private isWithinNightWindow(): boolean {
-    const hour = new Date().getHours();
-    if (this.nightSchedulerStartHour <= this.nightSchedulerEndHour) {
-      return hour >= this.nightSchedulerStartHour && hour < this.nightSchedulerEndHour;
-    }
-    return hour >= this.nightSchedulerStartHour || hour < this.nightSchedulerEndHour;
-  }
-
-  public beginUpdateInstallation() {
-    if (this.getStats().activeCount > 0) throw new Error('transfers_active');
-    this.updateInstallation = true;
-    if (!saveTasksToStorage(this.getTasks())) { this.updateInstallation = false; throw new Error('tasks_not_saved'); }
-  }
-  public endUpdateInstallation() {
-    this.updateInstallation = false; this.processQueue();
-  }
-
-  public addTask(
-    url: string, customFilename?: string, segmentCount: number = this.defaultSegmentCount,
-    expectedSha256?: string, customHeaders?: Record<string, string>, torrentMeta?: TorrentMetadata,
-    mediaInfo?: import('../types/downloader').MediaMetadata, deferStart = false, queueId: QueueId = 'main'
-  ): string {
-    const originalUrl = url.trim();
-    const resolved = resolveUniversalLink(originalUrl);
-    const isMagnet = isMagnetUri(originalUrl);
-    const meta = torrentMeta || (isMagnet ? parseMagnetUri(originalUrl) || undefined : undefined);
-    const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    const filename = deduplicateFilename(sanitizeFilename(customFilename?.trim() || meta?.name || mediaInfo?.title || extractFilename(resolved.resolvedUrl)), this.getTasks().map((t) => t.filename));
-    let error: string | undefined;
-    if (meta || isMagnet) error = 'روابط Magnet والتورنت تحتاج محرك P2P غير متاح في هذا الإصدار؛ استخدم رابط HTTP/HTTPS مباشر.';
-    else {
-      try { if (!['http:', 'https:'].includes(new URL(resolved.resolvedUrl).protocol)) throw new Error(); }
-      catch { error = 'رابط غير صالح؛ أدخل رابط HTTP أو HTTPS كاملًا.'; }
-    }
-    if (!error && !isTauri()) error = 'التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.';
-    if (expectedSha256?.trim() && !/^[a-f0-9]{64}$/i.test(expectedSha256.trim())) error = 'بصمة SHA-256 غير صالحة.';
-    const inferredQueue: QueueId = queueId !== 'main' ? queueId : (!['direct', 'other'].includes(detectPlatform(originalUrl)) ? 'media' : 'main');
-    const task: DownloadTask = {
-      id, originalUrl, url: resolved.resolvedUrl, filename,
-      category: meta ? 'torrents' : detectCategory(filename), torrentInfo: meta, mediaInfo,
-      headers: { ...resolved.suggestedHeaders, ...customHeaders },
-      totalBytes: meta?.totalLength || 0, downloadedBytes: 0, status: error ? 'error' : 'queued',
-      errorMessage: error, speedBytesPerSec: 0, etaSeconds: 0, chunks: calculateSegments(0, 1),
-      createdAt: Date.now(), requestedSegments: Math.max(1, Math.min(32, Math.floor(segmentCount) || 1)),
-      customFilename: !!customFilename?.trim(), filePrepared: false,
-      queueId: inferredQueue,
-      checksum: expectedSha256?.trim() ? { algorithm: 'sha256', expected: expectedSha256.trim().toLowerCase(), verified: false } : undefined,
-    };
-    this.tasks.set(id, task);
-    if (deferStart) this.pendingBrowserTasks.add(id);
-    if (!error && !deferStart) { soundEngine.playStartSweep(); this.processQueue(); }
-    this.scheduleStorageSave();
-    this.notify(true);
-    return id;
-  }
-
-  public addTorrentTask(meta: TorrentMetadata, segmentCount?: number): string {
-    const rawUrl = meta.isMagnet
-      ? `magnet:?xt=urn:btih:${meta.infoHash}&dn=${encodeURIComponent(meta.name)}`
-      : `torrent://${meta.infoHash}`;
-    return this.addTask(
-      rawUrl,
-      meta.name,
-      segmentCount || this.defaultSegmentCount,
-      undefined,
-      undefined,
-      meta
-    );
-  }
-
-  private cancelRun(id: string) {
-    const run = this.runs.get(id);
-    if (!run) return;
-    run.cancelled = true;
-    if (isTauri()) void import('@tauri-apps/api/core').then(({ invoke }) => invoke('cancel_task', { taskId: run.nativeId })).catch(console.warn);
-  }
-
-  private startNativeDownload(task: DownloadTask) {
-    const previous = this.runs.get(task.id);
-    if (previous) this.cancelRun(task.id);
-    const run: NativeRun = { nativeId: `${task.id}_${crypto.randomUUID()}`, cancelled: false, promise: Promise.resolve() };
-    this.runs.set(task.id, run);
-    telemetryStore.bindNativeRun(task.id, run.nativeId);
-    const current = () => !this.destroyed && !run.cancelled && this.runs.get(task.id) === run && this.tasks.get(task.id) === task && task.status === 'downloading';
-    run.promise = (async () => {
-      if (previous) await previous.promise;
-      await this.ready;
-      if (!current()) return;
-      if (!isTauri()) throw new Error('التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.');
-      if (this.runtimeError) throw new Error(this.runtimeError);
-      if (task.torrentInfo) throw new Error('محرك التورنت غير متاح في هذا الإصدار.');
-      const { invoke } = await import('@tauri-apps/api/core');
-      if (task.speedLimitBytesPerSec && task.speedLimitBytesPerSec > 0) {
-        await invoke('set_task_speed_limit', { taskId: run.nativeId, bytesPerSec: task.speedLimitBytesPerSec }).catch(() => {});
-      }
-      const platform = detectPlatform(task.originalUrl || task.url);
-      if (!['direct', 'other'].includes(platform)) {
-        if (task.mediaInfo?.useYtdlpMux && task.mediaInfo.selectedFormatId) {
-          const base = this.defaultDownloadDir || 'Downloads';
-          const outPath = task.savePath || `${base}${base.includes('\\') ? '\\' : '/'}${task.filename}`;
-          task.savePath = await invoke<string>('download_media_with_ytdlp', {
-            taskId: run.nativeId,
-            url: task.originalUrl || task.url,
-            destinationPath: outPath,
-            formatSpec: task.mediaInfo.selectedFormatId
-          });
-          if (!current()) return;
-          task.filePrepared = true;
-          task.filename = task.savePath.split(/[\\/]/).pop() || task.filename;
-          if (task.totalBytes > 0) task.downloadedBytes = task.totalBytes;
-          task.status = 'completed';
-          task.completedAt = Date.now();
-          soundEngine.playCompleteChime();
-          this.showNotification('اكتمل التنزيل', `تم حفظ الملف: ${task.filename}`);
-          this.checkAutoShutdown();
-          return;
-        }
-        const media = await resolveMediaDownloadUrl(task.originalUrl || task.url, {
-          isAudioOnly: !!task.mediaInfo?.isAudioOnly,
-          formatId: task.mediaInfo?.selectedFormatId
-        });
-        if (!current()) return;
-        task.url = media.downloadUrl;
-        task.headers = { ...task.headers, ...media.headers };
-        if (task.mediaInfo) task.mediaInfo = { ...task.mediaInfo, quality: undefined, title: media.suggestedFilename || task.mediaInfo.title };
-        if (!task.customFilename && !task.filePrepared && media.suggestedFilename) task.filename = this.uniqueFilename(task, media.suggestedFilename);
-      }
-      const probe = await this.probe(task.url, task.headers);
-      if (!current()) return;
-      if (/^(text\/html|application\/(xhtml\+xml|vnd\.apple\.mpegurl|dash\+xml)|audio\/x-mpegurl)/i.test(probe.content_type || '') || /\.(m3u8|mpd)(?:$|\?)/i.test(task.url)) {
-        throw new Error('الرابط يعيد صفحة ويب أو قائمة بث، وليس ملفًا مباشرًا قابلًا للتنزيل.');
-      }
-      const sameResource = task.probed && task.acceptRanges && probe.accept_ranges &&
-        task.totalBytes === (probe.content_length || 0) &&
-        !!(task.etag || task.lastModified) &&
-        (task.etag ? task.etag === probe.etag : task.lastModified === probe.last_modified);
-      const resume = task.downloadedBytes > 0 && sameResource;
-      if (!resume) {
-        task.downloadedBytes = 0;
-        task.chunks = calculateSegments(probe.content_length || 0, probe.accept_ranges ? task.requestedSegments || this.defaultSegmentCount : 1);
-      }
-      task.totalBytes = probe.content_length || 0;
-      task.acceptRanges = probe.accept_ranges;
-      task.etag = probe.etag;
-      task.lastModified = probe.last_modified;
-      task.probed = true;
-      if (!task.customFilename && !task.filePrepared && probe.suggested_filename) task.filename = this.uniqueFilename(task, probe.suggested_filename);
-      task.category = detectCategory(task.filename);
-      const base = this.defaultDownloadDir || 'Downloads';
-      const path = task.savePath || `${base}${base.includes('\\') ? '\\' : '/'}${task.filename}`;
-      task.savePath = await invoke<string>('prepare_download_file', {
-        destinationPath: path, totalBytes: task.totalBytes, fresh: !task.filePrepared, reset: !resume,
-      });
-      task.filePrepared = true;
-      task.filename = task.savePath.split(/[\\/]/).pop() || task.filename;
-      if (!current()) return;
-      this.speedSamples.set(task.id, { lastBytes: task.downloadedBytes, lastTime: Date.now() });
-      this.scheduleStorageSave();
-      this.notify(true);
-      const transfer = async (useRange: boolean) => {
-        const failures: unknown[] = [];
-        let aborting = false;
-        const runChunk = async (chunk: (typeof task.chunks)[number]): Promise<void> => {
-          chunk.status = 'downloading';
-          try {
-            const result = await invoke<{ downloaded_bytes: number; total_bytes: number; end_byte?: number }>('download_segment', {
-              taskId: run.nativeId, url: task.url, destinationPath: task.savePath,
-              startByte: chunk.startByte, endByte: chunk.endByte, currentDownloaded: chunk.downloaded,
-              segmentIndex: chunk.index, customHeaders: task.headers || null, useRange,
-              expectedTotal: probe.content_length ?? null, validator: task.etag || task.lastModified || null,
-            });
-            if (!current()) return;
-            chunk.downloaded = result.downloaded_bytes;
-            if (typeof result.end_byte === 'number' && result.end_byte >= chunk.startByte) {
-              chunk.endByte = result.end_byte;
-            }
-            chunk.status = 'completed';
-            if (!useRange) task.totalBytes = result.total_bytes;
-
-            // Dynamic work-stealing: if another active segment has > 512 KB left, split and assist it
-            if (useRange && this.dynamicWorkStealing && !aborting) {
-              const candidate = task.chunks
-                .filter((c) => c.index !== chunk.index && c.status === 'downloading')
-                .map((c) => ({ chunk: c, remaining: (c.endByte - c.startByte + 1) - c.downloaded }))
-                .sort((a, b) => b.remaining - a.remaining)[0];
-              if (candidate && candidate.remaining > 524_288) {
-                const stolen = await invoke<[number, number] | null>('split_active_segment', {
-                  taskId: run.nativeId,
-                  segmentIndex: candidate.chunk.index
-                }).catch(() => null);
-                if (stolen && current() && !aborting) {
-                  const [newStart, newEnd] = stolen;
-                  candidate.chunk.endByte = newStart - 1;
-                  const nextIndex = task.chunks.reduce((m, c) => Math.max(m, c.index), -1) + 1;
-                  const stolenChunk = {
-                    index: nextIndex,
-                    startByte: newStart,
-                    endByte: newEnd,
-                    downloaded: 0,
-                    status: 'downloading' as const
-                  };
-                  task.chunks.push(stolenChunk);
-                  await runChunk(stolenChunk);
-                }
-              }
-            }
-          } catch (error) {
-            aborting = true;
-            failures.push(error);
-            await invoke('cancel_task', { taskId: run.nativeId });
-          }
-        };
-        const pending = task.chunks.filter((c) => c.status !== 'completed');
-        await Promise.all(pending.map((chunk) => runChunk(chunk)));
-        if (failures.length > 0) {
-          const cause = failures.find((r) => String(r).includes('RANGE_UNSUPPORTED')) || failures.find((r) => !String(r).includes('CANCELLED')) || failures[0];
-          throw new Error(String(cause));
-        }
-      };
-      try { await transfer(probe.accept_ranges && task.totalBytes > 0); }
-      catch (error) {
-        if (!current() || !String(error).includes('RANGE_UNSUPPORTED')) throw error;
-        await invoke('cleanup_task', { taskId: run.nativeId });
-        run.nativeId = `${task.id}_${crypto.randomUUID()}`;
-        task.chunks = calculateSegments(0, 1);
-        task.downloadedBytes = 0;
-        task.acceptRanges = false;
-        this.notify(true);
-        await transfer(false);
-      }
-      if (!current()) return;
-      task.downloadedBytes = task.chunks.reduce((sum, chunk) => sum + chunk.downloaded, 0);
-      if (task.downloadedBytes !== task.totalBytes) throw new Error('الملف غير مكتمل: عدد البايتات المستلمة لا يطابق الحجم المتوقع.');
-      await invoke('validate_download_file', { filePath: task.savePath, expectedBytes: task.totalBytes });
-      if (task.checksum?.expected) {
-        const hash = await invoke<string>('verify_file_sha256', { filePath: task.savePath });
-        if (!current()) return;
-        task.checksum.actual = hash.toLowerCase();
-        task.checksum.verified = task.checksum.actual === task.checksum.expected;
-        if (!task.checksum.verified) throw new Error('فشل التحقق من SHA-256؛ الملف لا يطابق البصمة المطلوبة.');
-      } else if (this.autoVerifyIntegrity && task.savePath) {
-        const hash = await invoke<string>('verify_file_sha256', { filePath: task.savePath }).catch(() => '');
-        if (hash && current()) {
-          task.checksum = { algorithm: 'sha256', actual: hash.toLowerCase(), verified: true };
-        }
-      }
-      if (!current()) return;
-      task.status = 'completed';
-      task.completedAt = Date.now();
-      soundEngine.playCompleteChime();
-      this.showNotification('اكتمل التنزيل', `تم حفظ الملف: ${task.filename}`);
-      this.checkAutoShutdown();
-    })().catch((error) => {
-      if (!current()) return;
-      task.status = 'error';
-      task.errorMessage = error instanceof Error ? error.message : String(error);
-      soundEngine.playErrorTone();
-    }).finally(async () => {
-      if (isTauri()) {
-        try { const { invoke } = await import('@tauri-apps/api/core'); await invoke('cleanup_task', { taskId: run.nativeId }); } catch { /* Window may be closing. */ }
-      }
-      if (this.runs.get(task.id) !== run) return;
-      this.runs.delete(task.id);
-      telemetryStore.bindNativeRun(task.id, null);
-      task.speedBytesPerSec = 0;
-      task.etaSeconds = 0;
-      this.speedSamples.delete(task.id);
-      this.scheduleStorageSave();
-      this.notify(true);
-      this.processQueue();
-    });
-  }
-
-  private uniqueFilename(task: DownloadTask, filename: string) {
-    return deduplicateFilename(sanitizeFilename(filename), this.getTasks().filter((t) => t.id !== task.id).map((t) => t.filename));
-  }
-
-  private handleTauriChunkProgress(taskId: string, segmentIndex: number, _deltaBytes: number, downloadedBytes: number, totalBytes: number, isFinished: boolean) {
-    const entry = [...this.runs.entries()].find(([, run]) => run.nativeId === taskId && !run.cancelled);
-    if (!entry) return;
-    const task = this.tasks.get(entry[0]);
-    if (!task || task.status !== 'downloading') return;
-    const chunk = task.chunks.find((c) => c.index === segmentIndex);
-    if (!chunk) return;
-    chunk.downloaded = downloadedBytes;
-    chunk.status = isFinished ? 'completed' : 'downloading';
-    if (totalBytes > 0) task.totalBytes = totalBytes;
-    task.downloadedBytes = task.chunks.reduce((sum, c) => sum + c.downloaded, 0);
-    telemetryStore.applyTaskMetrics(task.id, task.downloadedBytes, task.totalBytes, task.speedBytesPerSec);
-    this.scheduleProgressCheckpoint();
-    this.notify(false);
-  }
-
-  public pauseTask(id: string) {
-    const task = this.tasks.get(id);
-    if (!task || !['downloading', 'queued'].includes(task.status)) return;
-    task.status = 'paused';
-    task.speedBytesPerSec = 0;
-    task.etaSeconds = 0;
-    this.cancelRun(id);
-    this.scheduleStorageSave();
-    this.notify(true);
-    this.processQueue();
-  }
-
-  public startTaskImmediately(id: string) { this.resumeTask(id); }
-
-  public resumeTask(id: string) {
-    const task = this.tasks.get(id);
-    if (!task || !['paused', 'error', 'queued'].includes(task.status)) return;
-    task.status = 'queued';
-    task.errorMessage = undefined;
-    this.processQueue();
-  }
-
-  public pauseAll() {
-    this.batchPausing = true;
-    for (const task of this.tasks.values()) {
-      if (task.status === 'downloading' || task.status === 'queued') {
-        this.pauseTask(task.id);
-      }
-    }
-    this.batchPausing = false;
-    this.notify(true);
-  }
-
-  public resumeAll() {
-    for (const task of this.tasks.values()) {
-      if (task.status === 'paused' || task.status === 'error') {
-        this.resumeTask(task.id);
-      }
-    }
-    this.notify(true);
-  }
-
-  public async removeTask(id: string, deleteFileFromDisk: boolean = false) {
-    const task = this.tasks.get(id);
-    this.cancelRun(id);
-    const running = this.runs.get(id)?.promise || Promise.resolve();
-    if (deleteFileFromDisk && task?.savePath && isTauri()) {
-      if (task.status === 'downloading' || task.status === 'queued') task.status = 'paused';
-      try {
-        await running;
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('delete_file_item', { filePath: task.savePath });
-      } catch (error) {
-        task.errorMessage = `Could not delete file: ${String(error)}`;
-        this.scheduleStorageSave(); this.notify(true); return;
-      }
-    }
-    this.tasks.delete(id);
-    this.pendingBrowserTasks.delete(id);
-    this.speedSamples.delete(id);
-    this.scheduleStorageSave();
-    this.notify(true);
-    this.processQueue();
-  }
-
-  public pauseTasks(ids: string[]) {
-    for (const id of ids) {
-      this.pauseTask(id);
-    }
-    this.notify(true);
-  }
-
-  public resumeTasks(ids: string[]) {
-    for (const id of ids) {
-      this.resumeTask(id);
-    }
-    this.notify(true);
-  }
-
-  public removeTasks(ids: string[], deleteFiles: boolean = false) {
-    for (const id of ids) {
-      this.removeTask(id, deleteFiles);
-    }
-    this.notify(true);
-  }
-
-  public clearCompleted() {
-    for (const [id, task] of this.tasks.entries()) {
-      if (task.status === 'completed') {
-        this.tasks.delete(id);
-        this.speedSamples.delete(id);
-      }
-    }
-    this.scheduleStorageSave();
-    this.notify(true);
-    this.processQueue();
-  }
-
-  public async openFolder(filePath?: string) {
-    if (!filePath || !isTauri()) throw new Error('Open the ARGON app to access saved folders.');
-    const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('open_destination_folder', { filePath });
-  }
-
-  public async verifyHash(id: string): Promise<string | null> {
-    const task = this.tasks.get(id);
-    if (!task || !task.savePath) return null;
-    if (isTauri()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const hash = await invoke<string>('verify_file_sha256', { filePath: task.savePath });
-        if (!task.checksum) {
-          task.checksum = { algorithm: 'sha256' };
-        }
-        task.checksum.actual = hash.toLowerCase();
-        if (task.checksum.expected) {
-          task.checksum.verified = task.checksum.actual === task.checksum.expected;
-        }
-        this.scheduleStorageSave();
-        this.notify(true);
-        return hash;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  private startSpeedLoop() {
-    if (typeof window === 'undefined') return;
-
-    this.speedInterval = window.setInterval(() => {
-      this.processScheduledQueue();
-      const now = Date.now();
-      let hasChanges = false;
-
-      for (const task of this.tasks.values()) {
-        if (task.status === 'downloading') {
-          // In native mode: compute accurate rolling throughput
-          const sample = this.speedSamples.get(task.id);
-          if (sample) {
-            const elapsedSec = Math.max(0.1, (now - sample.lastTime) / 1000);
-            const deltaBytes = Math.max(0, task.downloadedBytes - sample.lastBytes);
-            task.speedBytesPerSec = Math.round(deltaBytes / elapsedSec);
-
-            if (task.totalBytes > 0 && task.speedBytesPerSec > 0) {
-              const remaining = Math.max(0, task.totalBytes - task.downloadedBytes);
-              task.etaSeconds = Math.ceil(remaining / task.speedBytesPerSec);
-            } else {
-              task.etaSeconds = 0;
-            }
-
-            sample.lastBytes = task.downloadedBytes;
-            sample.lastTime = now;
-            hasChanges = true;
-          } else {
-            this.speedSamples.set(task.id, { lastBytes: task.downloadedBytes, lastTime: now });
-          }
-        }
-      }
-
-      let currentTotal = 0;
-      for (const t of this.tasks.values()) {
-        if (t.status === 'downloading') {
-          currentTotal += t.speedBytesPerSec;
-        }
-      }
-      this.speedHistory.push(currentTotal);
-      if (this.speedHistory.length > 20) {
-        this.speedHistory.shift();
-      }
-
-      if (hasChanges || currentTotal > 0) {
-        this.notify(false);
-      }
-      this.syncAndroidNotification(now);
-    }, 500);
   }
 
   private syncAndroidNotification(now: number) {
@@ -1138,11 +828,7 @@ export class DownloadManager {
     const totalDl = active.reduce((s, t) => s + t.downloadedBytes, 0);
     const totalSpeed = active.reduce((s, t) => s + t.speedBytesPerSec, 0);
     const pct = totalKnown > 0 ? Math.min(100, Math.round((totalDl / totalKnown) * 100)) : 0;
-    const title = activeCount === 0
-      ? 'ARGON'
-      : activeCount === 1
-        ? active[0].filename
-        : `ARGON · ${activeCount} downloads`;
+    const title = activeCount === 0 ? 'ARGON' : activeCount === 1 ? active[0].filename : `ARGON · ${activeCount} downloads`;
     const speedMb = totalSpeed > 0 ? `${(totalSpeed / (1024 * 1024)).toFixed(1)} MB/s` : 'Connecting…';
     const text = activeCount === 0 ? '' : totalKnown > 0 ? `${pct}% · ${speedMb}` : speedMb;
     void import('@tauri-apps/api/core')
@@ -1158,29 +844,15 @@ export class DownloadManager {
       .catch(() => {});
   }
 
-  private processScheduledQueue() {
-    if (this.getTasks().some((t) => t.status === 'queued') && this.isNightSchedulerActive()) this.processQueue();
-  }
-
   public destroy() {
     this.destroyed = true;
-    for (const id of this.runs.keys()) this.cancelRun(id);
-    saveTasksToStorage(this.getTasks());
-    if (this.speedInterval !== null) {
-      clearInterval(this.speedInterval);
-      this.speedInterval = null;
-    }
     if (this.notifyTimeout !== null) {
       clearTimeout(this.notifyTimeout);
       this.notifyTimeout = null;
     }
-    if (this.storageSaveTimeout !== null) {
-      clearTimeout(this.storageSaveTimeout);
-      this.storageSaveTimeout = null;
-    }
-    if (this.progressSaveTimeout !== null) {
-      clearTimeout(this.progressSaveTimeout);
-      this.progressSaveTimeout = null;
+    if (this.refreshTimeout !== null) {
+      clearTimeout(this.refreshTimeout);
+      this.refreshTimeout = null;
     }
     if (this.tauriUnlisten) {
       this.tauriUnlisten();

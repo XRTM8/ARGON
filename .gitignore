@@ -16,3 +16,5 @@ src-tauri/tools/extractor.json
 src-tauri/tools/*LICENSE.txt
 flow-core/target/
 flow-core/.test-tmp/
+downloader-core/target/
+downloader-core/.test-tmp/

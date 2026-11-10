@@ -78,6 +78,12 @@ export function expandWildcardPattern(pattern: string, maxUrls = 100): { urls: s
   return { urls: [], error: 'no_wildcard' };
 }
 
+export function extractSharedUrl(raw: string): string {
+  const match = raw.match(/https?:\/\/[^\s<>"{}|\\^`\[\]]+/i);
+  if (!match) return raw.trim();
+  return match[0].replace(/[.,!?;:)'"]+$/, '');
+}
+
 export function downloadHost(url: string) {
   try { return new URL(url).hostname.replace(/^www\./, ''); }
   catch { return ''; }

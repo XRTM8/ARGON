@@ -42,7 +42,7 @@ export function TaskInspector({ task, lang, onClose }: Props) {
       <div className="inspector-head">
         <div>
           <h2 dir="auto">{task.filename}</h2>
-          <span>
+          <span dir="ltr">
             {formatBytes(task.downloadedBytes)}
             {known ? ` / ${formatBytes(task.totalBytes)} (${pct}%)` : ''}
             {task.speedBytesPerSec > 0 ? ` · ${formatSpeed(task.speedBytesPerSec)}` : ''}
@@ -151,10 +151,10 @@ export function TaskInspector({ task, lang, onClose }: Props) {
         <form
           className="refresh-url"
           style={{ marginBottom: 0, paddingBottom: 12 }}
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
             try {
-              downloadManager.refreshTaskUrl(task.id, replacementUrl);
+              await downloadManager.refreshTaskUrl(task.id, replacementUrl);
               setReplacementUrl('');
               setActionError('');
             } catch (err) {

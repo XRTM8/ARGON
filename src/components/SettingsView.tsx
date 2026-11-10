@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, Bell, Volume2, Sliders, Cpu, Clock, Shield } from 'lucide-react';
+import { FolderOpen, Bell, Volume2, Sliders, Cpu, Shield, Film, Download, RefreshCw } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
 import { UpdatesPanel } from './UpdatesPanel';
 import { SharingSettings } from './FlowPanels';
-import { CURRENT_VERSION } from './Header';
 import { isAndroidRuntime } from '../core/safeArea';
+import type { MediaToolsStatus } from '../types/downloader';
 
-export type SettingsTab = 'general' | 'engine' | 'scheduler' | 'updates';
+export type SettingsTab = 'general' | 'engine' | 'updates';
 
 interface SettingsViewProps {
   lang: 'ar' | 'en';
@@ -23,6 +23,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
     if (requestedTab) setTab(requestedTab.tab);
   }, [requestedTab]);
   const [maxConcurrent, setMaxConcurrent] = useState(s.maxConcurrentDownloads);
+  const [maxPerHost, setMaxPerHost] = useState(s.maxConnectionsPerHost ?? 4);
   const [defaultSegments, setDefaultSegments] = useState(s.defaultSegmentCount ?? 8);
   const [speedLimit, setSpeedLimit] = useState(s.globalSpeedLimitBytes);
   const [notifications, setNotifications] = useState(s.enableNotifications);
@@ -33,47 +34,55 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
   const [theme, setTheme] = useState<'dark' | 'light'>(s.theme ?? 'dark');
   const [workStealing, setWorkStealing] = useState(s.dynamicWorkStealing ?? true);
   const [autoVerify, setAutoVerify] = useState(s.autoVerifyIntegrity ?? false);
+  const [autoRetry, setAutoRetry] = useState(s.autoRetryEnabled ?? true);
+  const [minimizeToTray, setMinimizeToTray] = useState(s.minimizeToTray ?? true);
+  const [startWithWindows, setStartWithWindows] = useState(s.startWithWindows ?? false);
   const [clipboardMonitor, setClipboardMonitor] = useState(s.clipboardMonitorEnabled ?? false);
   const [nightScheduler, setNightScheduler] = useState(s.nightSchedulerEnabled ?? false);
   const [nightStart, setNightStart] = useState(s.nightSchedulerStartHour ?? 2);
   const [nightEnd, setNightEnd] = useState(s.nightSchedulerEndHour ?? 8);
   const [autoShutdown, setAutoShutdown] = useState(s.autoShutdownOnComplete ?? false);
+  const [mediaTools, setMediaTools] = useState<MediaToolsStatus | null>(null);
+  const [toolBusy, setToolBusy] = useState<'ffmpeg' | 'yt-dlp' | null>(null);
+  const [toolProgress, setToolProgress] = useState<{ downloaded: number; total?: number } | null>(null);
+  const [toolMessage, setToolMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (android || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    void downloadManager.mediaToolsStatus().then(setMediaTools).catch(() => {});
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<{ tool: string; phase: string; downloaded: number; total?: number }>('media-tool-progress', (ev) => {
+        setToolProgress({ downloaded: ev.payload.downloaded, total: ev.payload.total });
+      }).then((fn) => {
+        unlisten = fn;
+      })
+    );
+    return () => {
+      unlisten?.();
+    };
+  }, [android]);
 
   return (
     <div className="settings-shell">
       <div className="view-header" style={{ marginBottom: 4 }}>
-        <div className="view-heading">
-          <span className="eyebrow">{ar ? 'إدارة النظام' : 'SYSTEM PREFERENCES'}</span>
-          <div className="view-header-title">
-            <h1>{ar ? 'الإعدادات' : 'Settings'}</h1>
-            <span className="count-badge" dir="ltr">
-              v{CURRENT_VERSION}
-            </span>
-          </div>
-          <p className="view-description">
-            {ar
-              ? 'إدارة التخزين، تسريع الاتصال، الطوابير المجدولة، والتحديثات الموقّعة.'
-              : 'Configure storage, multi-segment acceleration, scheduled queues, and signed updates.'}
-          </p>
+        <div className="view-header-title">
+          <h1>{ar ? 'الإعدادات' : 'Settings'}</h1>
         </div>
       </div>
 
       <div className="settings-tabs" role="tablist" aria-label={ar ? 'أقسام الإعدادات' : 'Settings sections'}>
         <button type="button" role="tab" aria-selected={tab === 'general'} onClick={() => setTab('general')}>
           <Sliders size={14} style={{ display: 'inline', marginInlineEnd: 6 }} />
-          {ar ? 'العام والمظهر' : 'General & UI'}
+          {ar ? 'عام' : 'General'}
         </button>
         <button type="button" role="tab" aria-selected={tab === 'engine'} onClick={() => setTab('engine')}>
           <Cpu size={14} style={{ display: 'inline', marginInlineEnd: 6 }} />
-          {ar ? 'المحرك والتسريع' : 'Engine & Speed'}
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'scheduler'} onClick={() => setTab('scheduler')}>
-          <Clock size={14} style={{ display: 'inline', marginInlineEnd: 6 }} />
-          {ar ? 'الجدولة والطوابير' : 'Scheduler'}
+          {ar ? 'التحميل' : 'Downloads'}
         </button>
         <button type="button" role="tab" aria-selected={tab === 'updates'} onClick={() => setTab('updates')}>
           <Shield size={14} style={{ display: 'inline', marginInlineEnd: 6 }} />
-          {ar ? 'التحديثات والمشاركة' : 'Updates & Flow'}
+          {ar ? 'التحديثات' : 'Updates'}
         </button>
       </div>
 
@@ -83,47 +92,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
             <div className="settings-label">
               <strong style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <FolderOpen size={15} className="accent-text" />
-                {ar ? 'مجلد الحفظ الافتراضي' : 'Download Destination'}
+                {ar ? 'مجلد الحفظ' : 'Download Folder'}
               </strong>
               <span>
                 {android
                   ? ar
-                    ? 'على Android يُدار المسار تلقائياً عبر نظام التخزين الآمن للتطبيق.'
-                    : 'On Android, destination storage is managed safely by the app sandbox.'
+                    ? 'تُحفظ التنزيلات وتُصدَّر تلقائياً إلى التنزيلات (Downloads/ARGON) وإلى المعرض للمقاطع والصور.'
+                    : 'Downloads are published automatically to Downloads/ARGON and Gallery for media.'
                   : ar
-                    ? 'حدد المسار الكامل لحفظ التنزيلات.'
-                    : 'Set the full directory path for saved downloads.'}
+                    ? 'المسار الكامل لحفظ التنزيلات على جهازك.'
+                    : 'Directory path for saved downloads.'}
               </span>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                aria-label={ar ? 'مسار مجلد الحفظ' : 'Download directory'}
-                dir="ltr"
-                value={directory}
-                disabled={android}
-                placeholder={s.defaultDirectory || 'Downloads'}
-                onChange={(e) => setDirectory(e.target.value)}
-                className="argon-input"
-                style={{ flex: 1, minWidth: 200, fontFamily: 'monospace' }}
-              />
-              {!android && (
-                <button
-                  className="action-button primary"
-                  onClick={async () => {
-                    try {
-                      await downloadManager.updateSettings({ defaultDirectory: directory });
-                      setDirectoryMessage(ar ? 'تم حفظ المجلد والتحقق من صلاحية الكتابة.' : 'Directory saved and verified.');
-                    } catch (error) {
-                      setDirectoryMessage(String(error));
-                    }
-                  }}
-                >
-                  {ar ? 'حفظ المسار' : 'Save Path'}
-                </button>
-              )}
-            </div>
-            {directoryMessage && <p style={{ margin: 0, fontSize: 12, color: 'var(--argon-accent)' }}>{directoryMessage}</p>}
+            {!android && (
+              <>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input
+                    aria-label={ar ? 'مسار مجلد الحفظ' : 'Download directory'}
+                    dir="ltr"
+                    value={directory}
+                    placeholder={s.defaultDirectory || 'Downloads'}
+                    onChange={(e) => setDirectory(e.target.value)}
+                    className="argon-input"
+                    style={{ flex: 1, minWidth: 200, fontFamily: 'monospace' }}
+                  />
+                  <button
+                    className="action-button primary"
+                    onClick={async () => {
+                      try {
+                        await downloadManager.updateSettings({ defaultDirectory: directory });
+                        setDirectoryMessage(ar ? 'تم حفظ المجلد والتحقق من صلاحية الكتابة.' : 'Directory saved.');
+                      } catch (error) {
+                        setDirectoryMessage(String(error));
+                      }
+                    }}
+                  >
+                    {ar ? 'حفظ' : 'Save'}
+                  </button>
+                </div>
+                {directoryMessage && <p style={{ margin: 0, fontSize: 12, color: 'var(--argon-accent)' }}>{directoryMessage}</p>}
+              </>
+            )}
           </section>
 
           <section className="settings-card">
@@ -221,6 +231,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   style={{ flex: 1, accentColor: 'var(--argon-accent)' }}
                 />
               </div>
+            )}
+
+            {!android && (
+              <>
+                <div className="settings-row">
+                  <div className="settings-label">
+                    <strong>{ar ? 'البقاء في شريط النظام (Tray) عند الإغلاق' : 'Minimize to System Tray on Close'}</strong>
+                    <span>{ar ? 'استمرار التقاط روابط المتصفح وإدارة الطوابير بالخلفية عند إغلاق النافذة' : 'Keep browser capture and downloads running in background'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={minimizeToTray}
+                    className="argon-switch"
+                    onClick={() => {
+                      const next = !minimizeToTray;
+                      setMinimizeToTray(next);
+                      void downloadManager.updateSettings({ minimizeToTray: next });
+                    }}
+                  >
+                    <span className="argon-switch-thumb" />
+                  </button>
+                </div>
+
+                <div className="settings-row">
+                  <div className="settings-label">
+                    <strong>{ar ? 'التشغيل التلقائي مع بدء Windows' : 'Start ARGON with Windows'}</strong>
+                    <span>{ar ? 'تشغيل ARGON مصغراً في شريط النظام عند تسجيل الدخول' : 'Launch ARGON minimized to tray on Windows sign-in'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={startWithWindows}
+                    className="argon-switch"
+                    onClick={() => {
+                      const next = !startWithWindows;
+                      setStartWithWindows(next);
+                      void downloadManager.updateSettings({ startWithWindows: next }).catch((err) => {
+                        setStartWithWindows(!next);
+                        setDirectoryMessage(String(err));
+                      });
+                    }}
+                  >
+                    <span className="argon-switch-thumb" />
+                  </button>
+                </div>
+              </>
             )}
           </section>
         </>
@@ -345,6 +402,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
 
           <div className="settings-row">
             <div className="settings-label">
+              <strong>{ar ? 'الحد الأقصى للمهام المتزامنة لكل موقع' : 'Max Downloads per Domain'}</strong>
+              <span>{ar ? 'حماية من الحظر المؤقت (429) عند تحميل عدة ملفات من نفس الخادم' : 'Prevent rate-limiting (HTTP 429) on the same host'}</span>
+            </div>
+            <div className="segment-pills" style={{ width: 'min(260px, 100%)' }}>
+              {[1, 2, 4, 8].map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  className={`segment-pill-btn ${maxPerHost === count ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setMaxPerHost(count);
+                    void downloadManager.updateSettings({ maxConnectionsPerHost: count });
+                  }}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-label">
+              <strong>{ar ? 'إعادة المحاولة التلقائية عند الانقطاع' : 'Auto-Retry Failed Transfers'}</strong>
+              <span>{ar ? 'إعادة جدولة التنزيل تلقائياً مع تراجع أسي عند انقطاع الشبكة' : 'Automatically retry transient network drops with exponential backoff'}</span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoRetry}
+              className="argon-switch"
+              onClick={() => {
+                const next = !autoRetry;
+                setAutoRetry(next);
+                void downloadManager.updateSettings({ autoRetryEnabled: next });
+              }}
+            >
+              <span className="argon-switch-thumb" />
+            </button>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-label">
               <strong>{ar ? 'مراقبة الحافظة عند التركيز' : 'Smart Clipboard Detection'}</strong>
               <span>{ar ? 'التقاط روابط الملفات المنسوخة تلقائياً عند فتح التطبيق' : 'Suggest direct download URLs from clipboard when focused'}</span>
             </div>
@@ -362,19 +461,91 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               <span className="argon-switch-thumb" />
             </button>
           </div>
-        </section>
-      )}
 
-      {tab === 'scheduler' && (
-        <section className="settings-card">
+          {!android && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--argon-line)', display: 'grid', gap: 10 }}>
+              <div className="settings-row">
+                <div className="settings-label">
+                  <strong style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <Film size={15} className="accent-text" />
+                    {ar ? 'محرك الوسائط و FFmpeg (1080p/4K و HLS/DASH)' : 'Media Engine & FFmpeg (HD Mux & HLS/DASH)'}
+                  </strong>
+                  <span>
+                    {mediaTools
+                      ? `yt-dlp: ${mediaTools.hasYtdlp ? '✓' : '✗'} · Node: ${mediaTools.hasNode ? '✓' : '✗'} · FFmpeg: ${mediaTools.hasFfmpeg ? '✓' : '✗'}`
+                      : ar ? 'تفعيل دمج الصوت والصورة للجودات العالية وقوائم البث' : 'Enable audio/video muxing for high resolutions and HLS/DASH playlists'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    disabled={toolBusy !== null}
+                    onClick={async () => {
+                      setToolBusy('ffmpeg');
+                      setToolMessage(null);
+                      setToolProgress(null);
+                      try {
+                        const status = await downloadManager.installFfmpegTool();
+                        setMediaTools(status);
+                        setToolMessage(ar ? 'تم تنزيل وتفعيل FFmpeg بنجاح بعد التحقق من SHA-256.' : 'FFmpeg verified and installed.');
+                      } catch (err) {
+                        setToolMessage(String(err));
+                      } finally {
+                        setToolBusy(null);
+                        setToolProgress(null);
+                      }
+                    }}
+                  >
+                    <Download size={14} />
+                    <span>
+                      {toolBusy === 'ffmpeg'
+                        ? ar ? 'جارٍ التنزيل…' : 'Installing…'
+                        : mediaTools?.hasFfmpeg
+                          ? ar ? 'تحديث FFmpeg' : 'Reinstall FFmpeg'
+                          : ar ? 'تنزيل وتفعيل FFmpeg' : 'Install FFmpeg'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    disabled={toolBusy !== null}
+                    onClick={async () => {
+                      setToolBusy('yt-dlp');
+                      setToolMessage(null);
+                      setToolProgress(null);
+                      try {
+                        const status = await downloadManager.updateYtdlpTool();
+                        setMediaTools(status);
+                        setToolMessage(ar ? 'تم تحديث yt-dlp والتحقق من SHA-256.' : 'yt-dlp updated and verified.');
+                      } catch (err) {
+                        setToolMessage(String(err));
+                      } finally {
+                        setToolBusy(null);
+                        setToolProgress(null);
+                      }
+                    }}
+                  >
+                    <RefreshCw size={14} className={toolBusy === 'yt-dlp' ? 'animate-spin' : ''} />
+                    <span>{ar ? 'تحديث yt-dlp' : 'Update yt-dlp'}</span>
+                  </button>
+                </div>
+              </div>
+              {toolProgress && (
+                <progress
+                  value={toolProgress.total ? toolProgress.downloaded : undefined}
+                  max={toolProgress.total || undefined}
+                  style={{ width: '100%' }}
+                />
+              )}
+              {toolMessage && <p style={{ margin: 0, fontSize: 12, color: 'var(--argon-accent)' }}>{toolMessage}</p>}
+            </div>
+          )}
+
           <div className="settings-row">
             <div className="settings-label">
-              <strong>{ar ? 'تفعيل نافذة الجدول الليلي' : 'Enable Night Scheduler Window'}</strong>
-              <span>
-                {ar
-                  ? 'حصر بدء التنزيلات المجدولة خلال الساعات المحددة فقط'
-                  : 'Restrict queued downloads to the configured off-peak hours'}
-              </span>
+              <strong>{ar ? 'الجدول الليلي للتنزيلات' : 'Night Scheduler Window'}</strong>
+              <span>{ar ? 'حصر التنزيلات المجدولة خلال الساعات المحددة' : 'Restrict queued downloads to configured hours'}</span>
             </div>
             <button
               type="button"
@@ -391,51 +562,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
             </button>
           </div>
 
-          <div className="settings-row">
-            <div className="settings-label">
-              <strong>{ar ? 'ساعات النشاط المجدولة' : 'Active Schedule Window'}</strong>
-              <span>{ar ? 'تُطبّق أيضاً على مهام الطابور الليلي' : 'Also governs Night Queue tasks'}</span>
+          {nightScheduler && (
+            <div className="settings-row">
+              <div className="settings-label">
+                <strong>{ar ? 'ساعات النشاط' : 'Active Hours'}</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <select
+                  className="argon-select"
+                  value={nightStart}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setNightStart(v);
+                    void downloadManager.updateSettings({ nightSchedulerStartHour: v });
+                  }}
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, '0')}:00
+                    </option>
+                  ))}
+                </select>
+                <span>→</span>
+                <select
+                  className="argon-select"
+                  value={nightEnd}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setNightEnd(v);
+                    void downloadManager.updateSettings({ nightSchedulerEndHour: v });
+                  }}
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, '0')}:00
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <select
-                className="argon-select"
-                value={nightStart}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setNightStart(v);
-                  void downloadManager.updateSettings({ nightSchedulerStartHour: v });
-                }}
-              >
-                {Array.from({ length: 24 }, (_, h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, '0')}:00
-                  </option>
-                ))}
-              </select>
-              <span>→</span>
-              <select
-                className="argon-select"
-                value={nightEnd}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setNightEnd(v);
-                  void downloadManager.updateSettings({ nightSchedulerEndHour: v });
-                }}
-              >
-                {Array.from({ length: 24 }, (_, h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, '0')}:00
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          )}
 
           {!android && (
             <div className="settings-row">
               <div className="settings-label">
-                <strong>{ar ? 'إيقاف تشغيل الكمبيوتر بعد الانتهاء' : 'Shut Down PC When All Complete'}</strong>
-                <span>{ar ? 'إيقاف التشغيل الآمن فور اكتمال جميع المهام في الطابور' : 'Trigger safe OS shutdown once every queued transfer completes'}</span>
+                <strong>{ar ? 'إيقاف تشغيل الكمبيوتر بعد الانتهاء' : 'Shut Down PC When Complete'}</strong>
               </div>
               <button
                 type="button"

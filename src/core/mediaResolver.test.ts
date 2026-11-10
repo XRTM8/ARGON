@@ -9,6 +9,10 @@ describe('mediaResolver', () => {
     expect(detectPlatform('https://www.instagram.com/reel/C123456/')).toBe('instagram');
     expect(detectPlatform('https://x.com/user/status/123456789')).toBe('twitter');
     expect(detectPlatform('https://twitter.com/user/status/123456789')).toBe('twitter');
+    expect(detectPlatform('https://fb.watch/abc123/')).toBe('facebook');
+    expect(detectPlatform('https://www.reddit.com/r/rust/comments/abc/')).toBe('reddit');
+    expect(detectPlatform('https://vimeo.com/123456789')).toBe('vimeo');
+    expect(detectPlatform('https://www.threads.net/@user/post/xyz')).toBe('threads');
     expect(detectPlatform('https://example.com/videos/stream.mp4')).toBe('direct');
     expect(detectPlatform('https://example.com/podcast.mp3')).toBe('direct');
     expect(detectPlatform('https://example.com/archive.zip')).toBe('other');

@@ -1,6 +1,6 @@
 [package]
 name = "otium_downloader"
-version = "2.3.0"
+version = "2.4.0"
 description = "ARGON — Sovereign, High-Performance Multi-Segment Download Accelerator"
 authors = ["XRTM8"]
 edition = "2021"
@@ -25,8 +25,12 @@ tokio = { version = "1", features = ["full"] }
 sha2 = "0.10"
 futures-util = "0.3"
 argon-flow-core = { path = "../flow-core" }
+argon-downloader-core = { path = "../downloader-core" }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
+tauri = { version = "2.12.5", features = ["tray-icon"] }
+flate2 = { version = "1.1", features = ["rust_backend"] }
+zip = { version = "9.5.0", default-features = false, features = ["deflate-flate2"] }
 rfd = "0.17.2"
 arboard = { version = "3.4", default-features = false }
 tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls", "system-proxy"] }
@@ -34,6 +38,7 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "=0.56.0"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 base64 = "0.23"

@@ -1,4 +1,4 @@
-export const DEFAULTS = { autoIntercept: false, showVideoButton: true, excludedHosts: [], minSizeBytes: 0, language: 'ar' };
+export const DEFAULTS = { autoIntercept: false, showVideoButton: true, forwardCookies: false, excludedHosts: [], minSizeBytes: 0, language: 'ar' };
 
 export function platformVideo(value, title) {
   const url = httpUrl(value);
@@ -37,7 +37,7 @@ export function mediaDescriptor(value, contentType = '') {
   if (!playlist && !direct) return null;
   let filename = url.pathname.split('/').pop() || 'media';
   try { filename = decodeURIComponent(filename); } catch { /* Keep malformed escaped filenames. */ }
-  return { url: value, filename: filename.slice(0, 220), type: playlist ? (/dash|mpd/.test(`${mime} ${ext}`) ? 'DASH' : 'HLS') : (ext || mime.split('/')[1] || 'MEDIA').toUpperCase(), supported: !playlist };
+  return { url: value, filename: filename.slice(0, 220), type: playlist ? (/dash|mpd/.test(`${mime} ${ext}`) ? 'DASH' : 'HLS') : (ext || mime.split('/')[1] || 'MEDIA').toUpperCase(), supported: !playlist, playlist: !!playlist };
 }
 
 export function shouldCapture(item, settings) {

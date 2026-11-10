@@ -1,290 +1,468 @@
-import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DownloadManager } from './downloadManager';
-import type { DownloadTask } from '../types/downloader';
+import { STORAGE_SETTINGS_KEY, STORAGE_TASKS_KEY } from './storage';
+import type { AppSettings, DownloadTask, DownloaderSnapshot, MediaToolsStatus } from '../types/downloader';
 
-const { invoke, events } = vi.hoisted(() => ({ invoke: vi.fn(), events: new Map<string, (event: any) => void>() }));
+const { invoke, events } = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  events: new Map<string, (event: { payload?: unknown }) => void>()
+}));
+
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async (name, callback) => { events.set(name, callback); return () => events.delete(name); }) }));
-vi.mock('./sound', () => ({ soundEngine: { enabled: true, volume: 0.5, playStartSweep: vi.fn(), playCompleteChime: vi.fn(), playErrorTone: vi.fn() } }));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (event: string, handler: (event: { payload?: unknown }) => void) => {
+    events.set(event, handler);
+    return () => {
+      events.delete(event);
+    };
+  })
+}));
 
-const probe = { content_length: 2048, accept_ranges: true, content_type: 'application/octet-stream', etag: '"v1"' };
-let manager: DownloadManager;
-let implementation: (name: string, args: any) => unknown;
-const calls = (name: string) => invoke.mock.calls.filter((call) => call[0] === name);
-const task = (id: string) => manager.getTasks().find((t) => t.id === id)!;
-const settle = async (id: string) => vi.waitFor(() => expect(['completed', 'error']).toContain(task(id).status));
-function defaultInvoke(name: string, args: any): unknown {
-  if (name === 'get_default_download_directory') return 'C:\\Downloads';
-  if (name === 'probe_url') return { ...probe };
-  if (name === 'prepare_download_file') return args.destinationPath;
-  if (name === 'download_segment') return { downloaded_bytes: args.useRange ? args.endByte - args.startByte + 1 : args.expectedTotal || 2048, total_bytes: args.expectedTotal || 2048 };
-  if (name === 'verify_file_sha256') return 'a'.repeat(64);
-  if (name === 'resolve_media') return { downloadUrl: 'https://cdn.example.com/video.mp4', suggestedFilename: 'Video.mp4', headers: { Referer: 'https://www.youtube.com/' } };
+function baseSettings(overrides: Partial<AppSettings> = {}): AppSettings {
+  return {
+    maxConcurrentDownloads: 3,
+    maxConnectionsPerHost: 4,
+    globalSpeedLimitBytes: 0,
+    enableNotifications: true,
+    enableSound: false,
+    soundVolume: 0.5,
+    defaultDirectory: 'C:\\Downloads',
+    defaultSegmentCount: 8,
+    autoShutdownOnComplete: false,
+    nightSchedulerEnabled: false,
+    nightSchedulerStartHour: 2,
+    nightSchedulerEndHour: 8,
+    theme: 'dark',
+    dynamicWorkStealing: true,
+    clipboardMonitorEnabled: false,
+    autoVerifyIntegrity: false,
+    autoRetryEnabled: true,
+    maxAutoRetries: 3,
+    minimizeToTray: true,
+    startWithWindows: false,
+    ...overrides
+  };
 }
-beforeEach(() => {
-  const memory = new Map<string, string>();
-  const storage = { getItem: (k: string) => memory.get(k) ?? null, setItem: (k: string, v: string) => memory.set(k, v), removeItem: (k: string) => memory.delete(k) };
-  vi.stubGlobal('window', { __TAURI_INTERNALS__: {}, setTimeout, clearTimeout, setInterval, clearInterval, localStorage: storage });
-  vi.stubGlobal('localStorage', storage);
-  events.clear(); invoke.mockReset(); implementation = defaultInvoke;
-  invoke.mockImplementation(async (name, args) => implementation(name, args));
-  manager = new DownloadManager();
-});
-afterEach(async () => { manager.destroy(); await Promise.resolve(); vi.unstubAllGlobals(); });
 
-describe('ARGON real download lifecycle', () => {
-  it('persists queued work and blocks new transfers until a failed update releases the queue', async () => {
-    manager.beginUpdateInstallation();
-    const id = manager.addTask('https://example.com/after-update.zip');
-    expect(task(id).status).toBe('queued'); expect(calls('probe_url')).toHaveLength(0);
-    manager.endUpdateInstallation(); await settle(id); expect(task(id).status).toBe('completed');
-  });
-  it('refreshes signed links without forwarding old credentials and revalidates partial data', async () => {
-    const id = manager.addTask('https://example.com/file.zip?token=old'); await settle(id);
-    const current = task(id); current.status = 'paused'; current.downloadedBytes = 512;
-    current.chunks = [{ index: 0, startByte: 0, endByte: 2047, downloaded: 512, status: 'pending' }];
-    current.headers = { Authorization: 'Bearer old-secret', Cookie: 'old-cookie' };
-    manager.refreshTaskUrl(id, 'https://example.com/file.zip?token=new'); await settle(id);
-    expect(task(id).url).toBe('https://example.com/file.zip?token=new');
-    expect(task(id).headers).not.toHaveProperty('Authorization'); expect(task(id).headers).not.toHaveProperty('Cookie');
-    expect(calls('prepare_download_file').at(-1)![1].reset).toBe(false);
-    expect(calls('download_segment').at(-1)![1].currentDownloaded).toBe(512);
-  });
-  it('starts from zero when a replacement link identifies a different resource', async () => {
-    const id = manager.addTask('https://example.com/first.zip'); await settle(id);
-    task(id).status = 'paused'; task(id).downloadedBytes = 512;
-    manager.refreshTaskUrl(id, 'https://another.example.org/different.zip'); await settle(id);
-    expect(calls('prepare_download_file').at(-1)![1].reset).toBe(true);
-  });
-  it('keeps the task and reports a disk deletion failure', async () => {
-    const id = manager.addTask('https://example.com/keep.zip'); await settle(id);
-    implementation = (name, args) => { if (name === 'delete_file_item') throw new Error('access denied'); return defaultInvoke(name, args); };
-    await manager.removeTask(id, true);
-    expect(task(id).status).toBe('completed'); expect(task(id).errorMessage).toContain('access denied');
-    expect(task(id).savePath).toContain('keep.zip');
-  });
-  it('persists a browser task before acknowledging or probing it', async () => {
-    await vi.waitFor(() => expect(events.has('browser-add-download')).toBe(true));
-    let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
-    implementation = (name, args) => {
-      if (name === 'acknowledge_browser_download') {
-        expect(args).toEqual({ requestId: 'bridge-test', accepted: true });
-        expect(window.localStorage.getItem('otium_download_tasks_v1')).toContain('from-browser.zip');
-        return pending;
-      }
-      return defaultInvoke(name, args);
+function makeTask(id: string, overrides: Partial<DownloadTask> = {}): DownloadTask {
+  return {
+    id,
+    url: 'https://example.com/file.zip',
+    originalUrl: 'https://example.com/file.zip',
+    filename: 'file.zip',
+    totalBytes: 2048,
+    downloadedBytes: 0,
+    status: 'queued',
+    speedBytesPerSec: 0,
+    etaSeconds: 0,
+    chunks: [{ index: 0, startByte: 0, endByte: 2047, downloaded: 0, status: 'pending' }],
+    createdAt: Date.now(),
+    category: 'archives',
+    queueId: 'main',
+    probed: true,
+    acceptRanges: true,
+    ...overrides
+  };
+}
+
+describe('DownloadManager Rust facade lifecycle', () => {
+  let manager: DownloadManager | null = null;
+  let tasks: DownloadTask[] = [];
+  let settings: AppSettings = baseSettings();
+  let updating = false;
+  let nextId = 1;
+  let overrideInvoke: ((name: string, args: Record<string, unknown>) => unknown) | null = null;
+
+  const calls = (name: string) => invoke.mock.calls.filter(([cmd]) => cmd === name);
+
+  function snapshot(): DownloaderSnapshot {
+    const activeCount = tasks.filter((t) => t.status === 'downloading').length;
+    const queuedCount = tasks.filter((t) => t.status === 'queued').length;
+    const completedCount = tasks.filter((t) => t.status === 'completed').length;
+    const totalBytesDownloaded = tasks.reduce((s, t) => s + t.downloadedBytes, 0);
+    const currentTotalSpeed = tasks.reduce((s, t) => s + (t.status === 'downloading' ? t.speedBytesPerSec : 0), 0);
+    return {
+      tasks: tasks.map((t) => ({ ...t, chunks: t.chunks.map((c) => ({ ...c })) })),
+      stats: {
+        activeCount,
+        queuedCount,
+        completedCount,
+        totalBytesDownloaded,
+        currentTotalSpeed,
+        speedLimitBytesPerSec: settings.globalSpeedLimitBytes
+      },
+      settings: { ...settings },
+      speedHistory: new Array(20).fill(0),
+      updating
     };
-    events.get('browser-add-download')!({ payload: { url: 'https://example.com/from-browser.zip', request_id: 'bridge-test' } });
-    await vi.waitFor(() => expect(calls('acknowledge_browser_download')).toHaveLength(1));
-    manager.processQueue();
-    expect(calls('probe_url')).toHaveLength(0);
-    release();
-    await vi.waitFor(() => expect(manager.getTasks()[0]?.status).toBe('completed'));
-  });
-  it('does not acknowledge or start a browser task that cannot be persisted', async () => {
-    await vi.waitFor(() => expect(events.has('browser-add-download')).toBe(true));
-    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
-    events.get('browser-add-download')!({ payload: { url: 'https://example.com/not-saved.zip', request_id: 'bridge-quota' } });
-    await vi.waitFor(() => expect(calls('acknowledge_browser_download')[0]?.[1]).toEqual({ requestId: 'bridge-quota', accepted: false }));
-    expect(manager.getTasks()).toHaveLength(0); expect(calls('probe_url')).toHaveLength(0);
-  });
-  it('removes an unconfirmed handoff and leaves the browser responsible when acknowledgement expires', async () => {
-    await vi.waitFor(() => expect(events.has('browser-add-download')).toBe(true));
-    implementation = (name, args) => { if (name === 'acknowledge_browser_download') throw new Error('expired'); return defaultInvoke(name, args); };
-    events.get('browser-add-download')!({ payload: { url: 'https://example.com/expired.zip', request_id: 'bridge-expired' } });
-    await vi.waitFor(() => expect(calls('acknowledge_browser_download')).toHaveLength(1));
-    await vi.waitFor(() => expect(manager.getTasks()).toHaveLength(0));
-    expect(calls('probe_url')).toHaveLength(0);
-  });
-  it('reports preview mode instead of simulating a download', () => {
-    vi.stubGlobal('window', { setTimeout, clearTimeout, setInterval, clearInterval });
-    const id = manager.addTask('https://example.com/file.zip');
-    expect(task(id).status).toBe('error'); expect(task(id).errorMessage).toContain('معاينة');
-    expect(task(id).downloadedBytes).toBe(0); expect(task(id).totalBytes).toBe(0);
-    expect(calls('download_segment')).toHaveLength(0);
-  });
-  it('probes and verifies a real transfer before completion', async () => {
-    const id = manager.addTask('https://example.com/file.zip', undefined, 4);
-    await settle(id);
-    expect(task(id).status).toBe('completed'); expect(task(id).totalBytes).toBe(2048);
-    expect(task(id).downloadedBytes).toBe(2048); expect(calls('download_segment')).toHaveLength(4);
-    expect(calls('validate_download_file')[0][1]).toMatchObject({ expectedBytes: 2048 });
-  });
-  it('uses the same probe pipeline when a queued task starts', async () => {
-    await manager.updateSettings({ maxConcurrentDownloads: 1 });
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => { release = resolve; });
-    implementation = async (name, args) => {
-      if (name === 'download_segment' && args.url.includes('first')) await blocked;
-      return defaultInvoke(name, args);
-    };
-    const first = manager.addTask('https://example.com/first.zip');
-    const second = manager.addTask('https://example.com/second.zip');
-    expect(task(second).status).toBe('queued'); release();
-    await settle(first); await settle(second);
-    expect(calls('probe_url').map((c) => c[1].url)).toEqual(['https://example.com/first.zip', 'https://example.com/second.zip']);
-  });
-  it('keeps HTTP probe errors visible and never prepares the file', async () => {
-    implementation = (name, args) => { if (name === 'probe_url') throw new Error('Server returned HTTP 403'); return defaultInvoke(name, args); };
-    const id = manager.addTask('https://example.com/private.zip'); await settle(id);
-    expect(task(id).errorMessage).toContain('403'); expect(calls('prepare_download_file')).toHaveLength(0);
-  });
-  it('rejects HTML pages instead of saving fake media', async () => {
-    implementation = (name, args) => name === 'probe_url' ? { ...probe, content_type: 'text/html' } : defaultInvoke(name, args);
-    const id = manager.addTask('https://example.com/view'); await settle(id);
-    expect(task(id).status).toBe('error'); expect(calls('download_segment')).toHaveLength(0);
-  });
-  it('falls back from rejected ranges to one full stream', async () => {
-    implementation = (name, args) => { if (name === 'download_segment' && args.useRange) throw new Error('RANGE_UNSUPPORTED'); return defaultInvoke(name, args); };
-    const id = manager.addTask('https://example.com/file.zip', undefined, 4); await settle(id);
-    expect(task(id).status).toBe('completed'); expect(task(id).chunks).toHaveLength(1);
-    expect(calls('download_segment').filter((c) => !c[1].useRange)).toHaveLength(1);
-    expect(calls('cancel_task').length).toBeGreaterThan(0);
-  });
-  it('handles unknown content length with one stream', async () => {
-    implementation = (name, args) => name === 'probe_url' ? { accept_ranges: false } : defaultInvoke(name, args);
-    const id = manager.addTask('https://example.com/stream'); await settle(id);
-    expect(task(id).status).toBe('completed'); expect(task(id).totalBytes).toBe(2048);
-    expect(calls('download_segment')[0][1]).toMatchObject({ useRange: false, expectedTotal: null });
-  });
-  it('waits for checksum verification after the last progress event', async () => {
-    let finishHash!: (hash: string) => void;
-    const pendingHash = new Promise<string>((resolve) => { finishHash = resolve; });
-    implementation = (name, args) => {
-      if (name === 'verify_file_sha256') return pendingHash;
-      if (name === 'download_segment') events.get('download-progress')?.({ payload: { task_id: args.taskId, segment_index: args.segmentIndex, downloaded_bytes: args.endByte - args.startByte + 1, total_bytes: 2048, is_finished: true } });
-      return defaultInvoke(name, args);
-    };
-    const id = manager.addTask('https://example.com/file.zip', undefined, 1, 'a'.repeat(64));
-    await vi.waitFor(() => expect(calls('verify_file_sha256')).toHaveLength(1));
-    expect(task(id).status).toBe('downloading'); finishHash('b'.repeat(64)); await settle(id);
-    expect(task(id).status).toBe('error'); expect(task(id).checksum?.verified).toBe(false);
-  });
-  it('does not complete when disk verification fails', async () => {
-    implementation = (name, args) => { if (name === 'validate_download_file') throw new Error('Incomplete file'); return defaultInvoke(name, args); };
-    const id = manager.addTask('https://example.com/file.zip'); await settle(id);
-    expect(task(id).status).toBe('error'); expect(task(id).errorMessage).toContain('Incomplete');
-  });
-  it('ignores progress from a cancelled attempt and serializes rapid resume', async () => {
-    let finish!: () => void;
-    const pending = new Promise<void>((resolve) => { finish = resolve; });
-    let oldId = '';
-    implementation = async (name, args) => {
-      if (name === 'download_segment' && !oldId) { oldId = args.taskId; await pending; throw new Error('CANCELLED'); }
-      return defaultInvoke(name, args);
-    };
-    const id = manager.addTask('https://example.com/file.zip', undefined, 1);
-    await vi.waitFor(() => expect(oldId).not.toBe(''));
-    manager.pauseTask(id); manager.resumeTask(id);
-    events.get('download-progress')?.({ payload: { task_id: oldId, segment_index: 0, downloaded_bytes: 999999, total_bytes: 999999, is_finished: true } });
-    expect(task(id).downloadedBytes).toBe(0); expect(calls('probe_url')).toHaveLength(1);
-    finish(); await settle(id);
-    expect(task(id).status).toBe('completed'); expect(calls('probe_url')).toHaveLength(2);
-    expect(calls('download_segment')[1][1].taskId).not.toBe(oldId);
-  });
-  it('pause all leaves every queued task paused', async () => {
-    await manager.updateSettings({ maxConcurrentDownloads: 1 });
-    manager.addBatchTasks(['https://example.com/a.zip', 'https://example.com/b.zip', 'https://example.com/c.zip']);
-    manager.pauseAll(); expect(manager.getTasks().every((t) => t.status === 'paused')).toBe(true);
-    await Promise.resolve(); expect(calls('download_segment')).toHaveLength(0);
-  });
-  it('extracts social URLs for browser and batch entry points too', async () => {
-    const id = manager.addTask('https://www.youtube.com/watch?v=test'); await settle(id);
-    expect(calls('resolve_media')).toHaveLength(1);
-    expect(calls('probe_url')[0][1]).toMatchObject({ url: 'https://cdn.example.com/video.mp4', customHeaders: { Referer: 'https://www.youtube.com/' } });
-    expect(task(id).filename).toBe('Video.mp4');
-  });
-  it('preserves an imported audio-only request without inventing MP3 conversion', async () => {
-    const id = manager.addTask('https://www.youtube.com/watch?v=test', undefined, 1, undefined, undefined, undefined, { isAudioOnly: true });
-    await settle(id);
-    expect(calls('resolve_media')[0][1]).toMatchObject({ audioOnly: true });
-  });
-  it('never downloads the original social page after extraction failure', async () => {
-    implementation = (name, args) => { if (name === 'resolve_media') throw new Error('Extraction failed'); return defaultInvoke(name, args); };
-    const id = manager.addTask('https://www.tiktok.com/@user/video/123'); await settle(id);
-    expect(task(id).errorMessage).toContain('Extraction failed'); expect(calls('download_segment')).toHaveLength(0);
-  });
-  it('reports unsupported torrents and malformed URLs explicitly', () => {
-    for (const url of ['magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709', 'file:///secret', 'nonsense']) {
-      const id = manager.addTask(url); expect(task(id).status).toBe('error'); expect(task(id).errorMessage).toBeTruthy();
+  }
+
+  function defaultInvoke(name: string, args: Record<string, unknown> = {}): unknown {
+    if (overrideInvoke) {
+      const result = overrideInvoke(name, args);
+      if (result !== undefined) return result;
     }
+    if (name === 'get_default_download_directory') return settings.defaultDirectory;
+    if (name === 'set_browser_bridge_ready') return null;
+    if (name === 'dl_snapshot') return snapshot();
+    if (name === 'dl_migrate_legacy') return null;
+    if (name === 'dl_update_settings') {
+      settings = { ...settings, ...(args.patch as Partial<AppSettings>) };
+      return { ...settings };
+    }
+    if (name === 'dl_add_task') {
+      const req = args.request as Record<string, unknown>;
+      const task = makeTask(`task_${nextId++}`, {
+        url: String(req.url),
+        originalUrl: String(req.url),
+        filename: String(req.filename || 'file.zip'),
+        requestedSegments: Number(req.segmentCount || settings.defaultSegmentCount || 8),
+        queueId: (req.queueId as DownloadTask['queueId']) || 'main',
+        mirrors: (req.mirrors as string[] | null) || undefined,
+        headers: (req.headers as Record<string, string> | null) || undefined
+      });
+      tasks.push(task);
+      return task;
+    }
+    if (name === 'dl_add_batch') {
+      const urls = args.urls as string[];
+      for (const u of urls) {
+        tasks.push(makeTask(`task_${nextId++}`, { url: u, originalUrl: u }));
+      }
+      return tasks;
+    }
+    if (name === 'dl_pause_task') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) found.status = 'paused';
+      return null;
+    }
+    if (name === 'dl_resume_task') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) found.status = args.force ? 'downloading' : 'queued';
+      return null;
+    }
+    if (name === 'dl_restart_task') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) {
+        found.downloadedBytes = 0;
+        found.status = 'queued';
+        found.checksum = found.checksum?.expected
+          ? { algorithm: 'sha256', expected: found.checksum.expected }
+          : undefined;
+      }
+      return null;
+    }
+    if (name === 'dl_refresh_url') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) {
+        found.url = String(args.url);
+        found.status = 'queued';
+      }
+      return null;
+    }
+    if (name === 'dl_pause_all') {
+      for (const t of tasks) if (t.status === 'downloading' || t.status === 'queued') t.status = 'paused';
+      return null;
+    }
+    if (name === 'dl_resume_all') {
+      for (const t of tasks) if (t.status === 'paused' || t.status === 'error') t.status = 'queued';
+      return null;
+    }
+    if (name === 'dl_remove_task') {
+      tasks = tasks.filter((t) => t.id !== args.id);
+      return null;
+    }
+    if (name === 'dl_clear_completed') {
+      tasks = tasks.filter((t) => t.status !== 'completed');
+      return null;
+    }
+    if (name === 'dl_set_task_queue') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) found.queueId = args.queueId as DownloadTask['queueId'];
+      return null;
+    }
+    if (name === 'dl_set_task_speed_limit') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) found.speedLimitBytesPerSec = Number(args.bytesPerSec);
+      return null;
+    }
+    if (name === 'dl_verify_hash') {
+      const hash = 'a'.repeat(64);
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) found.checksum = { algorithm: 'sha256', expected: found.checksum?.expected, actual: hash, verified: true };
+      return hash;
+    }
+    if (name === 'dl_set_updating') {
+      updating = Boolean(args.active);
+      return null;
+    }
+    if (name === 'probe_url') {
+      return { content_length: 2048, accept_ranges: true, content_type: 'application/zip' };
+    }
+    if (name === 'media_tools_status' || name === 'install_ffmpeg_tool' || name === 'update_ytdlp_tool') {
+      const st: MediaToolsStatus = {
+        hasYtdlp: true,
+        hasNode: true,
+        hasFfmpeg: name === 'install_ffmpeg_tool',
+        toolsDir: 'C:\\Tools'
+      };
+      return st;
+    }
+    return null;
+  }
+
+  let memoryStorage: Record<string, string> = {};
+  let windowObj: Record<string, unknown> = {};
+
+  function installGlobals(withTauri = true) {
+    memoryStorage = {};
+    const mockStorage: Storage = {
+      get length() {
+        return Object.keys(memoryStorage).length;
+      },
+      key: (i: number) => Object.keys(memoryStorage)[i] ?? null,
+      getItem: (k: string) => memoryStorage[k] ?? null,
+      setItem: (k: string, v: string) => {
+        memoryStorage[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete memoryStorage[k];
+      },
+      clear: () => {
+        memoryStorage = {};
+      }
+    };
+    windowObj = {
+      localStorage: mockStorage,
+      ...(withTauri ? { __TAURI_INTERNALS__: { invoke } } : {})
+    };
+    vi.stubGlobal('localStorage', mockStorage);
+    vi.stubGlobal('window', windowObj);
+  }
+
+  beforeEach(() => {
+    events.clear();
+    tasks = [];
+    settings = baseSettings();
+    updating = false;
+    nextId = 1;
+    overrideInvoke = null;
+    invoke.mockReset();
+    invoke.mockImplementation((name: string, args: Record<string, unknown>) => Promise.resolve(defaultInvoke(name, args)));
+    installGlobals(true);
   });
-  it('preserves custom filenames and uses native collision-safe paths', async () => {
-    implementation = (name, args) => name === 'prepare_download_file' ? 'C:\\Downloads\\custom (1).zip' : defaultInvoke(name, args);
-    const id = manager.addTask('https://example.com/file.zip', 'custom.zip'); await settle(id);
-    expect(task(id).filename).toBe('custom (1).zip'); expect(calls('prepare_download_file')[0][1].fresh).toBe(true);
+
+  afterEach(() => {
+    manager?.destroy();
+    manager = null;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
-  it('restarts from zero and clears a previous checksum result', async () => {
-    const id = manager.addTask('https://example.com/file.zip', undefined, 1, 'a'.repeat(64)); await settle(id);
-    manager.restartTask(id); await settle(id);
-    expect(calls('probe_url')).toHaveLength(2);
-    expect(calls('prepare_download_file')[1][1]).toMatchObject({ fresh: false, reset: true });
-    expect(task(id).checksum?.verified).toBe(true);
+
+  it('migrates legacy localStorage state once and marks browser bridge ready', async () => {
+    localStorage.setItem(
+      STORAGE_TASKS_KEY,
+      JSON.stringify([makeTask('legacy_1', { url: 'https://example.com/old.zip', filename: 'old.zip' })])
+    );
+    localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify({ theme: 'light', maxConcurrentDownloads: 5 }));
+
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    expect(calls('dl_migrate_legacy')).toHaveLength(1);
+    expect(calls('dl_update_settings')[0][1]).toMatchObject({
+      patch: expect.objectContaining({ theme: 'light', maxConcurrentDownloads: 5 })
+    });
+    expect(calls('set_browser_bridge_ready')).toHaveLength(1);
+    expect(localStorage.getItem('argon_migrated_to_rust_v1')).toBe('1');
+
+    // Second startup must skip duplicate migration
+    manager.destroy();
+    invoke.mockClear();
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+    expect(calls('dl_migrate_legacy')).toHaveLength(0);
   });
-  it('exports and imports tasks without fabricated file sizes', () => {
+
+  it('operates safely in browser preview mode without simulating native downloads', async () => {
+    delete windowObj.__TAURI_INTERNALS__;
+    manager = new DownloadManager();
+    expect(manager.getRuntimeStatus()).toBe('preview');
+
+    const previewId = manager.addTask('https://example.com/setup.exe');
+    expect(manager.getTasks().find((t) => t.id === previewId)?.status).toBe('error');
+    await expect(manager.updateSettings({ defaultDirectory: 'D:\\Other' })).rejects.toThrow();
+
+    const imported = manager.importTasks('https://example.com/a.zip\nhttps://example.com/b.zip');
+    expect(imported).toBe(2);
+    expect(JSON.parse(manager.exportTasksJson())).toHaveLength(3);
+    expect(manager.getTasks().every((t) => t.totalBytes === 0)).toBe(true);
+  });
+
+  it('rejects magnets and non-HTTP(S) URLs explicitly without invoking backend transfer', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    for (const url of [
+      'magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709',
+      'file:///secret',
+      'nonsense'
+    ]) {
+      const id = await manager.addTaskAsync(url);
+      const t = manager.getTasks().find((item) => item.id === id);
+      expect(t?.status).toBe('error');
+      expect(t?.errorMessage).toBeTruthy();
+    }
+    expect(calls('dl_add_task')).toHaveLength(0);
+  });
+
+  it('creates tasks via dl_add_task with mirrors, custom headers, and checksum, and reconciles optimistic tasks', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    const createdId = await manager.addTaskAsync(
+      'https://primary.example/app.exe',
+      'custom-app.exe',
+      16,
+      'a'.repeat(64),
+      { Authorization: 'Bearer tok' },
+      undefined,
+      'night',
+      ['https://mirror.example/app.exe']
+    );
+
+    expect(createdId).toBe('task_1');
+    expect(calls('dl_add_task')[0][1]).toEqual({
+      request: {
+        url: 'https://primary.example/app.exe',
+        filename: 'custom-app.exe',
+        segmentCount: 16,
+        expectedSha256: 'a'.repeat(64),
+        headers: { Authorization: 'Bearer tok' },
+        mediaInfo: null,
+        queueId: 'night',
+        mirrors: ['https://mirror.example/app.exe']
+      }
+    });
+
+    // Synchronous addTask creates optimistic entry and swaps cleanly with native task
+    const optId = manager.addTask('https://example.com/two.bin');
+    expect(optId.startsWith('pending_')).toBe(true);
+    await vi.waitFor(() => expect(manager?.getTasks().some((t) => t.id === 'task_2')).toBe(true));
+    expect(manager.getTasks().some((t) => t.id === optId)).toBe(false);
+  });
+
+  it('delegates pause, resume, force-start, restart, speed limit, hash verify, and batch actions to Rust', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    const id = await manager.addTaskAsync('https://example.com/archive.zip');
+    manager.pauseTask(id);
+    await vi.waitFor(() => expect(manager?.getTasks()[0].status).toBe('paused'));
+
+    manager.startTaskImmediately(id);
+    await vi.waitFor(() => expect(calls('dl_resume_task')[0][1]).toEqual({ id, force: true }));
+
+    manager.restartTask(id);
+    await vi.waitFor(() => expect(calls('dl_restart_task')).toHaveLength(1));
+
+    await manager.setTaskSpeedLimit(id, 512_000);
+    expect(calls('dl_set_task_speed_limit')[0][1]).toEqual({ id, bytesPerSec: 512000 });
+    expect(manager.getTasks()[0].speedLimitBytesPerSec).toBe(512_000);
+
+    manager.setTaskQueue(id, 'media');
+    await vi.waitFor(() => expect(calls('dl_set_task_queue')[0][1]).toEqual({ id, queueId: 'media' }));
+
+    const digest = await manager.verifyHash(id);
+    expect(digest).toBe('a'.repeat(64));
+
     manager.pauseAll();
-    const count = manager.importTasks('https://example.com/a.zip\nhttps://example.com/b.zip');
-    expect(count).toBe(2); expect(JSON.parse(manager.exportTasksJson())).toHaveLength(2);
-    expect(manager.getTasks().every((t: DownloadTask) => t.totalBytes === 0)).toBe(true);
+    manager.resumeAll();
+    await vi.waitFor(() => {
+      expect(calls('dl_pause_all')).toHaveLength(1);
+      expect(calls('dl_resume_all')).toHaveLength(1);
+    });
   });
-  it('resumes only when the remote validator and size still match', async () => {
-    let finish!: () => void;
-    const pending = new Promise<void>((resolve) => { finish = resolve; });
-    let firstAttempt = '';
-    implementation = async (name, args) => {
-      if (name === 'download_segment' && !firstAttempt) {
-        firstAttempt = args.taskId;
-        events.get('download-progress')?.({ payload: { task_id: args.taskId, segment_index: 0, downloaded_bytes: 512, total_bytes: 2048, is_finished: false } });
-        await pending; throw new Error('CANCELLED');
-      }
-      return defaultInvoke(name, args);
+
+  it('keeps the task and reports an error if disk deletion rejects', async () => {
+    overrideInvoke = (name) => {
+      if (name === 'dl_remove_task') throw new Error('Permission denied');
+      return undefined;
     };
-    const id = manager.addTask('https://example.com/file.zip', undefined, 1);
-    await vi.waitFor(() => expect(task(id).downloadedBytes).toBe(512));
-    manager.pauseTask(id); manager.resumeTask(id); finish(); await settle(id);
-    expect(calls('prepare_download_file')[1][1].reset).toBe(false);
-    expect(calls('download_segment')[1][1]).toMatchObject({ currentDownloaded: 512, validator: '"v1"' });
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    const id = await manager.addTaskAsync('https://example.com/protected.zip');
+    await manager.removeTask(id, true);
+
+    const remaining = manager.getTasks().find((t) => t.id === id);
+    expect(remaining).toBeTruthy();
+    expect(remaining?.errorMessage).toContain('Permission denied');
   });
-  it('validates and persists a user-selected download directory', async () => {
-    implementation = (name, args) => name === 'validate_download_directory' ? args.directory : defaultInvoke(name, args);
-    await manager.updateSettings({ defaultDirectory: 'C:\\ARGON Downloads' });
-    const id = manager.addTask('https://example.com/file.zip'); await settle(id);
-    expect(calls('prepare_download_file')[0][1].destinationPath).toBe('C:\\ARGON Downloads\\file.zip');
-    expect(manager.getSettings().defaultDirectory).toBe('C:\\ARGON Downloads');
-  });
-  it('steals tail bytes from a slower active segment dynamically', async () => {
-    let releaseSlow!: () => void;
-    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
-    implementation = async (name, args) => {
-      if (name === 'probe_url') return { content_length: 2_000_000, accept_ranges: true, etag: '"big"' };
-      if (name === 'split_active_segment') {
-        releaseSlow();
-        return [1_500_000, 1_999_999];
-      }
-      if (name === 'download_segment') {
-        if (args.segmentIndex === 1) {
-          await slowGate;
-          return { downloaded_bytes: 500_000, total_bytes: 2_000_000, end_byte: 1_499_999 };
-        }
-        return { downloaded_bytes: args.endByte - args.startByte + 1, total_bytes: 2_000_000, end_byte: args.endByte };
-      }
-      return defaultInvoke(name, args);
+
+  it('validates expired URL replacement locally and propagates Rust rejection errors', async () => {
+    overrideInvoke = (name) => {
+      if (name === 'dl_refresh_url') throw new Error('Remote size mismatch');
+      return undefined;
     };
-    const id = manager.addTask('https://example.com/large.bin', undefined, 2);
-    await settle(id);
-    expect(task(id).status).toBe('completed');
-    expect(task(id).downloadedBytes).toBe(2_000_000);
-    expect(calls('split_active_segment')).toHaveLength(1);
-    expect(task(id).chunks).toHaveLength(3);
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    const id = await manager.addTaskAsync('https://example.com/file.zip');
+    // Queued task cannot replace URL yet
+    expect(() => manager!.refreshTaskUrl(id, 'https://example.com/file.zip?v=2')).toThrow('Pause the download');
+
+    manager.pauseTask(id);
+    await vi.waitFor(() => expect(manager?.getTasks()[0].status).toBe('paused'));
+
+    expect(() => manager!.refreshTaskUrl(id, 'ftp://example.com/file.zip')).toThrow('HTTP or HTTPS');
+    await expect(manager.refreshTaskUrl(id, 'https://example.com/file.zip?token=fresh')).rejects.toThrow(
+      'Remote size mismatch'
+    );
   });
-  it('applies per-task speed cap and theme preference persistence', async () => {
-    await manager.updateSettings({ theme: 'light' });
+
+  it('guards update installation while active downloads are running and toggles dl_set_updating', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    const t = makeTask('active_1', { status: 'downloading', speedBytesPerSec: 120000 });
+    tasks.push(t);
+    await manager.refreshFromNative();
+
+    expect(() => manager!.beginUpdateInstallation()).toThrow('transfers_active');
+
+    t.status = 'completed';
+    t.speedBytesPerSec = 0;
+    await manager.refreshFromNative();
+
+    manager.beginUpdateInstallation();
+    await vi.waitFor(() => expect(calls('dl_set_updating').some((c) => c[1].active === true)).toBe(true));
+
+    manager.endUpdateInstallation();
+    await vi.waitFor(() => expect(calls('dl_set_updating').some((c) => c[1].active === false)).toBe(true));
+  });
+
+  it('handles native download-state-changed events, settings persistence, and media tool commands', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+
+    await manager.updateSettings({ theme: 'light', maxConnectionsPerHost: 8, minimizeToTray: false });
     expect(manager.getSettings().theme).toBe('light');
-    const id = manager.addTask('https://example.com/capped.zip');
-    await manager.setTaskSpeedLimit(id, 1024 * 1024);
-    await settle(id);
-    expect(task(id).speedLimitBytesPerSec).toBe(1024 * 1024);
-    expect(calls('set_task_speed_limit').some((c) => c[1].bytesPerSec === 1048576)).toBe(true);
+    expect(manager.getSettings().maxConnectionsPerHost).toBe(8);
+    expect(manager.getSettings().minimizeToTray).toBe(false);
+
+    tasks.push(makeTask('dl_1', { status: 'completed', downloadedBytes: 2048 }));
+    events.get('download-state-changed')?.({});
+    await vi.waitFor(() => expect(manager?.getTasks()).toHaveLength(1));
+
+    manager.clearCompleted();
+    await vi.waitFor(() => expect(manager?.getTasks()).toHaveLength(0));
+
+    const before = await manager.mediaToolsStatus();
+    expect(before.hasFfmpeg).toBe(false);
+    const afterInstall = await manager.installFfmpegTool();
+    expect(afterInstall.hasFfmpeg).toBe(true);
+    await manager.updateYtdlpTool();
+    expect(calls('update_ytdlp_tool')).toHaveLength(1);
   });
 });

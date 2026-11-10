@@ -16,7 +16,7 @@ import {
   ShieldCheck,
   Share2
 } from 'lucide-react';
-import type { DownloadTask } from '../types/downloader';
+import type { DownloadTask, QueueId } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
 import { downloadHost } from '../core/downloadInput';
 import { downloadManager } from '../core/downloadManager';
@@ -59,6 +59,7 @@ export function TaskCard({
   const [verifying, setVerifying] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [execWarning, setExecWarning] = useState(false);
+  const [showRefreshForm, setShowRefreshForm] = useState(false);
   const [actionError, setActionError] = useState('');
   const [replacementUrl, setReplacementUrl] = useState('');
 
@@ -91,11 +92,13 @@ export function TaskCard({
     completed: ar ? 'مكتمل' : 'Completed',
     error: ar ? 'يحتاج انتباهك' : 'Needs attention',
     downloading:
-      task.downloadedBytes === 0
-        ? ar ? 'جارٍ الاتصال' : 'Connecting'
-        : known && task.downloadedBytes >= task.totalBytes
-          ? ar ? 'جارٍ التحقق' : 'Finalizing'
-          : ar ? 'جارٍ التنزيل' : 'Downloading'
+      task.downloadedBytes === 0 && !task.probed && task.queueId === 'media'
+        ? ar ? 'جارٍ استخراج الرابط…' : 'Extracting media…'
+        : task.downloadedBytes === 0
+          ? ar ? 'جارٍ الاتصال…' : 'Connecting…'
+          : known && task.downloadedBytes >= task.totalBytes
+            ? ar ? 'جارٍ الحفظ…' : 'Finalizing…'
+            : ar ? 'جارٍ التنزيل' : 'Downloading'
   }[task.status];
 
   const queueLabel =
@@ -137,7 +140,15 @@ export function TaskCard({
         </div>
         <div
           className="download-identity"
-          onClick={() => onInspect?.(task.id)}
+          onClick={() => {
+            if (typeof window !== 'undefined' && window.innerWidth <= 1260) {
+              setExpanded((prev) => !prev);
+            } else if (onInspect) {
+              onInspect(task.id);
+            } else {
+              setExpanded((prev) => !prev);
+            }
+          }}
         >
           <h3 title={task.filename} dir="auto">
             {task.filename}
@@ -154,10 +165,12 @@ export function TaskCard({
             <i />
             {status}
           </span>
-          <span ref={bytesRef} className="transfer-numbers" dir="ltr">
-            {formatBytes(task.downloadedBytes)}
-            {known ? ` / ${formatBytes(task.totalBytes)}` : completed ? '' : ` · ${ar ? 'حجم غير معروف' : 'Unknown size'}`}
-          </span>
+          {(known || task.downloadedBytes > 0) && (
+            <span ref={bytesRef} className="transfer-numbers" dir="ltr">
+              {formatBytes(task.downloadedBytes)}
+              {known ? ` / ${formatBytes(task.totalBytes)}` : ''}
+            </span>
+          )}
           {active && (
             <span ref={compactRateRef} className="compact-rate" dir="ltr">
               {task.speedBytesPerSec > 0
@@ -268,33 +281,88 @@ export function TaskCard({
                 <dd dir="ltr">{task.savePath}</dd>
               </div>
             )}
-            <div>
-              <dt>{ar ? 'الاتصالات' : 'Connections'}</dt>
-              <dd>
-                {task.probed ? task.chunks.length : ar ? 'تُحدد بعد الفحص' : 'Determined after probe'}
-                {task.acceptRanges === false
-                  ? ar ? ' · الخادم لا يدعم التقسيم' : ' · Server has no range support'
-                  : ''}
-              </dd>
-            </div>
+            {task.probed && (
+              <div>
+                <dt>{ar ? 'الاتصالات' : 'Streams'}</dt>
+                <dd>
+                  {task.chunks.length}
+                  {task.acceptRanges === false
+                    ? ar ? ' · لا يدعم الاستئناف' : ' · Single stream'
+                    : ''}
+                  {task.method && task.method !== 'GET' ? ` · ${task.method}` : ''}
+                  {task.retryCount && task.retryCount > 0
+                    ? ar ? ` · محاولة ${task.retryCount}` : ` · Retry #${task.retryCount}`
+                    : ''}
+                </dd>
+              </div>
+            )}
+            {task.mirrors && task.mirrors.length > 0 && (
+              <div>
+                <dt>{ar ? 'الروابط البديلة' : 'Mirrors'}</dt>
+                <dd dir="ltr">
+                  {task.activeMirrorIndex !== undefined && task.activeMirrorIndex > 0
+                    ? `${ar ? 'مفعل #' : 'Active #'}${task.activeMirrorIndex} · `
+                    : ''}
+                  {task.mirrors.length} {ar ? 'متاح' : 'configured'}
+                </dd>
+              </div>
+            )}
           </dl>
 
-          {(task.status === 'paused' || task.status === 'error') && (
+          <div className="task-inline-controls">
+            <label>
+              <span>{ar ? 'الطابور' : 'Queue'}</span>
+              <select
+                className="argon-select"
+                value={task.queueId || 'main'}
+                onChange={(e) => downloadManager.setTaskQueue(task.id, e.target.value as QueueId)}
+              >
+                <option value="main">{ar ? 'رئيسي' : 'Main'}</option>
+                <option value="night">{ar ? 'ليلي' : 'Night'}</option>
+                <option value="media">{ar ? 'وسائط' : 'Media'}</option>
+              </select>
+            </label>
+            <label>
+              <span>{ar ? 'سقف السرعة' : 'Speed cap'}</span>
+              <select
+                className="argon-select"
+                value={task.speedLimitBytesPerSec || 0}
+                onChange={(e) => void downloadManager.setTaskSpeedLimit(task.id, Number(e.target.value))}
+              >
+                <option value={0}>{ar ? 'غير محدود' : 'Unlimited'}</option>
+                <option value={512 * 1024}>512 KB/s</option>
+                <option value={1024 * 1024}>1 MB/s</option>
+                <option value={2 * 1024 * 1024}>2 MB/s</option>
+                <option value={5 * 1024 * 1024}>5 MB/s</option>
+              </select>
+            </label>
+          </div>
+
+          {(task.status === 'paused' || task.status === 'error') && !showRefreshForm && (
+            <div style={{ marginBottom: 10 }}>
+              <button type="button" className="text-button" onClick={() => setShowRefreshForm(true)}>
+                {ar ? 'تحديث رابط منتهي الصلاحية…' : 'Replace expired URL…'}
+              </button>
+            </div>
+          )}
+
+          {(task.status === 'paused' || task.status === 'error') && showRefreshForm && (
             <form
               className="refresh-url"
-              onSubmit={(event) => {
+              onSubmit={async (event) => {
                 event.preventDefault();
                 try {
-                  downloadManager.refreshTaskUrl(task.id, replacementUrl);
+                  await downloadManager.refreshTaskUrl(task.id, replacementUrl);
                   setReplacementUrl('');
                   setActionError('');
+                  setShowRefreshForm(false);
                 } catch (error) {
                   setActionError(String(error));
                 }
               }}
             >
               <label htmlFor={`refresh-${task.id}`}>
-                {ar ? 'تحديث رابط منتهي الصلاحية' : 'Replace an expired link'}
+                {ar ? 'تحديث رابط منتهي الصلاحية' : 'Replace expired URL'}
               </label>
               <div>
                 <input
@@ -306,15 +374,10 @@ export function TaskCard({
                   dir="ltr"
                   placeholder="https://example.com/file.zip?new-token"
                 />
-                <button className="action-button" disabled={!replacementUrl.trim()}>
-                  {ar ? 'تحديث واستئناف' : 'Update & resume'}
+                <button className="action-button primary" disabled={!replacementUrl.trim()}>
+                  {ar ? 'تحديث واستئناف' : 'Update'}
                 </button>
               </div>
-              <p>
-                {ar
-                  ? 'يُستأنف الملف فقط إذا تطابق مساره وحجمه وبصمة الخادم. وإلا يبدأ من الصفر.'
-                  : 'Resume requires matching resource path, size and server validator. Otherwise it restarts cleanly.'}
-              </p>
             </form>
           )}
 

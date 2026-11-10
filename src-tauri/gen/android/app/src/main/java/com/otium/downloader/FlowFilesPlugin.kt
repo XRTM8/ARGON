@@ -3,11 +3,14 @@ package com.otium.downloader
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.webkit.WebView
@@ -115,12 +118,83 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
         val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val roots = listOfNotNull(
             activity.filesDir,
+            activity.filesDir.parentFile,
             activity.cacheDir,
             activity.getExternalFilesDir(null),
             downloadsDir
         ).map { it.canonicalPath + File.separator }
         require(file.isFile && roots.any { file.path.startsWith(it) }) { "File is outside ARGON storage" }
         return file
+    }
+
+    @Command
+    fun publishDownload(invoke: Invoke) {
+        worker.execute {
+            try {
+                val rawPath = invoke.getArgs().getString("path") ?: ""
+                val file = resolveAllowedFile(rawPath)
+                val ext = file.extension.lowercase()
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+                    ?: "application/octet-stream"
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val resolver = activity.contentResolver
+                    val (collection, relativePath) = when {
+                        mime.startsWith("video/") -> Pair(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            "${Environment.DIRECTORY_MOVIES}/ARGON"
+                        )
+                        mime.startsWith("image/") -> Pair(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            "${Environment.DIRECTORY_PICTURES}/ARGON"
+                        )
+                        mime.startsWith("audio/") -> Pair(
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                            "${Environment.DIRECTORY_MUSIC}/ARGON"
+                        )
+                        else -> Pair(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                            "${Environment.DIRECTORY_DOWNLOADS}/ARGON"
+                        )
+                    }
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    val itemUri = resolver.insert(collection, values)
+                        ?: throw IllegalStateException("Could not create MediaStore entry")
+                    try {
+                        resolver.openOutputStream(itemUri)?.use { out ->
+                            file.inputStream().use { input -> input.copyTo(out, 256 * 1024) }
+                        } ?: throw IllegalStateException("Could not write MediaStore output")
+                        values.clear()
+                        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                        resolver.update(itemUri, values, null, null)
+                        invoke.resolveObject(mapOf("uri" to itemUri.toString(), "location" to "$relativePath/${file.name}"))
+                    } catch (e: Exception) {
+                        resolver.delete(itemUri, null, null)
+                        throw e
+                    }
+                } else {
+                    val pubRoot = File(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                        "ARGON"
+                    )
+                    pubRoot.mkdirs()
+                    var dest = File(pubRoot, file.name)
+                    if (dest.exists()) {
+                        dest = File(pubRoot, "${file.nameWithoutExtension}_${System.currentTimeMillis()}.${file.extension}")
+                    }
+                    file.copyTo(dest, overwrite = false)
+                    MediaScannerConnection.scanFile(activity, arrayOf(dest.absolutePath), arrayOf(mime), null)
+                    invoke.resolveObject(mapOf("uri" to dest.absolutePath, "location" to dest.absolutePath))
+                }
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: "publish_failed")
+            }
+        }
     }
 
     @Command

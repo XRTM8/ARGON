@@ -44,11 +44,18 @@ export interface MediaMetadataInfo {
   formats: MediaFormatInfo[];
 }
 
+export interface MediaToolsStatus {
+  hasYtdlp: boolean;
+  hasNode: boolean;
+  hasFfmpeg: boolean;
+  toolsDir: string;
+}
+
 export interface MediaMetadata {
   title?: string;
   author?: string;
   thumbnail?: string;
-  platform?: 'youtube' | 'tiktok' | 'instagram' | 'twitter' | 'soundcloud' | 'direct' | 'other';
+  platform?: 'youtube' | 'tiktok' | 'instagram' | 'twitter' | 'facebook' | 'reddit' | 'threads' | 'vimeo' | 'soundcloud' | 'direct' | 'other';
   quality?: string;
   duration?: number;
   isAudioOnly?: boolean;
@@ -72,6 +79,8 @@ export interface DownloadTask {
   checksum?: ChecksumInfo;
   savePath?: string;
   headers?: Record<string, string>;
+  postBody?: string;
+  method?: string;
   category?: TaskCategory;
   torrentInfo?: TorrentMetadata;
   mediaInfo?: MediaMetadata;
@@ -86,6 +95,8 @@ export interface DownloadTask {
   queueId?: QueueId;
   speedLimitBytesPerSec?: number;
   mirrors?: string[];
+  activeMirrorIndex?: number;
+  retryCount?: number;
 }
 
 export interface DownloadStats {
@@ -99,6 +110,7 @@ export interface DownloadStats {
 
 export interface AppSettings {
   maxConcurrentDownloads: number;
+  maxConnectionsPerHost?: number;
   globalSpeedLimitBytes: number;
   enableNotifications: boolean;
   enableSound: boolean;
@@ -113,4 +125,16 @@ export interface AppSettings {
   dynamicWorkStealing?: boolean;
   clipboardMonitorEnabled?: boolean;
   autoVerifyIntegrity?: boolean;
+  autoRetryEnabled?: boolean;
+  maxAutoRetries?: number;
+  minimizeToTray?: boolean;
+  startWithWindows?: boolean;
+}
+
+export interface DownloaderSnapshot {
+  tasks: DownloadTask[];
+  stats: DownloadStats;
+  settings: AppSettings;
+  speedHistory: number[];
+  updating: boolean;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expandWildcardPattern, parseDownloadInput } from './downloadInput';
+import { expandWildcardPattern, extractSharedUrl, parseDownloadInput } from './downloadInput';
 
 describe('batch download input', () => {
   it('preserves signed query strings and removes exact duplicates', () => {
@@ -33,5 +33,11 @@ describe('batch download input', () => {
       ]
     });
     expect(expandWildcardPattern('https://cdn.example.com/part_[001..200].zip').error).toBe('range_too_large');
+  });
+
+  it('extracts URL from Android social share text', () => {
+    expect(extractSharedUrl('شاهد هذا المقطع! https://www.instagram.com/reel/Dfj5LzrMWup/?igsh=abc.')).toBe(
+      'https://www.instagram.com/reel/Dfj5LzrMWup/?igsh=abc'
+    );
   });
 });

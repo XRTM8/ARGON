@@ -1,5 +1,5 @@
 import { DEFAULTS, httpUrl, shouldCapture, mediaDescriptor, platformVideo, excludedHost } from './core.js';
-import { connection, sendDownload } from './bridge-client.js';
+import { buildAuthHeaders, connection, sendDownload } from './bridge-client.js';
 
 // Session storage survives MV3 worker suspension, but is cleared with the browser session.
 const writes = new Map();
@@ -28,7 +28,8 @@ function updateTab(id, operation) {
     const list = operation(data[key] || []);
     if (list === null) await chrome.storage.session.remove(key);
     else await chrome.storage.session.set({ [key]: list });
-    await chrome.action.setBadgeText({ tabId: id, text: list?.filter((item) => item.supported).length ? String(list.filter((item) => item.supported).length) : '' }).catch(() => {});
+    const count = list?.filter((item) => item.supported || item.playlist).length || 0;
+    await chrome.action.setBadgeText({ tabId: id, text: count ? String(count) : '' }).catch(() => {});
     await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#2563EB' }).catch(() => {});
     if (typeof chrome.tabs.sendMessage === 'function') void chrome.tabs.sendMessage(id, { type: 'ARGON_MEDIA_CHANGED' }).catch(() => {});
   });
@@ -55,7 +56,13 @@ async function notify(message) {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   const url = info.menuItemId === 'argon-link' ? info.linkUrl : info.menuItemId === 'argon-media' ? info.srcUrl : info.selectionText?.trim();
   if (!httpUrl(url)) { void notify(['اختر رابط HTTP أو HTTPS مباشر.', 'Choose a direct HTTP or HTTPS URL.']); return; }
-  void connection().then(() => sendDownload(url, undefined, info.frameUrl || tab?.url)).then(
+  void (async () => {
+    const settings = await chrome.storage.local.get(DEFAULTS);
+    const ping = await connection();
+    const allowPlaylists = !!ping.capabilities?.includes('ffmpeg-hls');
+    const headers = await buildAuthHeaders(url, info.frameUrl || tab?.url, settings, !!tab?.incognito);
+    await sendDownload(url, undefined, info.frameUrl || tab?.url, headers, undefined, undefined, allowPlaylists);
+  })().then(
     () => notify(['تمت إضافة الرابط إلى ARGON.', 'Link added to ARGON.']),
     () => notify(['تعذّر تسليم الرابط. افتح ARGON وتحقق من دعم نوع الرابط.', 'Could not hand off this link. Open ARGON and check that the URL type is supported.'])
   );
@@ -66,8 +73,8 @@ async function capture(item) {
   await recovered;
   const settings = await chrome.storage.local.get(DEFAULTS);
   if (!shouldCapture(item, settings)) return;
-  // Require the durable-handoff protocol before touching any browser download.
-  try { await connection(); } catch { return; }
+  let ping;
+  try { ping = await connection(); } catch { return; }
   const [current] = await chrome.downloads.search({ id: item.id });
   if (!current || !shouldCapture(current, settings)) return;
   const key = handoffKey(item.id);
@@ -75,7 +82,17 @@ async function capture(item) {
   // Pause, then send: prevents small files completing while ARGON takes over.
   try { await chrome.downloads.pause(item.id); } catch { await chrome.storage.local.remove(key); return; }
   try {
-    await sendDownload(current.finalUrl || current.url, current.filename?.split(/[\\/]/).pop(), current.referrer);
+    const targetUrl = current.finalUrl || current.url;
+    const headers = await buildAuthHeaders(targetUrl, current.referrer, settings, !!current.incognito);
+    await sendDownload(
+      targetUrl,
+      current.filename?.split(/[\\/]/).pop(),
+      current.referrer,
+      headers,
+      undefined,
+      undefined,
+      !!ping.capabilities?.includes('ffmpeg-hls')
+    );
   } catch {
     try { await chrome.downloads.resume(item.id); await chrome.storage.local.remove(key); } catch { /* Recover on the next wake-up. */ }
     return;
@@ -115,7 +132,20 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       const target = platformVideo(sender.tab.url, sender.tab.title) || (direct?.supported ? direct : (data[keyFor(sender.tab.id)] || []).find(item => item.url === request.source && item.supported));
       if (!target || excludedHost(target.url, settings.excludedHosts)) return respond({ ok: false });
       if (request.type === 'GET_VIDEO_TARGET') return respond({ ok: true, target, language: settings.language });
-      try { await connection(); await sendDownload(target.url, target.platform ? undefined : target.filename, sender.tab.url); respond({ ok: true }); }
+      try {
+        const ping = await connection();
+        const headers = await buildAuthHeaders(target.url, sender.tab.url, settings, false);
+        await sendDownload(
+          target.url,
+          target.platform ? undefined : target.filename,
+          sender.tab.url,
+          headers,
+          undefined,
+          undefined,
+          !!ping.capabilities?.includes('ffmpeg-hls')
+        );
+        respond({ ok: true });
+      }
       catch { respond({ ok: false, error: 'offline' }); }
     })().catch(() => respond({ ok: false }));
     return true;

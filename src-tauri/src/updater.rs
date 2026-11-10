@@ -191,20 +191,46 @@ async fn save_package(
         ),
     ] {
         let temporary = root.join(format!("{name}.tmp"));
-        tokio::fs::write(&temporary, content)
+        tokio::fs::write(&temporary, &content)
             .await
             .map_err(|e| e.to_string())?;
         let destination = root.join(name);
-        if destination.exists() {
-            tokio::fs::remove_file(&destination)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        tokio::fs::rename(temporary, destination)
-            .await
-            .map_err(|e| e.to_string())?;
+        replace_cached_file(&temporary, &destination).await?;
     }
     Ok(())
+}
+
+async fn replace_cached_file(source: &PathBuf, destination: &PathBuf) -> Result<(), String> {
+    let src = source.clone();
+    let dst = destination.clone();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+            };
+            let s: Vec<u16> = src.as_os_str().encode_wide().chain(Some(0)).collect();
+            let d: Vec<u16> = dst.as_os_str().encode_wide().chain(Some(0)).collect();
+            let ok = unsafe {
+                MoveFileExW(
+                    s.as_ptr(),
+                    d.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(&src, &dst).map_err(|e| e.to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 fn status(cache: &Cache) -> UpdateStatus {
     #[cfg(desktop)]
@@ -395,9 +421,20 @@ pub async fn update_install(
         if tasks.updating.swap(true, Ordering::SeqCst) {
             return Err("update_busy".into());
         }
+        let dl_engine = app
+            .state::<crate::DownloaderRuntime>()
+            .service
+            .lock()
+            .await
+            .clone();
+        if let Some(ref dl) = dl_engine {
+            dl.set_updating(true);
+        }
         let result = async {
-            if !tasks.cancellations.read().await.is_empty() {
-                return Err("transfers_active".to_string());
+            if let Some(ref dl) = dl_engine {
+                if dl.has_active_transfers().await {
+                    return Err("transfers_active".to_string());
+                }
             }
             let engine = app
                 .state::<crate::flow::FlowRuntime>()
@@ -443,6 +480,9 @@ pub async fn update_install(
         .await;
         if result.is_err() {
             tasks.updating.store(false, Ordering::SeqCst);
+            if let Some(ref dl) = dl_engine {
+                dl.set_updating(false);
+            }
         } else {
             // Ensure host process exits cleanly so Windows NSIS installer can overwrite binaries and relaunch.
             app.exit(0);
@@ -458,10 +498,9 @@ pub async fn update_install(
 
 /// Fetches the latest ARGON release metadata via Rust reqwest (bypassing WebView CORS/CSP limits).
 #[tauri::command]
-pub async fn fetch_release_feed(
-    tasks: tauri::State<'_, Arc<crate::TaskManager>>,
-) -> Result<serde_json::Value, String> {
-    let client = tasks.http_client().await?;
+pub async fn fetch_release_feed(app: AppHandle) -> Result<serde_json::Value, String> {
+    let dl = crate::ensure_downloader(&app).await?;
+    let client = dl.http_client().clone();
     let endpoints = [
         (
             "https://github.com/XRTM8/ARGON/releases/latest/download/latest.json",

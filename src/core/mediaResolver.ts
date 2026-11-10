@@ -1,6 +1,17 @@
 import type { MediaMetadataInfo } from '../types/downloader';
 
-export type PlatformType = 'youtube' | 'tiktok' | 'instagram' | 'twitter' | 'soundcloud' | 'direct' | 'other';
+export type PlatformType =
+  | 'youtube'
+  | 'tiktok'
+  | 'instagram'
+  | 'twitter'
+  | 'facebook'
+  | 'reddit'
+  | 'threads'
+  | 'vimeo'
+  | 'soundcloud'
+  | 'direct'
+  | 'other';
 
 export interface MediaFormatOption {
   id: string;
@@ -31,8 +42,12 @@ export function detectPlatform(rawUrl: string): PlatformType {
     const matches = (domain: string) => host === domain || host.endsWith(`.${domain}`);
     if (matches('youtube.com') || matches('youtu.be')) return 'youtube';
     if (matches('tiktok.com')) return 'tiktok';
-    if (matches('instagram.com')) return 'instagram';
+    if (matches('instagram.com') || matches('instagr.am')) return 'instagram';
     if (matches('twitter.com') || matches('x.com')) return 'twitter';
+    if (matches('facebook.com') || matches('fb.watch') || matches('fb.com')) return 'facebook';
+    if (matches('reddit.com') || matches('redd.it') || matches('v.redd.it')) return 'reddit';
+    if (matches('threads.net') || matches('threads.com')) return 'threads';
+    if (matches('vimeo.com')) return 'vimeo';
     if (matches('soundcloud.com')) return 'soundcloud';
     return /\.(mp4|mkv|webm|avi|mov|flv|ts|mp3|m4a|aac|flac|wav|ogg|opus)$/i.test(url.pathname) ? 'direct' : 'other';
   } catch { return 'other'; }
@@ -44,7 +59,7 @@ export function cleanMediaTitle(rawTitle: string): string {
 
 export async function listMediaFormats(url: string): Promise<MediaMetadataInfo> {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-    throw new Error('استخراج روابط المنصات يتطلب تطبيق ARGON لسطح المكتب.');
+    throw new Error('استخراج روابط المنصات يتطلب تشغيل تطبيق ARGON.');
   }
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<MediaMetadataInfo>('list_media_formats', { url: url.trim() });
@@ -61,7 +76,7 @@ export async function resolveMediaDownloadUrl(
   const cleanUrl = url.trim();
   if (['direct', 'other'].includes(detectPlatform(cleanUrl))) return { downloadUrl: cleanUrl };
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-    throw new Error('استخراج روابط المنصات يتطلب تطبيق ARGON لسطح المكتب.');
+    throw new Error('استخراج روابط المنصات يتطلب تشغيل تطبيق ARGON.');
   }
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke('resolve_media', {

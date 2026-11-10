@@ -6,14 +6,20 @@ async function request(path, payload, timeout = 6000) {
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(`${BASE}${path}`, {
-      method: payload ? 'POST' : 'GET', signal: controller.signal,
-      headers: { 'X-Otium-Client': 'browser-extension', ...(payload ? { 'Content-Type': 'application/json' } : {}) },
+      method: payload ? 'POST' : 'GET',
+      signal: controller.signal,
+      headers: {
+        'X-Otium-Client': 'browser-extension',
+        ...(payload ? { 'Content-Type': 'application/json' } : {})
+      },
       ...(payload ? { body: JSON.stringify(payload) } : {})
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `bridge_${response.status}`);
     return data;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function connection() {
@@ -23,10 +29,48 @@ export async function connection() {
   return data;
 }
 
-export async function sendDownload(url, filename, referer) {
-  if (!httpUrl(url) || mediaDescriptor(url)?.supported === false) throw new Error('unsupported_url');
-  const headers = httpUrl(referer) ? { Referer: referer } : undefined;
-  const result = await request('/add', { url, filename: filename || null, headers });
+export async function buildAuthHeaders(url, referer, settings, incognito = false) {
+  const headers = {};
+  if (httpUrl(referer)) headers.Referer = referer;
+  if (!incognito && settings?.forwardCookies && typeof chrome !== 'undefined' && chrome.cookies?.getAll) {
+    try {
+      const cookies = await chrome.cookies.getAll({ url });
+      if (Array.isArray(cookies) && cookies.length > 0) {
+        const pair = cookies
+          .filter((c) => c?.name)
+          .map((c) => `${c.name}=${c.value ?? ''}`)
+          .join('; ');
+        if (pair) headers.Cookie = pair;
+      }
+    } catch {
+      // Optional cookies permission not granted yet.
+    }
+  }
+  return Object.keys(headers).length ? headers : undefined;
+}
+
+export async function sendDownload(
+  url,
+  filename,
+  referer,
+  extraHeaders,
+  method,
+  postBody,
+  allowPlaylists = false
+) {
+  const desc = mediaDescriptor(url);
+  if (!httpUrl(url) || (desc?.supported === false && !(allowPlaylists && desc?.playlist))) {
+    throw new Error('unsupported_url');
+  }
+  const merged = { ...(httpUrl(referer) ? { Referer: referer } : {}), ...(extraHeaders || {}) };
+  const headers = Object.keys(merged).length ? merged : undefined;
+  const result = await request('/add', {
+    url,
+    filename: filename || null,
+    headers,
+    ...(method ? { method } : {}),
+    ...(postBody ? { postBody } : {})
+  });
   if (result.status !== 'accepted') throw new Error('handoff_not_saved');
   return result;
 }
