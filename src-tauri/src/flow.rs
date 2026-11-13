@@ -286,6 +286,30 @@ pub async fn flow_read_clipboard(_app: AppHandle) -> Result<String, String> {
     }
 }
 #[tauri::command]
+pub async fn flow_write_clipboard(_app: AppHandle, text: String) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        tokio::task::spawn_blocking(move || {
+            arboard::Clipboard::new()
+                .map_err(|e| e.to_string())?
+                .set_text(text)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(target_os = "android")]
+    {
+        crate::flow_mobile::call::<serde_json::Value>(
+            _app,
+            "writeClipboard",
+            serde_json::json!({"text": text}),
+        )
+        .await?;
+        Ok(())
+    }
+}
+#[tauri::command]
 pub async fn flow_copy_received(
     app: AppHandle,
     state: tauri::State<'_, FlowRuntime>,

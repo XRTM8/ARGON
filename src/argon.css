@@ -594,7 +594,7 @@ button { transition: background-color .14s ease, color .14s ease, border-color .
   width: 100%;
   min-height: 44px;
   padding: 10px 44px 10px 12px;
-  resize: vertical;
+  resize: none;
   font-size: 12.5px;
   line-height: 21px;
   background: var(--argon-input-bg);
@@ -699,9 +699,73 @@ button { transition: background-color .14s ease, color .14s ease, border-color .
 }
 .download-options p { grid-column: 1 / -1; color: var(--argon-subtle); font-size: 11.5px; margin: 0; }
 
-.inline-error { color: var(--argon-rose); font-size: 12px; margin: 8px 0 0; overflow-wrap: anywhere; }
-.inline-notice { color: var(--argon-accent); font-size: 12px; display: block; margin-top: 6px; }
+.inline-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #F87171;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: var(--argon-radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+.inline-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--argon-accent);
+  background: rgba(142, 182, 155, 0.12);
+  border: 1px solid rgba(142, 182, 155, 0.25);
+  border-radius: var(--argon-radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-top: 8px;
+}
 .inline-notice:empty { display: none; }
+
+.task-action-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 12px 10px;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: var(--argon-radius-sm);
+  color: #FCA5A5;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.task-action-error-banner .error-icon {
+  flex-shrink: 0;
+  color: #EF4444;
+}
+.task-action-error-banner .error-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.task-action-error-banner .error-dismiss {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  flex-shrink: 0;
+  color: #FCA5A5;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.task-action-error-banner .error-dismiss:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
 
 /* Workspace Split: Table + Live Inspector */
 .workspace-split {
@@ -1714,7 +1778,7 @@ kbd {
     right: 0;
     height: auto;
     width: 100%;
-    padding: 6px max(8px, var(--safe-left)) max(8px, var(--safe-bottom)) max(8px, var(--safe-right));
+    padding: 6px max(8px, var(--safe-left)) max(10px, var(--safe-bottom)) max(8px, var(--safe-right));
     border-top: 1px solid var(--argon-border);
     border-inline-end: 0;
     background: var(--argon-topbar-glass);
@@ -1755,9 +1819,9 @@ kbd {
 
   /* Critical: Push Topbar safely below Android Status Bar & Camera Cutout */
   .argon-topbar {
-    padding-top: var(--safe-top);
+    padding-top: max(var(--safe-top), 40px);
     padding-inline: max(14px, var(--safe-left)) max(14px, var(--safe-right));
-    min-height: calc(54px + var(--safe-top));
+    min-height: calc(52px + max(var(--safe-top), 40px));
     gap: 8px;
   }
   .mobile-brand-pill { display: inline-flex; }

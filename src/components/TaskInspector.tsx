@@ -8,10 +8,12 @@ import {
   Gauge,
   Layers,
   Share2,
-  ExternalLink
+  ExternalLink,
+  AlertCircle
 } from 'lucide-react';
 import type { DownloadTask, QueueId } from '../types/downloader';
-import { formatBytes, formatSpeed, formatEta } from '../core/segmentation';
+import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
+import { writeClipboardText } from '../core/clipboard';
 import { downloadManager } from '../core/downloadManager';
 import { isAndroidRuntime } from '../core/safeArea';
 
@@ -185,7 +187,7 @@ export function TaskInspector({ task, lang, onClose }: Props) {
         <button
           className="action-button"
           onClick={() => {
-            void navigator.clipboard.writeText(task.originalUrl || task.url).then(() => {
+            void writeClipboardText(task.originalUrl || task.url).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1600);
             });
@@ -241,9 +243,18 @@ export function TaskInspector({ task, lang, onClose }: Props) {
       )}
 
       {actionError && (
-        <p className="inline-error" role="alert">
-          {actionError}
-        </p>
+        <div className="task-action-error-banner" role="alert">
+          <AlertCircle size={14} className="error-icon" />
+          <span className="error-text">{humanizeErrorMessage(actionError, lang)}</span>
+          <button
+            type="button"
+            className="icon-button error-dismiss"
+            onClick={() => setActionError('')}
+            aria-label={ar ? 'إغلاق' : 'Dismiss'}
+          >
+            <X size={12} />
+          </button>
+        </div>
       )}
     </aside>
   );

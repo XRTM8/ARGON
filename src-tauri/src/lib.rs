@@ -966,6 +966,7 @@ pub fn run() {
             flow::flow_choose_files,
             flow::flow_choose_receive_directory,
             flow::flow_read_clipboard,
+            flow::flow_write_clipboard,
             flow::flow_clean_text,
             flow::flow_open_received,
             flow::flow_copy_received,

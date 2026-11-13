@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Puzzle, FolderOpen, Check, Copy, RefreshCw, ArrowUpRight } from 'lucide-react';
 import { nativeRuntime } from '../core/flowClient';
 import { downloadManager } from '../core/downloadManager';
+import { writeClipboardText } from '../core/clipboard';
 
 export function BrowserView({ lang }: { lang: 'ar' | 'en' }) {
   const ar = lang === 'ar';
@@ -20,7 +21,7 @@ export function BrowserView({ lang }: { lang: 'ar' | 'en' }) {
   };
   useEffect(() => { void check(); }, []);
   const copy = async (value: string) => {
-    try { await navigator.clipboard.writeText(value); setCopied(value); setTimeout(() => setCopied(''), 1600); }
+    try { await writeClipboardText(value); setCopied(value); setTimeout(() => setCopied(''), 1600); }
     catch { setError(ar ? 'تعذّر النسخ. انسخ العنوان المعروض يدوياً.' : 'Could not copy. Copy the address shown manually.'); }
   };
   return <div className="browser-view">

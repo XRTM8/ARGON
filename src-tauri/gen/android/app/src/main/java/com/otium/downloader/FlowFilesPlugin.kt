@@ -116,12 +116,19 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
     private fun resolveAllowedFile(rawPath: String): File {
         val file = File(rawPath).canonicalFile
         val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
         val roots = listOfNotNull(
             activity.filesDir,
             activity.filesDir.parentFile,
             activity.cacheDir,
             activity.getExternalFilesDir(null),
-            downloadsDir
+            downloadsDir,
+            moviesDir,
+            picturesDir,
+            musicDir,
+            Environment.getExternalStorageDirectory()
         ).map { it.canonicalPath + File.separator }
         require(file.isFile && roots.any { file.path.startsWith(it) }) { "File is outside ARGON storage" }
         return file
@@ -199,48 +206,71 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun openFile(invoke: Invoke) {
-        try {
-            val file = resolveAllowedFile(invoke.getArgs().getString("path") ?: "")
-            val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
-            if (file.extension.lowercase() == "apk") {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
-                    val settingsIntent = Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${activity.packageName}")
-                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                    activity.startActivity(settingsIntent)
-                    invoke.reject("android_install_permission_required")
-                    return
+        activity.runOnUiThread {
+            try {
+                val file = resolveAllowedFile(invoke.getArgs().getString("path") ?: "")
+                val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+                if (file.extension.lowercase() == "apk") {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
+                        val settingsIntent = Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:${activity.packageName}")
+                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        activity.startActivity(settingsIntent)
+                        invoke.reject("android_install_permission_required")
+                        return@runOnUiThread
+                    }
+                    val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(installIntent)
+                    invoke.resolve()
+                    return@runOnUiThread
                 }
-                val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                activity.startActivity(installIntent)
+                val chooser = Intent.createChooser(intent, file.name).apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try {
+                    activity.startActivity(chooser)
+                } catch (_: ActivityNotFoundException) {
+                    val genericIntent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "*/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(Intent.createChooser(genericIntent, file.name).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                }
                 invoke.resolve()
-                return
-            }
-            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
-            val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, mime); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            activity.startActivity(Intent.createChooser(intent, "ARGON"))
-            invoke.resolve()
-        } catch (error: Exception) { invoke.reject(error.message) }
+            } catch (error: Exception) { invoke.reject(error.message) }
+        }
     }
 
     @Command
     fun shareFile(invoke: Invoke) {
-        try {
-            val file = resolveAllowedFile(invoke.getArgs().getString("path") ?: "")
-            val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
-            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = mime
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            activity.startActivity(Intent.createChooser(intent, file.name))
-            invoke.resolve()
-        } catch (error: Exception) { invoke.reject(error.message) }
+        activity.runOnUiThread {
+            try {
+                val file = resolveAllowedFile(invoke.getArgs().getString("path") ?: "")
+                val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val chooser = Intent.createChooser(intent, file.name).apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                activity.startActivity(chooser)
+                invoke.resolve()
+            } catch (error: Exception) { invoke.reject(error.message) }
+        }
     }
 
     @Command
@@ -259,22 +289,27 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun readClipboard(invoke: Invoke) {
-        try {
-            val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(activity)?.toString() ?: ""
-            require(text.toByteArray(Charsets.UTF_8).size <= 16 * 1024) { "Clipboard text exceeds 16 KB" }
-            invoke.resolveObject(mapOf("text" to text))
-        } catch (error: Exception) { invoke.reject(error.message) }
+        activity.runOnUiThread {
+            try {
+                val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                var text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(activity)?.toString() ?: ""
+                if (text.toByteArray(Charsets.UTF_8).size > 1024 * 1024) {
+                    text = text.take(1024 * 1024)
+                }
+                invoke.resolveObject(mapOf("text" to text))
+            } catch (error: Exception) { invoke.reject(error.message) }
+        }
     }
 
     @Command
     fun writeClipboard(invoke: Invoke) {
-        try {
-            val text = invoke.getArgs().getString("text") ?: ""
-            require(text.toByteArray(Charsets.UTF_8).size <= 16 * 1024) { "Clipboard text exceeds 16 KB" }
-            val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("ARGON", text))
-            invoke.resolve()
-        } catch (error: Exception) { invoke.reject(error.message) }
+        activity.runOnUiThread {
+            try {
+                val text = invoke.getArgs().getString("text") ?: ""
+                val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("ARGON", text))
+                invoke.resolve()
+            } catch (error: Exception) { invoke.reject(error.message) }
+        }
     }
 }

@@ -204,6 +204,24 @@ export function humanizeErrorMessage(rawError?: string, lang: 'ar' | 'en' = 'ar'
     ? 'تعذّر حذف الملف. تحقق من الصلاحيات وأن الملف غير مفتوح في برنامج آخر.'
     : 'Could not delete the file. Check permissions and close any app using it.';
 
+  if (err.includes('failed to find configured root') || err.includes('fileprovider') || err.includes('activitynotfound') || err.includes('no activity found')) {
+    return isAr
+      ? 'تعذّر فتح هذا الملف: يرجى التأكد من تثبيت تطبيق مشغّل مناسب لهذا النوع من الملفات.'
+      : 'Could not open file: Ensure an appropriate media player or viewer application is installed.';
+  }
+
+  if (err.includes('file does not exist on disk')) {
+    return isAr
+      ? 'الملف غير موجود على مساحة التخزين، ربما تم حذفه أو نقله.'
+      : 'File does not exist on disk. It may have been moved or deleted.';
+  }
+
+  if (err.includes('android_install_permission_required')) {
+    return isAr
+      ? 'يرجى السماح بتثبيت التطبيقات من مصادر غير معروفة لتثبيت ملف APK.'
+      : 'Please allow installing apps from unknown sources in Android settings.';
+  }
+
   if (err.includes('معاينة') || err.includes('preview')) return isAr
     ? 'افتح تطبيق ARGON لسطح المكتب لبدء التنزيل. هذه معاينة للواجهة.'
     : 'Open the ARGON desktop app to download. This is an interface preview.';

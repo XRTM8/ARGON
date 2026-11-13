@@ -58,12 +58,12 @@ export function initSafeAreaInsets(): () => void {
     } else if (window.__ARGON_INSETS__) {
       applyInsetsToDocument(window.__ARGON_INSETS__);
     } else if (isAndroidRuntime()) {
-      // Conservative safety floor until WindowInsets listener fires
-      applyInsetsToDocument({ top: 28, bottom: 16, left: 0, right: 0, ime: 0 });
+      // Conservative safety floor until WindowInsets listener fires (42px accommodates camera punch-holes)
+      applyInsetsToDocument({ top: 42, bottom: 18, left: 0, right: 0, ime: 0 });
     }
   } catch {
     if (isAndroidRuntime()) {
-      applyInsetsToDocument({ top: 28, bottom: 16, left: 0, right: 0, ime: 0 });
+      applyInsetsToDocument({ top: 42, bottom: 18, left: 0, right: 0, ime: 0 });
     }
   }
 

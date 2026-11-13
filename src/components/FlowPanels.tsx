@@ -28,6 +28,7 @@ import {
 import { useFlow } from '../core/useFlow';
 import { nativeRuntime } from '../core/flowClient';
 import { downloadManager } from '../core/downloadManager';
+import { readClipboardText, writeClipboardText } from '../core/clipboard';
 import { formatBytes, formatSpeed } from '../core/segmentation';
 import type { FlowTransfer } from '../types/flow';
 import type { MainViewTab } from './Header';
@@ -247,8 +248,7 @@ export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (
           <button
             className="text-button"
             onClick={() => {
-              void navigator.clipboard
-                .writeText(snapshot.addresses[0] || '')
+              void writeClipboardText(snapshot.addresses[0] || '')
                 .then(() => setCopied(true))
                 .catch(() => setCopied(false));
               setTimeout(() => setCopied(false), 1600);
@@ -498,7 +498,7 @@ export function ClipboardView({
   const size = new TextEncoder().encode(text).length;
 
   const read = async () => {
-    const value = await client.execute<string>('flow_read_clipboard');
+    const value = await readClipboardText();
     setText(value);
     setClean(null);
   };

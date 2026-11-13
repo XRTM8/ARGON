@@ -114,6 +114,8 @@ describe('segmentation utility', () => {
     expect(humanizeErrorMessage('HTTP 404 Not Found', 'ar')).toContain('الملف غير موجود');
     expect(humanizeErrorMessage('HTTP 429 Too Many Requests', 'en')).toContain('Rate limit exceeded');
     expect(humanizeErrorMessage('Connection timed out on segment 2', 'en')).toContain('timed out');
+    expect(humanizeErrorMessage('Failed to find configured root that contains /data/data/...', 'ar')).toContain('مشغّل مناسب');
+    expect(humanizeErrorMessage('File does not exist on disk', 'ar')).toContain('مساحة التخزين');
     expect(humanizeErrorMessage('Random unexpected string', 'en')).toBe('Random unexpected string');
   });
 });

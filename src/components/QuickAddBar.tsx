@@ -4,10 +4,13 @@ import {
   Clipboard,
   SlidersHorizontal,
   Loader2,
-  Film
+  Film,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
 import { expandWildcardPattern, extractSharedUrl, parseDownloadInput } from '../core/downloadInput';
+import { readClipboardText } from '../core/clipboard';
 import { detectPlatform, listMediaFormats } from '../core/mediaResolver';
 import { formatBytes } from '../core/segmentation';
 import type { MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
@@ -166,7 +169,9 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
       );
     }
 
-    setNotice(ar ? `تمت الإضافة (${candidateList.urls.length}).` : `Added (${candidateList.urls.length}).`);
+    const msg = ar ? `تمت الإضافة (${candidateList.urls.length}).` : `Added (${candidateList.urls.length}).`;
+    setNotice(msg);
+    setTimeout(() => setNotice((curr) => (curr === msg ? '' : curr)), 3500);
     setValue('');
     setFilename('');
     setExpectedHash('');
@@ -232,7 +237,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               title={ar ? 'لصق' : 'Paste'}
               onClick={async () => {
                 try {
-                  const text = await navigator.clipboard.readText();
+                  const text = await readClipboardText();
                   const next = text.includes('\n') ? text.trim() : extractSharedUrl(text);
                   setValue(next);
                   setError('');
@@ -240,10 +245,11 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
                   setMediaMeta(null);
                   input.current?.focus();
                 } catch {
+                  input.current?.focus();
                   setError(
                     ar
-                      ? 'تعذّرت قراءة الحافظة. الصق الرابط يدوياً.'
-                      : 'Clipboard unavailable. Paste manually.'
+                      ? 'تعذّرت قراءة الحافظة تلقائياً. اضغط مطولاً داخل الحقل ثم اختر "لصق".'
+                      : 'Clipboard unavailable. Long-press the input field and select Paste.'
                   );
                 }
               }}
@@ -403,12 +409,16 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
 
         {error && (
           <p className="inline-error" role="alert">
-            {error}
+            <AlertCircle size={14} />
+            <span>{error}</span>
           </p>
         )}
-        <output className="inline-notice" aria-live="polite">
-          {notice}
-        </output>
+        {notice && (
+          <output className="inline-notice" aria-live="polite">
+            <CheckCircle2 size={14} className="status-ok" />
+            <span>{notice}</span>
+          </output>
+        )}
       </form>
     </section>
   );

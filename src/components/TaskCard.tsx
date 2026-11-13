@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { DownloadTask, QueueId } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
+import { writeClipboardText } from '../core/clipboard';
 import { downloadHost } from '../core/downloadInput';
 import { downloadManager } from '../core/downloadManager';
 import { isAndroidRuntime } from '../core/safeArea';
@@ -234,6 +235,16 @@ export function TaskCard({
               <ExternalLink size={16} />
             </button>
           )}
+          {completed && android && task.savePath && (
+            <button
+              className="icon-button"
+              onClick={() => void action(() => downloadManager.shareFile(task.savePath))}
+              aria-label={ar ? 'مشاركة الملف' : 'Share file'}
+              title={ar ? 'مشاركة الملف' : 'Share file'}
+            >
+              <Share2 size={16} />
+            </button>
+          )}
           <button
             className="icon-button details-toggle"
             aria-expanded={expanded}
@@ -418,7 +429,7 @@ export function TaskCard({
               className="action-button"
               onClick={() =>
                 void action(async () => {
-                  await navigator.clipboard.writeText(task.originalUrl || task.url);
+                  await writeClipboardText(task.originalUrl || task.url);
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1800);
                 })
@@ -519,9 +530,18 @@ export function TaskCard({
       )}
 
       {actionError && (
-        <p className="inline-error" role="alert" style={{ paddingInline: 16, paddingBottom: 12 }}>
-          {actionError}
-        </p>
+        <div className="task-action-error-banner" role="alert">
+          <AlertCircle size={14} className="error-icon" />
+          <span className="error-text">{humanizeErrorMessage(actionError, lang)}</span>
+          <button
+            type="button"
+            className="icon-button error-dismiss"
+            onClick={() => setActionError('')}
+            aria-label={ar ? 'إغلاق' : 'Dismiss'}
+          >
+            <X size={12} />
+          </button>
+        </div>
       )}
     </article>
   );

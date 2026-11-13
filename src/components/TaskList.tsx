@@ -3,6 +3,7 @@ import { Search, X, ArrowDownToLine, CheckCircle2, Pause, Play, Trash2, SlidersH
 import type { DownloadTask } from '../types/downloader';
 import { TaskCard } from './TaskCard';
 import { downloadManager } from '../core/downloadManager';
+import { writeClipboardText } from '../core/clipboard';
 
 interface Props {
   tasks: DownloadTask[];
@@ -191,8 +192,7 @@ export const TaskList = memo(function TaskList({
                 className="text-button"
                 onClick={() => {
                   const text = downloadManager.exportUrls(mode === 'finished' ? 'completed' : 'active');
-                  void navigator.clipboard
-                    .writeText(text)
+                  void writeClipboardText(text)
                     .then(() => {
                       setExported(true);
                       setTimeout(() => setExported(false), 1600);
