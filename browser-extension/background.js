@@ -79,40 +79,17 @@ if (chrome.downloads?.onDeterminingFilename) {
 
 async function capture(item) {
   if (item.state !== 'in_progress' || item.paused || item.incognito || item.byExtensionId) return;
-
-  // Pause as early as possible to prevent browser download competition and dialog flash
-  let pausedEarly = false;
-  try {
-    await chrome.downloads.pause(item.id);
-    pausedEarly = true;
-  } catch {
-    // Might fail if already completed or restricted
-  }
-
   await recovered;
   const settings = await chrome.storage.local.get(DEFAULTS);
-  if (!shouldCapture(item, settings)) {
-    if (pausedEarly) {
-      try { await chrome.downloads.resume(item.id); } catch {}
-    }
-    return;
-  }
+  if (!shouldCapture(item, settings)) return;
   let ping;
-  try { ping = await connection(); } catch {
-    if (pausedEarly) {
-      try { await chrome.downloads.resume(item.id); } catch {}
-    }
-    return;
-  }
+  try { ping = await connection(); } catch { return; }
   const [current] = await chrome.downloads.search({ id: item.id });
-  if (!current || !shouldCapture(current, settings)) {
-    if (pausedEarly) {
-      try { await chrome.downloads.resume(item.id); } catch {}
-    }
-    return;
-  }
+  if (!current || !shouldCapture(current, settings)) return;
   const key = handoffKey(item.id);
   await chrome.storage.local.set({ [key]: { id: item.id, startTime: current.startTime, saved: false } });
+  // Pause, then send: prevents small files completing while ARGON takes over.
+  try { await chrome.downloads.pause(item.id); } catch { await chrome.storage.local.remove(key); return; }
   try {
     const targetUrl = current.finalUrl || current.url;
     const headers = await buildAuthHeaders(targetUrl, current.referrer, settings, !!current.incognito);
