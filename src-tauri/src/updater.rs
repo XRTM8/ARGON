@@ -82,9 +82,6 @@ fn package_mode() -> &'static str {
         let installed = || -> Option<bool> {
             let executable = std::env::current_exe().ok()?;
             let running = std::fs::canonicalize(executable.parent()?).ok()?;
-            if !running.join("uninstall.exe").is_file() {
-                return Some(false);
-            }
             for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
                 for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
                     let Ok(key) = RegKey::predef(root).open_subkey_with_flags(
@@ -281,6 +278,7 @@ pub async fn update_check(
             .updater_builder()
             .target("windows-x86_64-nsis")
             .timeout(Duration::from_secs(600))
+            .installer_args(["/UPDATE"])
             .build()
             .map_err(|e| e.to_string())?;
         let update = tokio::time::timeout(Duration::from_secs(30), updater.check())

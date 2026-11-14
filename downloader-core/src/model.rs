@@ -218,7 +218,7 @@ impl Default for DownloaderSettings {
             auto_retry_enabled: true,
             max_auto_retries: 3,
             minimize_to_tray: true,
-            start_with_windows: false,
+            start_with_windows: true,
         }
     }
 }

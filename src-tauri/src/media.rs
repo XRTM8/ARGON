@@ -154,6 +154,38 @@ async fn run_ytdlp_json(
             format!("محرك الوسائط غير متاح؛ أعد تثبيت ARGON أو شغّل npm run prepare:tools. {e}")
         })?;
     if !output.status.success() {
+        // Auto-heal: Try updating yt-dlp once in background and retry extraction
+        if update_ytdlp_tool(app.clone()).await.is_ok() {
+            if let Ok((executable_retry, node_retry, _)) = resolve_tool_paths(app) {
+                let mut retry_cmd = tokio::process::Command::new(executable_retry);
+                retry_cmd.kill_on_drop(true);
+                #[cfg(windows)]
+                retry_cmd.creation_flags(0x08000000);
+                retry_cmd.args([
+                    "--ignore-config",
+                    "--no-playlist",
+                    "--no-warnings",
+                    "--skip-download",
+                    "--dump-single-json",
+                    "--socket-timeout",
+                    "20",
+                    "--retries",
+                    "2",
+                    "--js-runtimes",
+                    &node_retry,
+                ]);
+                if let Some(fmt) = format_arg {
+                    retry_cmd.args(["--format", fmt]);
+                }
+                retry_cmd.args(["--", url]);
+                if let Ok(Ok(retry_output)) = tokio::time::timeout(Duration::from_secs(90), retry_cmd.output()).await {
+                    if retry_output.status.success() {
+                        return serde_json::from_slice(&retry_output.stdout)
+                            .map_err(|_| "Invalid media engine response".to_string());
+                    }
+                }
+            }
+        }
         let error = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "تعذر استخراج ملف مباشر: {}",

@@ -1,4 +1,4 @@
-export const DEFAULTS = { autoIntercept: false, showVideoButton: true, forwardCookies: false, excludedHosts: [], minSizeBytes: 0, language: 'ar' };
+export const DEFAULTS = { autoIntercept: true, showVideoButton: true, forwardCookies: true, excludedHosts: [], minSizeBytes: 0, language: 'ar' };
 
 export function platformVideo(value, title) {
   const url = httpUrl(value);

@@ -8,7 +8,7 @@ import { ArgonMark } from './ArgonMark';
 import type { DownloadStats } from '../types/downloader';
 
 export type MainViewTab = 'downloads' | 'sharing' | 'clipboard' | 'history' | 'browser' | 'settings';
-export const CURRENT_VERSION = '2.4.1';
+export const CURRENT_VERSION = '2.4.2';
 
 interface Props {
   lang: 'ar' | 'en';

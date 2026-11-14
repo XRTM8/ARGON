@@ -22,11 +22,35 @@ async function request(path, payload, timeout = 6000) {
   }
 }
 
-export async function connection() {
-  const data = await request('/ping', null, 1800);
-  if (data.app !== 'ARGON' || data.status !== 'ok') throw new Error('invalid_bridge');
-  if (!data.capabilities?.includes('persisted-handoff')) throw new Error('update_required');
-  return data;
+export async function connection(allowWake = true) {
+  try {
+    const data = await request('/ping', null, 1800);
+    if (data.app !== 'ARGON' || data.status !== 'ok') throw new Error('invalid_bridge');
+    if (!data.capabilities?.includes('persisted-handoff')) throw new Error('update_required');
+    return data;
+  } catch (err) {
+    if (allowWake && typeof chrome !== 'undefined' && chrome.runtime?.sendNativeMessage) {
+      try {
+        await new Promise((resolve) => {
+          chrome.runtime.sendNativeMessage('com.otium.downloader', { action: 'wake' }, () => {
+            resolve();
+          });
+        });
+        for (let i = 0; i < 5; i++) {
+          await new Promise((r) => setTimeout(r, 600));
+          try {
+            const data = await request('/ping', null, 1000);
+            if (data.app === 'ARGON' && data.status === 'ok') return data;
+          } catch {
+            // Keep polling
+          }
+        }
+      } catch {
+        // Native messaging fallback ignored
+      }
+    }
+    throw err;
+  }
 }
 
 export async function buildAuthHeaders(url, referer, settings, incognito = false) {

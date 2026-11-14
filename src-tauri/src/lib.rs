@@ -575,6 +575,60 @@ async fn delete_file_item(app: AppHandle, file_path: String) -> Result<(), Strin
 }
 
 #[cfg(desktop)]
+fn start_clipboard_monitor(app_handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_clipboard = String::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(800));
+        loop {
+            interval.tick().await;
+            let Ok(dl) = ensure_downloader(&app_handle).await else {
+                continue;
+            };
+            let snap = dl.snapshot().await;
+            if !snap.settings.clipboard_monitor_enabled {
+                continue;
+            }
+            let current = tokio::task::spawn_blocking(|| {
+                arboard::Clipboard::new().ok().and_then(|mut cb| cb.get_text().ok())
+            })
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(text) = current {
+                let trimmed = text.trim();
+                if trimmed.len() > 10 && trimmed.len() < 2048 && trimmed != last_clipboard {
+                    last_clipboard = trimmed.to_string();
+                    if let Ok(url) = reqwest::Url::parse(trimmed) {
+                        if matches!(url.scheme(), "http" | "https") {
+                            let path = url.path().to_ascii_lowercase();
+                            let is_downloadable = path.ends_with(".zip")
+                                || path.ends_with(".rar")
+                                || path.ends_with(".7z")
+                                || path.ends_with(".tar")
+                                || path.ends_with(".gz")
+                                || path.ends_with(".exe")
+                                || path.ends_with(".msi")
+                                || path.ends_with(".iso")
+                                || path.ends_with(".dmg")
+                                || path.ends_with(".apk")
+                                || path.ends_with(".mp4")
+                                || path.ends_with(".mkv")
+                                || path.ends_with(".mp3")
+                                || path.ends_with(".pdf")
+                                || path.ends_with(".epub");
+                            if is_downloadable {
+                                let _ = app_handle.emit("argon-clipboard-url", trimmed);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(desktop)]
 fn start_browser_bridge(app_handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let addr = "127.0.0.1:41523";
@@ -928,6 +982,7 @@ pub fn run() {
                     }
                 }
                 start_browser_bridge(app.handle().clone());
+                start_clipboard_monitor(app.handle().clone());
             }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

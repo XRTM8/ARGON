@@ -60,7 +60,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoRetryEnabled: true,
   maxAutoRetries: 3,
   minimizeToTray: true,
-  startWithWindows: false
+  startWithWindows: true
 };
 
 export class DownloadManager {
@@ -147,9 +147,17 @@ export class DownloadManager {
       this.scheduleRefresh();
     });
 
+    const unlistenClipboard = await listen<string>('argon-clipboard-url', (event) => {
+      const url = event.payload;
+      if (url && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('argon-share-url', { detail: url }));
+      }
+    });
+
     this.tauriUnlisten = () => {
       unlistenState();
       unlistenEvent();
+      unlistenClipboard();
     };
     if (this.destroyed) {
       this.tauriUnlisten();

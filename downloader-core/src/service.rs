@@ -654,10 +654,8 @@ impl DownloaderService {
             if !matches!(task.status, TaskStatus::Paused | TaskStatus::Error) {
                 return Err("Pause the download before replacing its URL.".into());
             }
-            if !same_resource_url(&task.url, &resolved.resolved_url) {
-                task.probed = false;
-                task.downloaded_bytes = 0;
-            }
+            // Retain existing chunks and progress; re-probe will verify content length
+            task.probed = false;
             task.original_url = trimmed;
             task.url = resolved.resolved_url;
             task.media_info = None;
@@ -1183,16 +1181,13 @@ impl DownloaderService {
 
         let probe_len = probe.content_length.unwrap_or(0);
         let same_resource = !is_post
-            && task.probed
-            && task.accept_ranges
             && probe.accept_ranges
-            && task.total_bytes == probe_len
-            && (task.etag.is_some() || task.last_modified.is_some())
-            && if let Some(ref old_etag) = task.etag {
-                probe.etag.as_ref() == Some(old_etag)
-            } else {
-                task.last_modified.is_some() && task.last_modified == probe.last_modified
-            };
+            && (
+                // When refreshing an expired URL or resuming: if Content-Length matches and server accepts ranges, resume cleanly
+                (task.total_bytes > 0 && task.total_bytes == probe_len)
+                || (task.etag.is_some() && probe.etag.as_ref() == task.etag.as_ref())
+                || (task.last_modified.is_some() && task.last_modified == probe.last_modified)
+            );
 
         let resume = task.downloaded_bytes > 0 && same_resource;
         if !resume {
@@ -1333,7 +1328,7 @@ impl DownloaderService {
                     algorithm: "sha256".to_owned(),
                     expected: None,
                     actual: Some(actual),
-                    verified: Some(true),
+                    verified: None,
                 });
             }
         }
@@ -1697,6 +1692,7 @@ impl DownloaderService {
             }
             let mut needs_queue = false;
             let mut active_changed = false;
+            let mut pause_outside_window = Vec::new();
             {
                 let mut state = self.state.write().await;
                 let now_inst = Instant::now();
@@ -1708,14 +1704,29 @@ impl DownloaderService {
                             .get(&t.id)
                             .is_none_or(|d| *d <= now_inst)
                 });
-                if has_ready_retry
-                    && (!settings.night_scheduler_enabled
-                        || is_within_night_window(
-                            settings.night_scheduler_start_hour,
-                            settings.night_scheduler_end_hour,
-                        ))
+                let in_night_window = is_within_night_window(
+                    settings.night_scheduler_start_hour,
+                    settings.night_scheduler_end_hour,
+                );
+                let has_queued = state.tasks.values().any(|t| t.status == TaskStatus::Queued);
+                if has_queued
+                    && (!settings.night_scheduler_enabled || in_night_window)
+                    && (has_ready_retry || state.tasks.values().filter(|t| t.status == TaskStatus::Downloading).count() < settings.max_concurrent_downloads)
                 {
                     needs_queue = true;
+                }
+
+                if settings.night_scheduler_enabled && !in_night_window {
+                    let force_ids = state.force_start_ids.clone();
+                    for task in state.tasks.values_mut() {
+                        if task.status == TaskStatus::Downloading && !force_ids.contains(&task.id) {
+                            task.status = TaskStatus::Queued;
+                            task.speed_bytes_per_sec = 0.0;
+                            task.eta_seconds = 0;
+                            pause_outside_window.push(task.id.clone());
+                            active_changed = true;
+                        }
+                    }
                 }
 
                 let mut total_speed = 0.0f64;
@@ -1748,6 +1759,10 @@ impl DownloaderService {
                 }
             }
 
+            for tid in pause_outside_window {
+                self.cancel_run(&tid).await;
+            }
+
             if active_changed {
                 (self.emit)(DownloadEvent::StateChanged);
             }
@@ -1775,7 +1790,20 @@ impl DownloaderService {
         } else {
             self.config.default_download_dir.clone()
         };
-        base.join(sanitize_filename(&task.filename))
+        let target_dir = if self.config.is_android {
+            base
+        } else {
+            match task.category {
+                TaskCategory::Programs => base.join("Programs"),
+                TaskCategory::Media => base.join("Videos"),
+                TaskCategory::Documents => base.join("Documents"),
+                TaskCategory::Archives => base.join("Compressed"),
+                TaskCategory::Torrents => base.join("Torrents"),
+                TaskCategory::Other => base,
+            }
+        };
+        let _ = std::fs::create_dir_all(&target_dir);
+        target_dir.join(sanitize_filename(&task.filename))
     }
 
     async fn unique_filename(&self, exclude_id: &str, desired: &str) -> String {

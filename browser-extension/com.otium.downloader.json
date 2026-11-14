@@ -1,0 +1,9 @@
+{
+  "name": "com.otium.downloader",
+  "description": "ARGON Native Messaging Host",
+  "path": "C:\\Users\\mjd20\\AppData\\Local\\ARGON\\ARGON.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://ikdgdlmiillcilhcjcbmplacomoiemhk/"
+  ]
+}

@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pub const WRITE_BUFFER_CAP: usize = 512 * 1024;
 pub const COALESCED_FLUSH_THRESHOLD: usize = 256 * 1024;
-const MAX_POOLED_BUFFERS: usize = 16;
+const MAX_POOLED_BUFFERS: usize = 64;
 
 fn write_all_at(file: &std::fs::File, mut offset: u64, mut data: &[u8]) -> io::Result<()> {
     #[cfg(windows)]
@@ -46,6 +46,7 @@ enum WriteCmd {
 pub struct CoalescedDiskWriter {
     tx: mpsc::Sender<WriteCmd>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
+    error: Arc<Mutex<Option<String>>>,
 }
 
 impl CoalescedDiskWriter {
@@ -57,6 +58,8 @@ impl CoalescedDiskWriter {
         let (tx, mut rx) = mpsc::channel::<WriteCmd>(32);
         let pool = Arc::new(Mutex::new(Vec::<Vec<u8>>::with_capacity(MAX_POOLED_BUFFERS)));
         let pool_worker = pool.clone();
+        let error = Arc::new(Mutex::new(None));
+        let error_worker = error.clone();
 
         std::thread::Builder::new()
             .name("argon-disk".into())
@@ -70,6 +73,9 @@ impl CoalescedDiskWriter {
                                 Err(e) => {
                                     let msg = format!("Cannot reset destination: {e}");
                                     sticky_err = Some(msg.clone());
+                                    if let Ok(mut g) = error_worker.lock() {
+                                        *g = Some(msg.clone());
+                                    }
                                     Err(msg)
                                 }
                             };
@@ -78,7 +84,11 @@ impl CoalescedDiskWriter {
                         WriteCmd::Write { offset, mut buf } => {
                             if sticky_err.is_none() && !buf.is_empty() {
                                 if let Err(e) = write_all_at(&file, offset, &buf) {
-                                    sticky_err = Some(format!("Disk write failed: {e}"));
+                                    let msg = format!("Disk write failed: {e}");
+                                    sticky_err = Some(msg.clone());
+                                    if let Ok(mut g) = error_worker.lock() {
+                                        *g = Some(msg);
+                                    }
                                 }
                             }
                             buf.clear();
@@ -121,7 +131,7 @@ impl CoalescedDiskWriter {
             })
             .map_err(|e| format!("Cannot start disk writer: {e}"))?;
 
-        Ok(Arc::new(Self { tx, pool }))
+        Ok(Arc::new(Self { tx, pool, error }))
     }
 
     fn take_buffer(&self) -> Vec<u8> {
@@ -144,6 +154,11 @@ impl CoalescedDiskWriter {
     }
 
     pub async fn write_chunk(&self, offset: u64, buf: Vec<u8>) -> Result<(), String> {
+        if let Ok(guard) = self.error.lock() {
+            if let Some(ref err) = *guard {
+                return Err(err.clone());
+            }
+        }
         if buf.is_empty() {
             return Ok(());
         }

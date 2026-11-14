@@ -45,5 +45,11 @@ const manifestPath = 'browser-extension/manifest.json';
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 manifest.version = targetVersion;
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+const firefoxManifestPath = 'browser-extension/manifest.firefox.json';
+if (fs.existsSync(firefoxManifestPath)) {
+  const ffManifest = JSON.parse(fs.readFileSync(firefoxManifestPath, 'utf8'));
+  ffManifest.version = targetVersion;
+  fs.writeFileSync(firefoxManifestPath, JSON.stringify(ffManifest, null, 2) + '\n');
+}
 
 console.log(`Bumped ARGON to ${targetVersion}`);
