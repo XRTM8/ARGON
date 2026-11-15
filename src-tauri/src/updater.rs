@@ -416,23 +416,14 @@ pub async fn update_install(
             cache.phase = "available".into();
             return Err(error.to_string());
         }
+        let dl_engine = crate::ensure_downloader(&app).await?;
         if tasks.updating.swap(true, Ordering::SeqCst) {
             return Err("update_busy".into());
         }
-        let dl_engine = app
-            .state::<crate::DownloaderRuntime>()
-            .service
-            .lock()
-            .await
-            .clone();
-        if let Some(ref dl) = dl_engine {
-            dl.set_updating(true);
-        }
+        dl_engine.set_updating(true);
         let result = async {
-            if let Some(ref dl) = dl_engine {
-                if dl.has_active_transfers().await {
-                    return Err("transfers_active".to_string());
-                }
+            if dl_engine.has_active_transfers().await {
+                return Err("transfers_active".into());
             }
             let engine = app
                 .state::<crate::flow::FlowRuntime>()
@@ -478,9 +469,8 @@ pub async fn update_install(
         .await;
         if result.is_err() {
             tasks.updating.store(false, Ordering::SeqCst);
-            if let Some(ref dl) = dl_engine {
-                dl.set_updating(false);
-            }
+            dl_engine.set_updating(false);
+            dl_engine.process_queue().await;
         } else {
             // Ensure host process exits cleanly so Windows NSIS installer can overwrite binaries and relaunch.
             app.exit(0);

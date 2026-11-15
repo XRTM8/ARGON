@@ -8,9 +8,9 @@ function setup(mode = 'installed') {
   const storage = { getItem: (key: string) => memory.get(key) || null, setItem: (key: string, value: string) => { memory.set(key, value); } } as Storage;
   const fetchRelease = vi.fn();
   const queuePortable = vi.fn(() => 'task-update');
-  const beforeInstall = vi.fn(); const installFailed = vi.fn(); const busy = vi.fn(() => false);
-  const manager = new UpdateManager({ native: true, version: '2.2.0', android: false, backend, storage: () => storage, fetchRelease, queuePortable, busy, beforeInstall, installFailed, listen: async () => () => {} });
-  return { manager, backend, storage, fetchRelease, queuePortable, beforeInstall, installFailed, busy };
+  const busy = vi.fn(() => false);
+  const manager = new UpdateManager({ native: true, version: '2.2.0', android: false, backend, storage: () => storage, fetchRelease, queuePortable, busy, listen: async () => () => {} });
+  return { manager, backend, storage, fetchRelease, queuePortable, busy };
 }
 beforeEach(() => { memory = new Map(); });
 afterEach(() => { vi.useRealTimers(); });
@@ -44,12 +44,24 @@ describe('optional updater coordination', () => {
     await manager.setAutomatic(true); expect(manager.getState().automatic).toBe(false); expect(manager.getState().error).toBe('preferences_not_saved');
     expect(backend.mock.calls.filter(call => call[0] === 'update_check')).toHaveLength(0);
   });
-  it('blocks installation during transfers and restores the queue if installation fails', async () => {
-    const { manager, backend, busy, beforeInstall, installFailed } = setup();
+  it('blocks installation during transfers and sends one native command per attempt', async () => {
+    const { manager, backend, busy } = setup();
     await manager.check(); await manager.download(); busy.mockReturnValue(true); await manager.install();
-    expect(beforeInstall).not.toHaveBeenCalled(); expect(manager.getState().error).toContain('transfers_active');
-    busy.mockReturnValue(false); backend.mockRejectedValueOnce(new Error('installer failed')); await manager.install();
-    expect(beforeInstall).toHaveBeenCalledOnce(); expect(installFailed).toHaveBeenCalledOnce(); expect(manager.getState().phase).toBe('ready');
+    expect(backend).not.toHaveBeenCalledWith('update_install');
+    expect(manager.getState().error).toContain('transfers_active');
+
+    busy.mockReturnValue(false);
+    let fail!: (reason: Error) => void;
+    backend.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const first = manager.install();
+    expect(manager.install()).toBe(first);
+    expect(backend.mock.calls.filter(([command]) => command === 'update_install')).toHaveLength(1);
+    fail(new Error('installer failed'));
+    await first;
+    expect(manager.getState().phase).toBe('ready');
+
+    await manager.install();
+    expect(backend.mock.calls.slice(3)).toEqual([['update_install'], ['update_install']]);
   });
   it('allows redownloading a cached package changed after download', async () => {
     const { manager, backend } = setup(); await manager.check(); await manager.download();

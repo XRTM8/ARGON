@@ -208,10 +208,11 @@ impl DownloaderService {
 
     pub async fn has_active_transfers(&self) -> bool {
         let state = self.state.read().await;
-        state
+        let downloading = state
             .tasks
             .values()
-            .any(|t| t.status == TaskStatus::Downloading)
+            .any(|t| t.status == TaskStatus::Downloading);
+        downloading || !self.active_runs.lock().await.is_empty()
     }
 
     pub async fn allow_root(&self, dir: PathBuf) {
@@ -944,6 +945,9 @@ impl DownloaderService {
         }
         let to_start: Vec<(DownloadTask, DownloaderSettings)> = {
             let mut state = self.state.write().await;
+            if self.is_updating() {
+                return;
+            }
             let settings = state.settings.clone();
             let now_inst = Instant::now();
             let in_window = is_within_night_window(
@@ -2170,6 +2174,42 @@ mod tests {
         })
         .await
         .expect("download timed out")
+    }
+
+    #[tokio::test]
+    async fn queue_waits_when_installation_starts_while_it_is_acquiring_the_state_lock() {
+        let root = TempDir::new();
+        let server = spawn_server(|_| http_resp("200 OK", "Content-Length: 4\r\n", b"done")).await;
+        let svc = new_service(&root).await;
+        svc.set_updating(true);
+        let task = svc.add_task(AddTaskRequest {
+            url: format!("{}/queued.bin", server.base_url),
+            filename: None,
+            segment_count: None,
+            expected_sha256: None,
+            headers: None,
+            method: None,
+            post_body: None,
+            media_info: None,
+            queue_id: None,
+            mirrors: None,
+        }).await.unwrap();
+
+        let state = svc.state.write().await;
+        svc.set_updating(false);
+        let queue = svc.clone();
+        let pending = tokio::spawn(async move { queue.process_queue().await });
+        tokio::task::yield_now().await;
+        svc.set_updating(true);
+        drop(state);
+        pending.await.unwrap();
+        assert!(!svc.has_active_transfers().await);
+        assert_eq!(svc.snapshot().await.tasks[0].status, TaskStatus::Queued);
+
+        svc.set_updating(false);
+        svc.process_queue().await;
+        assert_eq!(wait_settled(&svc, &task.id).await.status, TaskStatus::Completed);
+        svc.shutdown().await;
     }
 
     struct TestMediaExtractor;

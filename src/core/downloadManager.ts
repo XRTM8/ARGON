@@ -723,23 +723,6 @@ export class DownloadManager {
     return invoke<MediaToolsStatus>('update_ytdlp_tool');
   }
 
-  public beginUpdateInstallation() {
-    if (this.stats.activeCount > 0) throw new Error('transfers_active');
-    if (isTauri()) {
-      void import('@tauri-apps/api/core').then(({ invoke }) =>
-        invoke('dl_set_updating', { active: true }).catch(() => {})
-      );
-    }
-  }
-
-  public endUpdateInstallation() {
-    if (isTauri()) {
-      void import('@tauri-apps/api/core').then(({ invoke }) =>
-        invoke('dl_set_updating', { active: false }).catch(() => {})
-      );
-    }
-  }
-
   public async shareFile(filePath?: string) {
     if (!filePath || !isTauri()) throw new Error('Open the ARGON app to share saved files.');
     const { invoke } = await import('@tauri-apps/api/core');

@@ -340,25 +340,6 @@ async fn dl_migrate_legacy(app: AppHandle, tasks: Vec<DownloadTask>) -> Result<u
 }
 
 #[tauri::command]
-async fn dl_set_updating(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<TaskManager>>,
-    active: bool,
-) -> Result<(), String> {
-    state.updating.store(active, Ordering::SeqCst);
-    let svc = ensure_downloader(&app).await?;
-    if active && svc.has_active_transfers().await {
-        state.updating.store(false, Ordering::SeqCst);
-        return Err("transfers_active".into());
-    }
-    svc.set_updating(active);
-    if !active {
-        svc.process_queue().await;
-    }
-    Ok(())
-}
-
-#[tauri::command]
 async fn probe_url(
     app: AppHandle,
     url: String,
@@ -1078,7 +1059,6 @@ pub fn run() {
             dl_verify_hash,
             dl_update_settings,
             dl_migrate_legacy,
-            dl_set_updating,
             probe_url,
             poll_telemetry_binary,
             get_default_download_directory,

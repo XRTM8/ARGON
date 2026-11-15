@@ -20,7 +20,7 @@ interface Dependencies {
   listen: (callback: (progress: { downloaded: number; total?: number }) => void) => Promise<() => void>;
   storage: () => Storage | null; fetchRelease: () => Promise<ReleaseInfo>;
   queuePortable: (asset: ReleaseAsset) => string;
-  busy: () => boolean; beforeInstall: () => void; installFailed: () => void;
+  busy: () => boolean;
 }
 const defaults: Dependencies = {
   native: nativeRuntime(), version: CURRENT_VERSION, android: isAndroidRuntime(),
@@ -35,9 +35,7 @@ const defaults: Dependencies = {
     }
     return downloadManager.addTask(asset.url, undefined, 4, asset.sha256);
   },
-  busy: () => downloadManager.getStats().activeCount > 0 || !!flowClient.getState().snapshot?.transfers.some(transfer => ['queued', 'hashing', 'waiting', 'sending', 'receiving', 'verifying'].includes(transfer.status)) || !!flowClient.getState().snapshot?.incoming.length || !!flowClient.getState().snapshot?.pairings.length,
-  beforeInstall: () => downloadManager.beginUpdateInstallation(),
-  installFailed: () => downloadManager.endUpdateInstallation()
+  busy: () => downloadManager.getStats().activeCount > 0 || !!flowClient.getState().snapshot?.transfers.some(transfer => ['queued', 'hashing', 'waiting', 'sending', 'receiving', 'verifying'].includes(transfer.status)) || !!flowClient.getState().snapshot?.incoming.length || !!flowClient.getState().snapshot?.pairings.length
 };
 
 export function compatibleManualAsset(release: ReleaseInfo, android = false): ReleaseAsset | undefined {
@@ -160,13 +158,11 @@ export class UpdateManager {
     if (this.installing) return this.installing;
     if (this.state.mode !== 'installed' || this.state.phase !== 'ready') return Promise.resolve();
     return this.installing = (async () => {
-      let locked = false;
       try {
         if (this.deps.busy()) throw new Error('transfers_active');
-        this.deps.beforeInstall(); locked = true; this.patch({ phase: 'installing', error: undefined });
+        this.patch({ phase: 'installing', error: undefined });
         await this.deps.backend('update_install');
       } catch (error) {
-        if (locked) this.deps.installFailed();
         const retryDownload = /cached_update_changed|download_update_first|signature|pubkey|verification/i.test(String(error));
         this.patch({ phase: retryDownload ? 'available' : 'ready', error: String(error) });
       }

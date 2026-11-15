@@ -69,7 +69,6 @@ describe('DownloadManager Rust facade lifecycle', () => {
   let manager: DownloadManager | null = null;
   let tasks: DownloadTask[] = [];
   let settings: AppSettings = baseSettings();
-  let updating = false;
   let nextId = 1;
   let overrideInvoke: ((name: string, args: Record<string, unknown>) => unknown) | null = null;
 
@@ -93,7 +92,7 @@ describe('DownloadManager Rust facade lifecycle', () => {
       },
       settings: { ...settings },
       speedHistory: new Array(20).fill(0),
-      updating
+      updating: false
     };
   }
 
@@ -192,10 +191,6 @@ describe('DownloadManager Rust facade lifecycle', () => {
       if (found) found.checksum = { algorithm: 'sha256', expected: found.checksum?.expected, actual: hash, verified: true };
       return hash;
     }
-    if (name === 'dl_set_updating') {
-      updating = Boolean(args.active);
-      return null;
-    }
     if (name === 'probe_url') {
       return { content_length: 2048, accept_ranges: true, content_type: 'application/zip' };
     }
@@ -244,7 +239,6 @@ describe('DownloadManager Rust facade lifecycle', () => {
     events.clear();
     tasks = [];
     settings = baseSettings();
-    updating = false;
     nextId = 1;
     overrideInvoke = null;
     invoke.mockReset();
@@ -419,27 +413,6 @@ describe('DownloadManager Rust facade lifecycle', () => {
     await expect(manager.refreshTaskUrl(id, 'https://example.com/file.zip?token=fresh')).rejects.toThrow(
       'Remote size mismatch'
     );
-  });
-
-  it('guards update installation while active downloads are running and toggles dl_set_updating', async () => {
-    manager = new DownloadManager();
-    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
-
-    const t = makeTask('active_1', { status: 'downloading', speedBytesPerSec: 120000 });
-    tasks.push(t);
-    await manager.refreshFromNative();
-
-    expect(() => manager!.beginUpdateInstallation()).toThrow('transfers_active');
-
-    t.status = 'completed';
-    t.speedBytesPerSec = 0;
-    await manager.refreshFromNative();
-
-    manager.beginUpdateInstallation();
-    await vi.waitFor(() => expect(calls('dl_set_updating').some((c) => c[1].active === true)).toBe(true));
-
-    manager.endUpdateInstallation();
-    await vi.waitFor(() => expect(calls('dl_set_updating').some((c) => c[1].active === false)).toBe(true));
   });
 
   it('handles native download-state-changed events, settings persistence, and media tool commands', async () => {

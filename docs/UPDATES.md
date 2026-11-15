@@ -4,11 +4,11 @@ ARGON 2.2.0 adds signed updates for the Windows x64 per-user NSIS installation. 
 
 ## Package compatibility
 
-- The registered install location and running executable directory must match, with the NSIS uninstaller present. Other Windows copies are treated as Portable.
+- The registered install location and running executable directory must match. Other Windows copies are treated as Portable.
 - The application identifier and current-user installer scope remain unchanged. Downgrades are disabled. Only stable versions newer than the current app are accepted.
 - Only `windows-x86_64-nsis` packages with the exact official versioned ARGON installer URL are accepted. Portable copies use a matching ZIP and never launch this installer.
 - The updater serializes checks, downloads and installs. A cached package must match its version, signature and SHA-256, and pass the official signature verification before it becomes ready or affects active services. The signature's trusted comment must bind it to the announced version.
-- A single-instance guard focuses the existing window. The download bridge rejects handoffs during installation, and failed installation releases the queue lock.
+- The native installer command owns the installation lock. The download bridge rejects handoffs during installation, and a failed install releases the lock and resumes queue processing.
 
 Portable updates are explicit downloads; close the previous app and extract into a separate folder. The ZIP's published SHA-256 detects download corruption; it is not a substitute for the installed updater's public-key authentication. Android has no automatic in-app installation in this release.
 
