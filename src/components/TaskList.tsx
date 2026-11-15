@@ -162,6 +162,7 @@ export const TaskList = memo(function TaskList({
                   ['archives', ar ? 'أرشيف' : 'Archives'],
                   ['media', ar ? 'وسائط' : 'Media'],
                   ['documents', ar ? 'مستندات' : 'Docs'],
+                  ['torrents', ar ? 'تورنت' : 'Torrents'],
                   ['other', ar ? 'أخرى' : 'Other']
                 ].map(([value, label]) => (
                   <option key={value} value={value}>

@@ -14,7 +14,8 @@ import {
   AlertCircle,
   File,
   ShieldCheck,
-  Share2
+  Share2,
+  Magnet
 } from 'lucide-react';
 import type { DownloadTask, QueueId } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
@@ -111,7 +112,8 @@ export function TaskCard({
         ? ar ? 'وسائط' : 'Media'
         : '';
 
-  const extension = task.filename.includes('.') ? task.filename.split('.').pop()!.slice(0, 5).toUpperCase() : '';
+  const rawExt = task.filename.includes('.') ? task.filename.split('.').pop()!.toUpperCase() : '';
+  const extension = rawExt === 'TORRENT' ? 'TOR' : rawExt.slice(0, 5);
   const action = async (operation: () => Promise<unknown>) => {
     try {
       setActionError('');
@@ -158,6 +160,12 @@ export function TaskCard({
           </h3>
           <div className="download-source">
             <span dir="ltr">{downloadHost(task.originalUrl || task.url)}</span>
+            {(task.torrentInfo || task.category === 'torrents') && (
+              <span className="queue-pill" style={{ borderColor: 'rgba(234, 179, 8, 0.4)', color: '#FACC15' }}>
+                <Magnet size={10} style={{ display: 'inline', verticalAlign: 'middle', marginInlineEnd: 3 }} />
+                Torrent
+              </span>
+            )}
             {task.mediaInfo?.quality && <span className="queue-pill">{task.mediaInfo.quality}</span>}
             {queueLabel && <span className="queue-pill">{queueLabel}</span>}
           </div>

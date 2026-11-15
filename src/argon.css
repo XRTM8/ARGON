@@ -545,6 +545,12 @@ button { transition: background-color .14s ease, color .14s ease, border-color .
   border: 1px solid var(--argon-border);
   border-radius: var(--argon-radius);
   background: var(--argon-panel);
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.quick-add.drag-active {
+  border-color: var(--argon-accent);
+  background: var(--argon-accent-soft);
+  box-shadow: 0 0 0 2px var(--argon-border-active);
 }
 .quick-add-heading {
   display: flex;

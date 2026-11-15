@@ -7,13 +7,14 @@ import {
   Film,
   CheckCircle2,
   AlertCircle,
-  Magnet
+  Magnet,
+  X
 } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
 import { expandWildcardPattern, extractSharedUrl, parseDownloadInput } from '../core/downloadInput';
 import { readClipboardText } from '../core/clipboard';
 import { detectPlatform, listMediaFormats } from '../core/mediaResolver';
-import { isMagnetUri } from '../core/torrent';
+import { isMagnetUri, parseTorrentFile, type TorrentMetadata } from '../core/torrent';
 import { formatBytes } from '../core/segmentation';
 import type { MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
 
@@ -26,7 +27,8 @@ interface Props {
     expectedSha256?: string,
     mediaInfo?: MediaMetadata,
     queueId?: QueueId,
-    mirrors?: string[]
+    mirrors?: string[],
+    torrentMeta?: TorrentMetadata
   ) => void;
   detectedClipboardUrl?: string | null;
   intakeKey?: number;
@@ -47,7 +49,30 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   const [probingMedia, setProbingMedia] = useState(false);
   const [mediaMeta, setMediaMeta] = useState<MediaMetadataInfo | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState<string>('');
+  const [torrentMeta, setTorrentMeta] = useState<TorrentMetadata | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleTorrentFile = async (file: File) => {
+    setError('');
+    try {
+      const buffer = await file.arrayBuffer();
+      const meta = await parseTorrentFile(new Uint8Array(buffer));
+      const magnet = `magnet:?xt=urn:btih:${meta.infoHash}&dn=${encodeURIComponent(meta.name)}`;
+      setValue(magnet);
+      setFilename(meta.name);
+      setTorrentMeta(meta);
+      setNotice(
+        ar
+          ? `تم استيراد ملف تورنت: ${meta.name} (${formatBytes(meta.totalLength)})`
+          : `Loaded .torrent: ${meta.name} (${formatBytes(meta.totalLength)})`
+      );
+      setTimeout(() => setNotice((curr) => (curr.includes(meta.name) ? '' : curr)), 4500);
+    } catch (err) {
+      setError(ar ? `ملف تورنت غير صالح: ${String(err)}` : `Invalid .torrent file: ${String(err)}`);
+    }
+  };
 
   const trimmed = value.trim();
   const isMultiline = value.includes('\n');
@@ -73,6 +98,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
       setError('');
       setMediaMeta(null);
       setSelectedFormatId('');
+      setTorrentMeta(null);
       input.current?.focus();
     }
   }, [detectedClipboardUrl, intakeKey]);
@@ -176,7 +202,8 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
         candidateList.urls.length === 1 ? expectedHash.trim() || undefined : undefined,
         candidateList.urls.length === 1 ? mediaInfo : undefined,
         queueId,
-        mirrors?.length ? mirrors : undefined
+        mirrors?.length ? mirrors : undefined,
+        candidateList.urls.length === 1 ? torrentMeta || undefined : undefined
       );
     }
 
@@ -189,6 +216,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     setMirrorsText('');
     setMediaMeta(null);
     setSelectedFormatId('');
+    setTorrentMeta(null);
     setError('');
     onClearClipboardUrl?.();
     input.current?.focus();
@@ -226,7 +254,57 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   };
 
   return (
-    <section className="quick-add" aria-label={ar ? 'إضافة تنزيل' : 'Add download'}>
+    <section
+      className={`quick-add ${isDragOver ? 'drag-active' : ''}`}
+      aria-label={ar ? 'إضافة تنزيل' : 'Add download'}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+      }}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+      }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          const file = files[0];
+          if (file.name.toLowerCase().endsWith('.torrent') || file.type === 'application/x-bittorrent') {
+            await handleTorrentFile(file);
+            return;
+          }
+        }
+        const text = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '').trim();
+        if (text) {
+          setValue(text);
+          setError('');
+          setNotice('');
+        }
+      }}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".torrent,application/x-bittorrent"
+        style={{ display: 'none' }}
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            await handleTorrentFile(file);
+            e.target.value = '';
+          }
+        }}
+      />
       <form onSubmit={submit}>
         <div className="quick-add-row">
           <div className="url-field">
@@ -313,6 +391,16 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               <span>{ar ? 'خيارات' : 'Options'}</span>
             </button>
 
+            <button
+              type="button"
+              className="text-button"
+              title={ar ? 'اختيار واستيراد ملف تورنت (.torrent) من جهازك' : 'Open a .torrent file from disk'}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Magnet size={13} />
+              <span>{ar ? 'ملف تورنت' : 'Torrent file'}</span>
+            </button>
+
             {isMediaPlatform && (
               <button
                 type="button"
@@ -329,7 +417,50 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               </button>
             )}
 
-            {isMagnet && (
+            {torrentMeta && (
+              <div
+                className="media-pill-btn"
+                style={{
+                  borderColor: 'rgba(234, 179, 8, 0.45)',
+                  color: '#FACC15',
+                  cursor: 'default',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  paddingInline: '0.6rem'
+                }}
+                title={torrentMeta.infoHash}
+              >
+                <Magnet size={13} />
+                <span dir="auto">
+                  {torrentMeta.name} · {formatBytes(torrentMeta.totalLength)}
+                  {torrentMeta.files.length > 1 ? ` (${torrentMeta.files.length} ${ar ? 'ملف' : 'files'})` : ''}
+                </span>
+                <button
+                  type="button"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: 0,
+                    marginInlineStart: 3
+                  }}
+                  onClick={() => {
+                    setTorrentMeta(null);
+                    setValue('');
+                    setFilename('');
+                  }}
+                  title={ar ? 'إلغاء' : 'Clear'}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+
+            {!torrentMeta && isMagnet && (
               <div
                 className="media-pill-btn"
                 style={{

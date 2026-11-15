@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   calculateSegments,
+  recommendSegmentCount,
   parseContentRange,
   formatBytes,
   formatSpeed,
@@ -120,5 +121,15 @@ describe('segmentation utility', () => {
     expect(humanizeErrorMessage('Failed to find configured root that contains /data/data/...', 'ar')).toContain('مشغّل مناسب');
     expect(humanizeErrorMessage('File does not exist on disk', 'ar')).toContain('مساحة التخزين');
     expect(humanizeErrorMessage('Random unexpected string', 'en')).toBe('Random unexpected string');
+  });
+
+  it('recommends optimal segment counts adaptively', () => {
+    expect(recommendSegmentCount(0, 16)).toBe(4);
+    expect(recommendSegmentCount(500 * 1024, 16)).toBe(1);
+    expect(recommendSegmentCount(5 * 1024 * 1024, 16)).toBe(4);
+    expect(recommendSegmentCount(25 * 1024 * 1024, 16)).toBe(8);
+    expect(recommendSegmentCount(100 * 1024 * 1024, 16)).toBe(16);
+    expect(recommendSegmentCount(100 * 1024 * 1024, 4)).toBe(8);
+    expect(recommendSegmentCount(500 * 1024 * 1024, 32)).toBe(32);
   });
 });

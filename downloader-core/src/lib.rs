@@ -14,6 +14,7 @@ pub use model::{
     DownloaderSnapshot, MediaMetadata, QueueId, TaskCategory, TaskStatus, UrlProbeResult,
     DEFAULT_USER_AGENT,
 };
+pub use resolver::recommended_segment_count;
 pub use service::{BoxFuture, DownloaderService, MediaDownloadUpdate, MediaExtractor, ResolvedMediaSpec};
 pub use torrent::{is_magnet_uri, parse_magnet_uri, parse_torrent_bytes, TorrentFileItem, TorrentMetadata};
 pub use transfer::{

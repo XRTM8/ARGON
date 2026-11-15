@@ -9,7 +9,8 @@ import {
   Layers,
   Share2,
   ExternalLink,
-  AlertCircle
+  AlertCircle,
+  Magnet
 } from 'lucide-react';
 import type { DownloadTask, QueueId } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
@@ -120,6 +121,27 @@ export function TaskInspector({ task, lang, onClose }: Props) {
 
       {/* Metadata */}
       <dl style={{ display: 'grid', gap: 7, margin: 0, fontSize: 11.5 }}>
+        {task.torrentInfo && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '76px minmax(0, 1fr)', gap: 8 }}>
+              <dt style={{ color: 'var(--argon-subtle)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Magnet size={11} style={{ color: '#FACC15' }} />
+                BTIH
+              </dt>
+              <dd style={{ margin: 0, fontFamily: 'monospace', overflowWrap: 'anywhere', color: '#FACC15' }} dir="ltr">
+                {task.torrentInfo.infoHash}
+              </dd>
+            </div>
+            {task.torrentInfo.files.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: '76px minmax(0, 1fr)', gap: 8 }}>
+                <dt style={{ color: 'var(--argon-subtle)' }}>{ar ? 'المحتوى' : 'Contents'}</dt>
+                <dd style={{ margin: 0 }} dir="auto">
+                  {task.torrentInfo.files.length} {ar ? 'ملف' : 'files'} ({formatBytes(task.torrentInfo.totalLength)})
+                </dd>
+              </div>
+            )}
+          </>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '76px minmax(0, 1fr)', gap: 8 }}>
           <dt style={{ color: 'var(--argon-subtle)' }}>{ar ? 'النطاقات' : 'Ranges'}</dt>
           <dd style={{ margin: 0 }}>

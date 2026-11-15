@@ -524,6 +524,24 @@ pub fn calculate_segments(total_bytes: u64, segment_count: u32) -> Vec<DownloadC
         .collect()
 }
 
+/// Recommends an optimal connection / segment count based on file size and user preference.
+/// Mitigates connection overhead for tiny files while maximizing throughput on large payloads.
+pub fn recommended_segment_count(total_bytes: u64, preferred: u32) -> u32 {
+    let preferred = preferred.clamp(1, 32);
+    if total_bytes == 0 {
+        return preferred.min(4);
+    }
+    if total_bytes < 1024 * 1024 {
+        1
+    } else if total_bytes < 10 * 1024 * 1024 {
+        preferred.min(4)
+    } else if total_bytes < 50 * 1024 * 1024 {
+        preferred.min(8)
+    } else {
+        preferred.max(8).min(32)
+    }
+}
+
 pub fn same_resource_url(a: &str, b: &str) -> bool {
     let Ok(ua) = Url::parse(a.trim()) else {
         return false;
@@ -614,5 +632,16 @@ mod tests {
         assert_eq!(detect_category("archive.7z"), TaskCategory::Archives);
         assert_eq!(detect_category("ubuntu.iso.torrent"), TaskCategory::Torrents);
         assert_eq!(detect_category("file.unknown_xyz"), TaskCategory::Other);
+    }
+
+    #[test]
+    fn calculates_recommended_segments_adaptively() {
+        assert_eq!(recommended_segment_count(0, 16), 4);
+        assert_eq!(recommended_segment_count(500 * 1024, 16), 1);
+        assert_eq!(recommended_segment_count(5 * 1024 * 1024, 16), 4);
+        assert_eq!(recommended_segment_count(25 * 1024 * 1024, 16), 8);
+        assert_eq!(recommended_segment_count(100 * 1024 * 1024, 16), 16);
+        assert_eq!(recommended_segment_count(100 * 1024 * 1024, 4), 8);
+        assert_eq!(recommended_segment_count(500 * 1024 * 1024, 32), 32);
     }
 }

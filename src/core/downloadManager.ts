@@ -531,11 +531,12 @@ export class DownloadManager {
     customHeaders?: Record<string, string>,
     mediaInfo?: MediaMetadata,
     queueId: QueueId = 'main',
-    mirrors?: string[]
+    mirrors?: string[],
+    torrentMeta?: TorrentMetadata
   ): Promise<string> {
     const resolved = resolveUniversalLink(url.trim());
     if (!isTauri() || isMagnetUri(url) || !/^https?:\/\/.+/i.test(resolved.resolvedUrl)) {
-      return this.addTask(url, customFilename, segmentCount, expectedSha256, customHeaders, undefined, mediaInfo, false, queueId, mirrors);
+      return this.addTask(url, customFilename, segmentCount, expectedSha256, customHeaders, torrentMeta, mediaInfo, false, queueId, mirrors);
     }
     await this.ready;
     soundEngine.playStartSweep();

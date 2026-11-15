@@ -34,6 +34,7 @@ import { extractSharedUrl } from './core/downloadInput';
 import { formatBytes, formatSpeed } from './core/segmentation';
 import { consumeInitialAndroidSharedUrl, syncSystemBarTheme } from './core/safeArea';
 import type { DownloadTask, MediaMetadata, QueueId } from './types/downloader';
+import { parseTorrentFile, type TorrentMetadata } from './core/torrent';
 
 export function App() {
   const [lang, setLang] = useState<'ar' | 'en'>(() => {
@@ -189,11 +190,34 @@ export function App() {
       if (!event.relatedTarget) setDragging(false);
     };
 
-    const handleDrop = (event: DragEvent) => {
+    const handleDrop = async (event: DragEvent) => {
       event.preventDefault();
       setDragging(false);
-      const urls = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '')
-        .trim()
+      const files = event.dataTransfer?.files;
+      if (files && files.length > 0) {
+        const file = files[0];
+        if (file.name.toLowerCase().endsWith('.torrent') || file.type === 'application/x-bittorrent') {
+          try {
+            const buffer = await file.arrayBuffer();
+            const meta = await parseTorrentFile(new Uint8Array(buffer));
+            const magnet = `magnet:?xt=urn:btih:${meta.infoHash}&dn=${encodeURIComponent(meta.name)}`;
+            setClipboardUrl({ text: magnet, key: performance.now() });
+            setActiveView('downloads');
+            setFinished(false);
+            return;
+          } catch {
+            // fallback to text extraction
+          }
+        }
+      }
+      const rawText = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '').trim();
+      if (/^magnet:\?[\s\S]*xt=urn:btih:/i.test(rawText)) {
+        setClipboardUrl({ text: rawText, key: performance.now() });
+        setActiveView('downloads');
+        setFinished(false);
+        return;
+      }
+      const urls = rawText
         .split(/\r?\n/)
         .filter((line) => /^https?:\/\//i.test(line))
         .join('\n');
@@ -224,11 +248,12 @@ export function App() {
     expectedSha256?: string,
     mediaInfo?: MediaMetadata,
     queueId?: QueueId,
-    mirrors?: string[]
+    mirrors?: string[],
+    torrentMeta?: TorrentMetadata
   ) => {
     setFinished(false);
     setActiveView('downloads');
-    void downloadManager.addTaskAsync(url, filename, segments, expectedSha256, undefined, mediaInfo, queueId, mirrors);
+    void downloadManager.addTaskAsync(url, filename, segments, expectedSha256, undefined, mediaInfo, queueId, mirrors, torrentMeta);
   };
 
   const share = (task: DownloadTask) => {

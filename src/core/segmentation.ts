@@ -31,6 +31,19 @@ export function calculateSegments(totalBytes: number, segmentCount: number = 4):
 }
 
 /**
+ * Recommends an optimal connection / segment count based on payload size and user preference.
+ * Prevents connection overhead on smaller payloads while scaling throughput on multi-gigabyte transfers.
+ */
+export function recommendSegmentCount(totalBytes: number, preferred: number = 8): number {
+  const clampPref = Math.max(1, Math.min(32, Math.floor(preferred) || 8));
+  if (totalBytes <= 0) return Math.min(clampPref, 4);
+  if (totalBytes < 1024 * 1024) return 1;
+  if (totalBytes < 10 * 1024 * 1024) return Math.min(clampPref, 4);
+  if (totalBytes < 50 * 1024 * 1024) return Math.min(clampPref, 8);
+  return Math.max(8, Math.min(32, clampPref));
+}
+
+/**
  * Parses HTTP Content-Range header (e.g. "bytes 0-1023/2048").
  */
 export function parseContentRange(header: string): { start: number; end: number; total: number } | null {
