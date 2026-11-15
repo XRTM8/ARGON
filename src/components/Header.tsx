@@ -8,7 +8,7 @@ import { ArgonMark } from './ArgonMark';
 import type { DownloadStats } from '../types/downloader';
 
 export type MainViewTab = 'downloads' | 'sharing' | 'clipboard' | 'history' | 'browser' | 'settings';
-export const CURRENT_VERSION = '2.7.1';
+export const CURRENT_VERSION = '2.7.2';
 
 interface Props {
   lang: 'ar' | 'en';
@@ -60,7 +60,7 @@ export function Header({ lang, activeTab, onTabChange, stats, runtime }: Props) 
     <aside className="argon-sidebar">
       <div className="argon-brand" dir={ar ? 'rtl' : 'ltr'}>
         <div className="argon-emblem-wrap">
-          <ArgonMark size={22} withTile />
+          <ArgonMark size={24} />
         </div>
         <div className="argon-brand-text">
           <strong>{ar ? 'آرغون' : 'ARGON'}</strong>

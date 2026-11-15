@@ -311,7 +311,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
             <textarea
               ref={input}
               id="download-url"
-              dir="ltr"
+              dir={value ? 'ltr' : (ar ? 'rtl' : 'ltr')}
               rows={isMultiline ? 3 : 1}
               value={value}
               spellCheck={false}
@@ -319,8 +319,8 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               autoComplete="off"
               placeholder={
                 ar
-                  ? 'أدخل الرابط أو أسقط ملفاً…'
-                  : 'Enter URL or drop a file…'
+                  ? 'أدخل رابط التحميل أو أسقط ملفاً'
+                  : 'Enter URL or drop a file'
               }
               aria-invalid={!!error}
               onChange={(event) => {

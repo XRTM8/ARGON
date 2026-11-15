@@ -474,6 +474,13 @@ button { transition: background-color .14s ease, color .14s ease, border-color .
   background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
   border-color: #2563EB;
 }
+:root[data-theme="light"] .action-button.primary:disabled {
+  background: #EEF2F6 !important;
+  color: #94A3B8 !important;
+  border-color: #E2E8F0 !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+}
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -833,11 +840,42 @@ button { transition: background-color .14s ease, color .14s ease, border-color .
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--argon-border);
+  padding-bottom: 8px;
+}
+.stream-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--argon-bright);
+}
+.stream-badge svg {
+  color: var(--argon-accent);
+}
+.stream-badge .stream-completed-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--argon-muted);
 }
 .download-toolbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.list-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--argon-muted);
+  margin: 14px 4px 6px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--argon-border);
+}
+.list-section-divider svg {
+  color: var(--argon-emerald);
 }
 .text-danger {
   color: var(--argon-rose) !important;
@@ -1219,21 +1257,32 @@ input[type=checkbox] {
 
 /* Empty States */
 .download-empty {
-  min-height: 250px;
-  border: 1px dashed var(--argon-border-hover);
+  min-height: 200px;
+  border: 1px solid var(--argon-border);
   border-radius: var(--argon-radius);
-  padding: 40px 20px 26px;
+  padding: 36px 20px 28px;
   text-align: center;
   background: var(--argon-panel);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--argon-shadow);
 }
 .empty-file {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--argon-accent-soft);
   color: var(--argon-accent);
-  margin-bottom: 12px;
+  margin-bottom: 14px;
   display: flex;
+  align-items: center;
   justify-content: center;
 }
-.download-empty h2 { margin: 0; color: var(--argon-bright); font-size: 16.5px; font-weight: 600; }
-.download-empty p { color: var(--argon-muted); font-size: 12.5px; margin: 7px auto 18px; max-width: 420px; line-height: 1.7; }
+.download-empty h2 { margin: 0; color: var(--argon-bright); font-size: 16px; font-weight: 700; }
+.download-empty .empty-subtitle,
+.download-empty p { color: var(--argon-muted); font-size: 13px; margin: 8px auto 0; max-width: 380px; line-height: 1.6; }
 .empty-shortcuts {
   border-top: 1px solid var(--argon-border);
   margin: 22px auto 0;

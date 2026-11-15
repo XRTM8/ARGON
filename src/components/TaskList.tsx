@@ -8,7 +8,7 @@ import { writeClipboardText } from '../core/clipboard';
 interface Props {
   tasks: DownloadTask[];
   lang: 'ar' | 'en';
-  mode: 'downloads' | 'finished';
+  mode?: 'all' | 'downloads' | 'finished';
   inspectedId?: string | null;
   onInspect?: (id: string) => void;
   onPause: (id: string) => void;
@@ -26,7 +26,7 @@ interface Props {
 export const TaskList = memo(function TaskList({
   tasks,
   lang,
-  mode,
+  mode = 'all',
   inspectedId,
   onInspect,
   onPause,
@@ -34,7 +34,6 @@ export const TaskList = memo(function TaskList({
   onRemove,
   onStartImmediately,
   onRestart,
-  onSwitchToDownloads,
   onShare
 }: Props) {
   const ar = lang === 'ar';
@@ -49,27 +48,58 @@ export const TaskList = memo(function TaskList({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [exported, setExported] = useState(false);
 
-  const inMode = tasks.filter((task) => (task.status === 'completed') === (mode === 'finished'));
+  const inMode = mode === 'all'
+    ? tasks
+    : tasks.filter((task) => (task.status === 'completed') === (mode === 'finished'));
   const hasActiveFilter = status !== 'all' || category !== 'all' || queue !== 'all' || sort !== 'newest';
+
+  const labels: Record<string, string> = ar
+    ? {
+        all: 'كل الحالات',
+        downloading: 'جارٍ التنزيل',
+        queued: 'في الانتظار',
+        paused: 'متوقف',
+        completed: 'مكتمل',
+        error: 'يحتاج انتباهك'
+      }
+    : {
+        all: 'All statuses',
+        downloading: 'Downloading',
+        queued: 'Queued',
+        paused: 'Paused',
+        completed: 'Completed',
+        error: 'Needs attention'
+      };
 
   const filtered = inMode
     .filter(
       (task) =>
-        (status === 'all' || mode === 'finished' || task.status === status) &&
+        (status === 'all' || task.status === status) &&
         (category === 'all' || task.category === category) &&
         (queue === 'all' || (task.queueId || 'main') === queue) &&
         (!query.trim() ||
           `${task.filename} ${task.originalUrl || task.url}`.toLowerCase().includes(query.trim().toLowerCase()))
     )
-    .sort((a, b) =>
-      sort === 'name'
-        ? a.filename.localeCompare(b.filename, lang)
-        : sort === 'size'
-          ? b.totalBytes - a.totalBytes
-          : sort === 'oldest'
-            ? a.createdAt - b.createdAt
-            : b.createdAt - a.createdAt
-    );
+    .sort((a, b) => {
+      if (sort === 'name') return a.filename.localeCompare(b.filename, lang);
+      if (sort === 'size') return b.totalBytes - a.totalBytes;
+      if (sort === 'oldest') return a.createdAt - b.createdAt;
+
+      // Default: 'newest'
+      // When in 'all' mode, keep active (non-completed) downloads pinned to top
+      if (mode === 'all') {
+        const aCompleted = a.status === 'completed';
+        const bCompleted = b.status === 'completed';
+        if (aCompleted !== bCompleted) {
+          return aCompleted ? 1 : -1;
+        }
+        if (!aCompleted && !bCompleted) {
+          if (a.status === 'downloading' && b.status !== 'downloading') return -1;
+          if (b.status === 'downloading' && a.status !== 'downloading') return 1;
+        }
+      }
+      return b.createdAt - a.createdAt;
+    });
 
   const selection = filtered.filter((task) => selected.has(task.id));
   const allSelected = filtered.length > 0 && selection.length === filtered.length;
@@ -82,10 +112,6 @@ export const TaskList = memo(function TaskList({
       return next;
     });
   };
-
-  const labels: Record<string, string> = ar
-    ? { all: 'كل الحالات', downloading: 'جارٍ التنزيل', queued: 'في الانتظار', paused: 'متوقف', error: 'يحتاج انتباهك' }
-    : { all: 'All statuses', downloading: 'Downloading', queued: 'Queued', paused: 'Paused', error: 'Needs attention' };
 
   return (
     <section className="download-list" aria-label={ar ? 'قائمة التنزيلات' : 'Download list'}>
@@ -146,7 +172,7 @@ export const TaskList = memo(function TaskList({
 
           {showFilters && (
             <div className="list-filters">
-              {mode === 'downloads' && (
+              {(mode === 'all' || mode === 'downloads') && (
                 <select aria-label={ar ? 'الحالة' : 'Status'} value={status} onChange={(event) => setStatus(event.target.value)}>
                   {Object.entries(labels).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -278,23 +304,38 @@ export const TaskList = memo(function TaskList({
               <span />
             </div>
           )}
-          {filtered.map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              lang={lang}
-              onPause={onPause}
-              onResume={onResume}
-              onRemove={onRemove}
-              onStartImmediately={onStartImmediately}
-              onRestart={onRestart}
-              onShare={onShare}
-              isSelected={selected.has(task.id)}
-              isInspected={inspectedId === task.id}
-              onInspect={onInspect}
-              onToggleSelect={toggle}
-            />
-          ))}
+          {filtered.map((task, index) => {
+            const showCompletedDivider =
+              mode === 'all' &&
+              task.status === 'completed' &&
+              index > 0 &&
+              filtered[index - 1].status !== 'completed';
+
+            return (
+              <div key={task.id} style={{ display: 'contents' }}>
+                {showCompletedDivider && (
+                  <div className="list-section-divider">
+                    <CheckCircle2 size={13} />
+                    <span>{ar ? 'التنزيلات المكتملة' : 'Completed downloads'}</span>
+                  </div>
+                )}
+                <TaskCard
+                  task={task}
+                  lang={lang}
+                  onPause={onPause}
+                  onResume={onResume}
+                  onRemove={onRemove}
+                  onStartImmediately={onStartImmediately}
+                  onRestart={onRestart}
+                  onShare={onShare}
+                  isSelected={selected.has(task.id)}
+                  isInspected={inspectedId === task.id}
+                  onInspect={onInspect}
+                  onToggleSelect={toggle}
+                />
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="download-empty">
@@ -302,15 +343,21 @@ export const TaskList = memo(function TaskList({
             {mode === 'finished' ? <CheckCircle2 size={24} /> : <ArrowDownToLine size={24} />}
           </div>
           <h2>
-            {inMode.length
+            {inMode.length > 0
               ? ar ? 'لا توجد نتائج مطابقة' : 'No matching downloads'
               : mode === 'finished'
                 ? ar ? 'لا توجد تنزيلات مكتملة' : 'No completed downloads yet'
                 : ar ? 'لا توجد تنزيلات حالياً' : 'No active downloads'}
           </h2>
-          {inMode.length > 0 ? (
+          <p className="empty-subtitle">
+            {inMode.length > 0
+              ? ar ? 'جرب تغيير خيارات التصفية أو البحث' : 'Try changing your search or filter criteria'
+              : ar ? 'أدخل رابطاً في الأعلى أو الصقه ليبدأ التنزيل تلقائياً' : 'Enter a link above or paste a URL to begin downloading'}
+          </p>
+          {hasActiveFilter && (
             <button
               className="action-button"
+              style={{ marginTop: 12 }}
               onClick={() => {
                 setQuery('');
                 setStatus('all');
@@ -321,11 +368,7 @@ export const TaskList = memo(function TaskList({
             >
               {ar ? 'مسح التصفية' : 'Clear filters'}
             </button>
-          ) : mode === 'finished' && onSwitchToDownloads ? (
-            <button className="action-button" onClick={onSwitchToDownloads}>
-              {ar ? 'العودة إلى قائمة التنزيل' : 'View active queue'}
-            </button>
-          ) : null}
+          )}
         </div>
       )}
     </section>

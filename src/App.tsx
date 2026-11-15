@@ -49,7 +49,6 @@ export function App() {
   const [tasks, setTasks] = useState(downloadManager.getTasks());
   const [stats, setStats] = useState(downloadManager.getStats());
   const [speedHistory, setSpeedHistory] = useState(downloadManager.getSpeedHistory());
-  const [finished, setFinished] = useState(false);
   const [inspectedId, setInspectedId] = useState<string | null>(null);
   const [clipboardUrl, setClipboardUrl] = useState<{ text: string; key: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -130,14 +129,12 @@ export function App() {
     if (initial) {
       setClipboardUrl({ text: extractSharedUrl(initial), key: performance.now() });
       setActiveView('downloads');
-      setFinished(false);
     }
     const onShared = (event: Event) => {
       const text = (event as CustomEvent<string>).detail?.trim();
       if (text) {
         setClipboardUrl({ text: extractSharedUrl(text), key: performance.now() });
         setActiveView('downloads');
-        setFinished(false);
       }
     };
     window.addEventListener('argon-share-url', onShared);
@@ -175,7 +172,6 @@ export function App() {
         event.preventDefault();
         setClipboardUrl({ text, key: performance.now() });
         setActiveView('downloads');
-        setFinished(false);
       }
     };
 
@@ -203,7 +199,6 @@ export function App() {
             const magnet = `magnet:?xt=urn:btih:${meta.infoHash}&dn=${encodeURIComponent(meta.name)}`;
             setClipboardUrl({ text: magnet, key: performance.now() });
             setActiveView('downloads');
-            setFinished(false);
             return;
           } catch {
             // fallback to text extraction
@@ -214,7 +209,6 @@ export function App() {
       if (/^magnet:\?[\s\S]*xt=urn:btih:/i.test(rawText)) {
         setClipboardUrl({ text: rawText, key: performance.now() });
         setActiveView('downloads');
-        setFinished(false);
         return;
       }
       const urls = rawText
@@ -224,7 +218,6 @@ export function App() {
       if (urls) {
         setClipboardUrl({ text: urls, key: performance.now() });
         setActiveView('downloads');
-        setFinished(false);
       }
     };
 
@@ -251,7 +244,6 @@ export function App() {
     mirrors?: string[],
     torrentMeta?: TorrentMetadata
   ) => {
-    setFinished(false);
     setActiveView('downloads');
     void downloadManager.addTaskAsync(url, filename, segments, expectedSha256, undefined, mediaInfo, queueId, mirrors, torrentMeta);
   };
@@ -287,8 +279,6 @@ export function App() {
     onShare: share
   };
 
-  const activeTasksCount = tasks.filter((t) => t.status !== 'completed').length;
-
   return (
     <div className="argon-app">
       <Header lang={lang} activeTab={activeView} onTabChange={setActiveView} stats={stats} runtime={runtime} />
@@ -297,7 +287,7 @@ export function App() {
         <header className="argon-topbar">
           <div className="topbar-leading">
             <div className="mobile-brand-pill" dir={ar ? 'rtl' : 'ltr'}>
-              <ArgonMark size={22} withTile />
+              <ArgonMark size={22} />
               <span className="brand-title">{ar ? 'آرغون' : 'ARGON'}</span>
             </div>
             <div className="breadcrumb">
@@ -456,19 +446,46 @@ export function App() {
               <div className={`workspace-split ${inspectedTask ? 'has-inspector' : ''}`}>
                 <div className="workspace-primary">
                   <div className="download-toolbar">
-                    <div className="download-tabs">
-                      <button aria-pressed={!finished} onClick={() => setFinished(false)}>
-                        <span>{ar ? 'قائمة التنزيل' : 'In progress'}</span>
-                        <span>{activeTasksCount}</span>
-                      </button>
-                      <button aria-pressed={finished} onClick={() => setFinished(true)}>
-                        <span>{ar ? 'المكتملة' : 'Completed'}</span>
-                        <span>{stats.completedCount}</span>
-                      </button>
+                    <div className="stream-badge">
+                      <ArrowDownToLine size={14} />
+                      <span>
+                        {stats.activeCount > 0
+                          ? (ar ? `${stats.activeCount} تنزيل نشط` : `${stats.activeCount} active`)
+                          : (ar ? `التنزيلات (${tasks.length})` : `Downloads (${tasks.length})`)}
+                      </span>
+                      {stats.completedCount > 0 && stats.activeCount > 0 && (
+                        <span className="stream-completed-count">
+                          · {ar ? `${stats.completedCount} مكتمل` : `${stats.completedCount} completed`}
+                        </span>
+                      )}
                     </div>
 
                     <div className="download-toolbar-actions">
-                      {finished && stats.completedCount > 0 && (
+                      {stats.activeCount > 0 ? (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => downloadManager.pauseAll()}
+                          title={ar ? 'إيقاف مؤقت للكل' : 'Pause all'}
+                        >
+                          <Pause size={13} />
+                          <span>{ar ? 'إيقاف الكل' : 'Pause all'}</span>
+                        </button>
+                      ) : (
+                        tasks.some((t) => t.status === 'paused') && (
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => downloadManager.resumeAll()}
+                            title={ar ? 'استئناف الكل' : 'Resume all'}
+                          >
+                            <Play size={13} />
+                            <span>{ar ? 'استئناف' : 'Resume'}</span>
+                          </button>
+                        )
+                      )}
+
+                      {stats.completedCount > 0 && (
                         <button
                           type="button"
                           className="text-button text-danger"
@@ -479,32 +496,10 @@ export function App() {
                           <span>{ar ? 'مسح المكتملة' : 'Clear'}</span>
                         </button>
                       )}
-                      {!finished && stats.activeCount > 0 && (
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => downloadManager.pauseAll()}
-                          title={ar ? 'إيقاف مؤقت للكل' : 'Pause all'}
-                        >
-                          <Pause size={13} />
-                          <span>{ar ? 'إيقاف الكل' : 'Pause all'}</span>
-                        </button>
-                      )}
-                      {!finished && stats.activeCount === 0 && tasks.some((t) => t.status === 'paused') && (
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => downloadManager.resumeAll()}
-                          title={ar ? 'استئناف الكل' : 'Resume all'}
-                        >
-                          <Play size={13} />
-                          <span>{ar ? 'استئناف' : 'Resume'}</span>
-                        </button>
-                      )}
                     </div>
                   </div>
 
-                  <TaskList {...taskProps} mode={finished ? 'finished' : 'downloads'} onSwitchToDownloads={() => setFinished(false)} />
+                  <TaskList {...taskProps} mode="all" />
                 </div>
 
                 {inspectedTask && (
