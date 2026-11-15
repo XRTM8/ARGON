@@ -114,6 +114,18 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     return () => window.removeEventListener('keydown', focus);
   }, []);
 
+  useEffect(() => {
+    if (!singleUrl || !isMediaPlatform) {
+      setMediaMeta(null);
+      setSelectedFormatId('');
+      return;
+    }
+    const timer = setTimeout(() => {
+      void inspectMedia();
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [singleUrl, isMediaPlatform]);
+
   const inspectMedia = async () => {
     if (!singleUrl) return;
     setProbingMedia(true);

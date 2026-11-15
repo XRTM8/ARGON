@@ -992,6 +992,9 @@ input[type=checkbox] {
   border-top: 1px solid var(--argon-border);
   background: var(--argon-panel);
   transition: background-color .12s ease;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 68px;
+  contain: layout style paint;
 }
 .download-row:hover { background: var(--argon-surface); }
 .download-row.is-selected { background: var(--argon-accent-soft); }

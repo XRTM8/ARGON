@@ -58,6 +58,7 @@ export function TaskCard({
   const android = isAndroidRuntime();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [hashCopied, setHashCopied] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [execWarning, setExecWarning] = useState(false);
@@ -481,10 +482,24 @@ export function TaskCard({
             <div className="checksum-line">
               <ShieldCheck size={14} className="accent-text" />
               {task.checksum?.actual ? (
-                <span dir="ltr" className="hash-value">
-                  SHA-256: {task.checksum.actual}
-                  {task.checksum.verified ? ' · ✓' : ''}
-                </span>
+                <button
+                  type="button"
+                  className="text-button"
+                  style={{ fontSize: 11, padding: '2px 6px', gap: 6 }}
+                  dir="ltr"
+                  onClick={async () => {
+                    await writeClipboardText(task.checksum!.actual!);
+                    setHashCopied(true);
+                    setTimeout(() => setHashCopied(false), 1800);
+                  }}
+                  title={ar ? 'اضغط لنسخ البصمة' : 'Click to copy full hash'}
+                >
+                  <span className="hash-value">
+                    SHA-256: {task.checksum.actual.slice(0, 14)}…{task.checksum.actual.slice(-8)}
+                    {task.checksum.verified ? ' · ✓' : ''}
+                  </span>
+                  {hashCopied ? <Check size={12} style={{ color: 'var(--argon-emerald)' }} /> : <Copy size={12} />}
+                </button>
               ) : (
                 <button
                   className="text-button"
