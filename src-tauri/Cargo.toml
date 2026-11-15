@@ -1,6 +1,6 @@
 [package]
 name = "otium_downloader"
-version = "2.7.2"
+version = "2.7.3"
 description = "ARGON — Sovereign, High-Performance Multi-Segment Download Accelerator"
 authors = ["XRTM8"]
 edition = "2021"
@@ -20,7 +20,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-opener = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"] }
 tokio = { version = "1", features = ["full"] }
 sha2 = "0.10"
 futures-util = "0.3"

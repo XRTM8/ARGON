@@ -15,7 +15,9 @@ import {
   Search,
   Sun,
   Moon,
-  Command
+  Command,
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 import { Header, type MainViewTab } from './components/Header';
 import { ArgonMark } from './components/ArgonMark';
@@ -56,6 +58,28 @@ export function App() {
   const [runtime, setRuntime] = useState(downloadManager.getRuntimeStatus());
   const [theme, setTheme] = useState<'dark' | 'light'>(() => downloadManager.getSettings().theme ?? 'dark');
   const [settingsTabRequest, setSettingsTabRequest] = useState<{ tab: SettingsTab; key: number } | null>(null);
+  const [miniMode, setMiniMode] = useState(false);
+
+  const toggleMiniMode = async (enable: boolean) => {
+    setMiniMode(enable);
+    const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    if (inTauri) {
+      try {
+        const { getCurrentWindow, LogicalSize } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+        if (enable) {
+          await appWindow.setSize(new LogicalSize(380, 180));
+          await appWindow.setAlwaysOnTop(true);
+        } else {
+          await appWindow.setSize(new LogicalSize(1100, 720));
+          await appWindow.setAlwaysOnTop(false);
+        }
+      } catch {
+        // safe fallback
+      }
+    }
+  };
+
   const openSettingsTab = (tab: SettingsTab) => {
     setSettingsTabRequest({ tab, key: performance.now() });
     setActiveView('settings');
@@ -279,6 +303,118 @@ export function App() {
     onShare: share
   };
 
+  if (miniMode) {
+    const activeTasks = tasks.filter((t) => t.status === 'downloading' || t.status === 'queued');
+    const firstActive = activeTasks[0];
+    const totalProgress =
+      firstActive && firstActive.totalBytes > 0
+        ? Math.min(100, Math.max(0, Math.round((firstActive.downloadedBytes / firstActive.totalBytes) * 100)))
+        : 0;
+
+    return (
+      <div className={`argon-root argon-mini-mode ${theme === 'light' ? 'light-mode' : ''}`} dir={ar ? 'rtl' : 'ltr'}>
+        <div className="mini-widget">
+          <div className="mini-widget-header">
+            <div className="mini-brand">
+              <ArgonMark size={18} />
+              <strong className="mini-title">ARGON</strong>
+              <span className="mini-status-chip">
+                {stats.activeCount > 0
+                  ? ar
+                    ? `${stats.activeCount} نشط`
+                    : `${stats.activeCount} active`
+                  : ar
+                    ? 'جاهز'
+                    : 'Ready'}
+              </span>
+            </div>
+            <div className="mini-widget-actions">
+              <button
+                type="button"
+                className="mini-icon-btn"
+                onClick={toggleTheme}
+                title={ar ? 'تبديل المظهر' : 'Toggle theme'}
+              >
+                {theme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
+              </button>
+              <button
+                type="button"
+                className="mini-icon-btn mini-expand-btn"
+                onClick={() => void toggleMiniMode(false)}
+                title={ar ? 'استعادة الواجهة الكاملة' : 'Restore full window'}
+              >
+                <Maximize2 size={13} />
+              </button>
+            </div>
+          </div>
+
+          <div className="mini-widget-body">
+            {firstActive ? (
+              <div className="mini-task-info">
+                <span className="mini-filename" title={firstActive.filename} dir="ltr">
+                  {firstActive.filename}
+                </span>
+                <div className="mini-stats-line">
+                  <span className="mini-speed" dir="ltr">
+                    <ArrowDownToLine size={12} />
+                    {formatSpeed(stats.currentTotalSpeed)}
+                  </span>
+                  <span className="mini-percentage" dir="ltr">
+                    {totalProgress}%
+                  </span>
+                </div>
+                <div className="mini-progress-track">
+                  <div className="mini-progress-fill" style={{ width: `${totalProgress}%` }} />
+                </div>
+              </div>
+            ) : (
+              <div className="mini-idle-info">
+                <span>{ar ? 'لا توجد تنزيلات نشطة حالياً' : 'No active downloads'}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="mini-widget-footer">
+            {stats.activeCount > 0 ? (
+              <button
+                type="button"
+                className="mini-action-pill"
+                onClick={() => downloadManager.pauseAll()}
+                title={ar ? 'إيقاف مؤقت للكل' : 'Pause all'}
+              >
+                <Pause size={12} />
+                <span>{ar ? 'إيقاف مؤقت' : 'Pause'}</span>
+              </button>
+            ) : tasks.some((t) => t.status === 'paused') ? (
+              <button
+                type="button"
+                className="mini-action-pill"
+                onClick={() => downloadManager.resumeAll()}
+                title={ar ? 'استئناف الكل' : 'Resume all'}
+              >
+                <Play size={12} />
+                <span>{ar ? 'استئناف' : 'Resume'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="mini-action-pill"
+                onClick={() => void toggleMiniMode(false)}
+              >
+                <span>{ar ? 'فتح التنزيلات' : 'Open Downloads'}</span>
+              </button>
+            )}
+            {stats.currentTotalSpeed > 0 && (
+              <div className="mini-sparkline-wrap">
+                <ThroughputSparkline history={speedHistory} width={48} height={14} />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="argon-app">
       <Header lang={lang} activeTab={activeView} onTabChange={setActiveView} stats={stats} runtime={runtime} />
@@ -328,6 +464,17 @@ export function App() {
               <Command size={13} />
               <span>{ar ? 'أوامر' : 'Commands'}</span>
               <kbd dir="ltr">Ctrl+K</kbd>
+            </button>
+
+            <button
+              type="button"
+              className="topbar-chip hide-on-mobile"
+              onClick={() => void toggleMiniMode(true)}
+              aria-label={ar ? 'الوضع المصغر' : 'Mini Mode'}
+              title={ar ? 'الوضع المصغر' : 'Mini Mode'}
+            >
+              <Minimize2 size={13} />
+              <span>{ar ? 'مصغر' : 'Mini'}</span>
             </button>
 
             <button
