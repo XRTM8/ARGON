@@ -740,6 +740,10 @@ Section Install
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
 
+  ; Register Native Messaging Host for Chrome and Edge
+  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.otium.downloader" "" "$INSTDIR\browser-extension\com.otium.downloader.json"
+  WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.otium.downloader" "" "$INSTDIR\browser-extension\com.otium.downloader.json"
+
   !if "${INSTALLMODE}" == "both"
     ; Save install mode to be selected by default for the next installation such as updating
     ; or when uninstalling
@@ -916,6 +920,10 @@ Section Uninstall
   !else
     DeleteRegKey HKCU "${UNINSTKEY}"
   !endif
+
+  ; Remove Native Messaging Host registry keys
+  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.otium.downloader"
+  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.otium.downloader"
 
   ; Removes the Autostart entry for ${PRODUCTNAME} from the HKCU Run key if it exists.
   ; This ensures the program does not launch automatically after uninstallation if it exists.

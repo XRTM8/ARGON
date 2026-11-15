@@ -84,6 +84,9 @@ describe('segmentation utility', () => {
     expect(detectCategory('linux.iso')).toBe('programs');
     expect(detectCategory('movie.mp4')).toBe('media');
     expect(detectCategory('song.mp3')).toBe('media');
+    expect(detectCategory('voice.opus')).toBe('media');
+    expect(detectCategory('audio.m4a')).toBe('media');
+    expect(detectCategory('picture.avif')).toBe('media');
     expect(detectCategory('report.pdf')).toBe('documents');
     expect(detectCategory('sheet.xlsx')).toBe('documents');
     expect(detectCategory('archive.zip')).toBe('archives');

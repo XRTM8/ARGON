@@ -17,6 +17,7 @@ import {
 import { resolveUniversalLink } from './linkResolver';
 import { isAndroidRuntime, syncSystemBarTheme } from './safeArea';
 import { soundEngine } from './sound';
+import { haptics } from './haptics';
 import { telemetryStore } from './telemetryStore';
 import { isMagnetUri, parseMagnetUri, type TorrentMetadata } from './torrent';
 import {
@@ -60,7 +61,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoRetryEnabled: true,
   maxAutoRetries: 3,
   minimizeToTray: true,
-  startWithWindows: true
+  startWithWindows: true,
+  debridEnabled: false,
+  debridApiKey: ''
 };
 
 export class DownloadManager {
@@ -138,9 +141,11 @@ export class DownloadManager {
       if (!payload) return;
       if (payload.type === 'taskCompleted') {
         soundEngine.playCompleteChime();
+        haptics.success();
         this.showNotification('اكتمل التنزيل', `تم حفظ الملف: ${payload.data?.filename || ''}`);
       } else if (payload.type === 'taskFailed') {
         soundEngine.playErrorTone();
+        haptics.error();
       } else if (payload.type === 'allIdleShutdownPending') {
         this.showNotification('إيقاف التشغيل المجدول', 'اكتملت جميع التحميلات، جاري إيقاف تشغيل الكمبيوتر...');
       }
@@ -456,15 +461,17 @@ export class DownloadManager {
     }
 
     soundEngine.playStartSweep();
+    haptics.heavy();
     const optimistic: DownloadTask = {
       id: tempId,
       originalUrl,
       url: resolved.resolvedUrl,
       filename,
-      category: detectCategory(filename),
+      category: meta ? 'torrents' : detectCategory(filename),
+      torrentInfo: meta,
       mediaInfo,
       headers: { ...resolved.suggestedHeaders, ...customHeaders },
-      totalBytes: 0,
+      totalBytes: meta?.totalLength || 0,
       downloadedBytes: 0,
       status: 'queued',
       speedBytesPerSec: 0,
@@ -532,6 +539,7 @@ export class DownloadManager {
     }
     await this.ready;
     soundEngine.playStartSweep();
+    haptics.heavy();
     const { invoke } = await import('@tauri-apps/api/core');
     const created = await invoke<DownloadTask>('dl_add_task', {
       request: {

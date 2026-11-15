@@ -37,6 +37,7 @@ fn write_all_at(file: &std::fs::File, mut offset: u64, mut data: &[u8]) -> io::R
 
 enum WriteCmd {
     Truncate { reply: oneshot::Sender<Result<(), String>> },
+    Preallocate { len: u64, reply: oneshot::Sender<Result<(), String>> },
     Write { offset: u64, buf: Vec<u8> },
     Flush { reply: oneshot::Sender<Result<(), String>> },
     Sync { reply: oneshot::Sender<Result<(), String>> },
@@ -72,6 +73,20 @@ impl CoalescedDiskWriter {
                                 Ok(()) => Ok(()),
                                 Err(e) => {
                                     let msg = format!("Cannot reset destination: {e}");
+                                    sticky_err = Some(msg.clone());
+                                    if let Ok(mut g) = error_worker.lock() {
+                                        *g = Some(msg.clone());
+                                    }
+                                    Err(msg)
+                                }
+                            };
+                            let _ = reply.send(res);
+                        }
+                        WriteCmd::Preallocate { len, reply } => {
+                            let res = match file.set_len(len) {
+                                Ok(()) => Ok(()),
+                                Err(e) => {
+                                    let msg = format!("Cannot preallocate destination: {e}");
                                     sticky_err = Some(msg.clone());
                                     if let Ok(mut g) = error_worker.lock() {
                                         *g = Some(msg.clone());
@@ -148,6 +163,15 @@ impl CoalescedDiskWriter {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(WriteCmd::Truncate { reply })
+            .await
+            .map_err(|_| "Disk writer stopped".to_string())?;
+        rx.await.map_err(|_| "Disk writer stopped".to_string())?
+    }
+
+    pub async fn preallocate(&self, len: u64) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(WriteCmd::Preallocate { len, reply })
             .await
             .map_err(|_| "Disk writer stopped".to_string())?;
         rx.await.map_err(|_| "Disk writer stopped".to_string())?
@@ -417,6 +441,9 @@ pub async fn prepare_destination_file(
                 Ok(file) => break file,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                     attempt += 1;
+                    if attempt > 10000 {
+                        return Err("Too many duplicate files in destination folder".into());
+                    }
                     target = original.with_file_name(format!("{stem} ({attempt}){ext}"));
                 }
                 Err(e) => return Err(format!("Cannot create destination: {e}")),
@@ -430,11 +457,11 @@ pub async fn prepare_destination_file(
             .map_err(|e| format!("Cannot resume destination (restart the download): {e}"))?
     };
 
-    if fresh || reset {
+    if (fresh || reset) && total_bytes > 0 {
         file.set_len(total_bytes)
             .await
             .map_err(|e| format!("Cannot allocate download file: {e}"))?;
-    } else if file.metadata().await.map_err(|e| e.to_string())?.len() != total_bytes {
+    } else if total_bytes > 0 && file.metadata().await.map_err(|e| e.to_string())?.len() != total_bytes {
         return Err("Local file size changed; restart the download".into());
     }
     Ok(target)

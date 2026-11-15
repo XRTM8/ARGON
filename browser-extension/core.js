@@ -5,11 +5,23 @@ export function platformVideo(value, title) {
   if (!url) return null;
   const host = url.hostname.replace(/^www\.|^m\./g, '');
   let platform;
-  if ((host === 'youtube.com' && ((url.pathname === '/watch' && url.searchParams.has('v')) || url.pathname.startsWith('/shorts/'))) || (host === 'youtu.be' && url.pathname.length > 1)) platform = 'YouTube';
-  else if ((host === 'tiktok.com' || host.endsWith('.tiktok.com')) && url.pathname.includes('/video/')) platform = 'TikTok';
-  else if (host === 'instagram.com' && /^\/(reel|p)\//.test(url.pathname)) platform = 'Instagram';
-  else if (['x.com', 'twitter.com'].includes(host) && url.pathname.includes('/status/')) platform = 'X';
+  if ((host === 'youtube.com' && ((url.pathname === '/watch' && url.searchParams.has('v')) || url.pathname.startsWith('/shorts/') || url.pathname.startsWith('/live/'))) || (host === 'youtu.be' && url.pathname.length > 1)) platform = 'YouTube';
+  else if ((host === 'tiktok.com' || host.endsWith('.tiktok.com')) && (url.pathname.includes('/video/') || url.pathname.startsWith('/@') || host.startsWith('vt.'))) platform = 'TikTok';
+  else if ((host === 'instagram.com' || host.endsWith('.instagram.com')) && /^\/(reel|reels|p|tv|stories)\//.test(url.pathname)) platform = 'Instagram';
+  else if (['x.com', 'twitter.com', 't.co'].includes(host) && (url.pathname.includes('/status/') || host === 't.co')) platform = 'X';
+  else if (['facebook.com', 'fb.watch', 'fb.com'].some(h => host === h || host.endsWith('.' + h)) && (url.pathname.includes('/watch') || url.pathname.includes('/reel') || url.pathname.includes('/videos') || url.pathname.includes('/story.php') || host === 'fb.watch')) platform = 'Facebook';
+  else if (['reddit.com', 'redd.it', 'v.redd.it'].some(h => host === h || host.endsWith('.' + h)) && (url.pathname.includes('/comments/') || host === 'v.redd.it')) platform = 'Reddit';
+  else if (['pinterest.com', 'pin.it'].some(h => host === h || host.endsWith('.' + h) || host.includes('pinterest.')) && (url.pathname.includes('/pin/') || host === 'pin.it')) platform = 'Pinterest';
+  else if (host === 'snapchat.com' && (url.pathname.includes('/spotlight/') || url.pathname.includes('/p/'))) platform = 'Snapchat';
+  else if (host === 'linkedin.com' && (url.pathname.includes('/posts/') || url.pathname.includes('/feed/update/'))) platform = 'LinkedIn';
+  else if (host === 'twitch.tv' && (url.pathname.includes('/videos/') || url.pathname.includes('/clip/'))) platform = 'Twitch';
+  else if (host === 'kick.com' && (url.pathname.includes('/video/') || url.pathname.includes('/clip/'))) platform = 'Kick';
+  else if (['dailymotion.com', 'dai.ly'].some(h => host === h || host.endsWith('.' + h))) platform = 'Dailymotion';
+  else if (['bilibili.com', 'b23.tv'].some(h => host === h || host.endsWith('.' + h))) platform = 'Bilibili';
+  else if (['threads.net', 'threads.com'].includes(host) && url.pathname.includes('/post/')) platform = 'Threads';
+  else if (host === 'vimeo.com' && /^\/\d+/.test(url.pathname)) platform = 'Vimeo';
   else if (host === 'soundcloud.com' && /^\/[^/]+\/[^/]+/.test(url.pathname)) platform = 'SoundCloud';
+  else if (host === 'bsky.app' && url.pathname.includes('/post/')) platform = 'Bluesky';
   return platform ? { url: value, filename: title || platform, type: platform, platform: true, supported: true } : null;
 }
 
@@ -33,7 +45,7 @@ export function mediaDescriptor(value, contentType = '') {
   const ext = /\.([a-z0-9]+)$/i.exec(url.pathname)?.[1]?.toLowerCase();
   if (['m4s', 'ts', 'cmfv', 'cmfa'].includes(ext)) return null;
   const playlist = ['m3u8', 'mpd'].includes(ext) || /mpegurl|dash\+xml/.test(mime);
-  const direct = /^(video|audio)\//.test(mime) || ['mp4', 'webm', 'mkv', 'mov', 'mp3', 'm4a', 'ogg', 'wav', 'flac'].includes(ext);
+  const direct = /^(video|audio)\//.test(mime) || ['mp4', 'webm', 'mkv', 'mov', 'mp3', 'm4a', 'ogg', 'wav', 'flac', 'aac', 'opus', 'm4v', 'avi', 'wmv', 'flv', '3gp'].includes(ext);
   if (!playlist && !direct) return null;
   let filename = url.pathname.split('/').pop() || 'media';
   try { filename = decodeURIComponent(filename); } catch { /* Keep malformed escaped filenames. */ }

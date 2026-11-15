@@ -69,8 +69,7 @@ pub fn sanitize_filename(raw: &str) -> String {
     let clean_name = raw
         .replace('\\', "/")
         .split('/')
-        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
-        .next_back()
+        .rfind(|s| !s.is_empty() && *s != "." && *s != "..")
         .unwrap_or("download")
         .to_string();
 
@@ -219,7 +218,7 @@ pub fn extract_filename_from_url(raw_url: &str) -> String {
     if let Ok(parsed) = Url::parse(raw_url) {
         if let Some(last) = parsed
             .path_segments()
-            .and_then(|segs| segs.filter(|s| !s.is_empty()).next_back())
+            .and_then(|mut segs| segs.rfind(|s| !s.is_empty()))
         {
             let decoded = percent_decode(last);
             if !decoded.trim().is_empty() {
@@ -241,8 +240,9 @@ pub fn detect_category(filename: &str) -> TaskCategory {
         "exe" | "msi" | "apk" | "dmg" | "deb" | "rpm" | "iso" | "img" | "bin" => {
             TaskCategory::Programs
         }
-        "mp4" | "mkv" | "avi" | "mov" | "webm" | "mp3" | "flac" | "wav" | "aac" | "jpg"
-        | "jpeg" | "png" | "webp" | "gif" | "svg" => TaskCategory::Media,
+        "mp4" | "mkv" | "avi" | "mov" | "webm" | "mp3" | "flac" | "wav" | "aac" | "opus"
+        | "ogg" | "m4a" | "m4v" | "flv" | "wmv" | "3gp" | "jpg" | "jpeg" | "png" | "webp"
+        | "gif" | "svg" | "avif" | "bmp" | "ico" => TaskCategory::Media,
         "pdf" | "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" | "txt" | "csv" | "epub"
         | "md" => TaskCategory::Documents,
         "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" => TaskCategory::Archives,
@@ -272,7 +272,7 @@ pub fn detect_platform(raw_url: &str) -> &'static str {
     if matches("instagram.com") || matches("instagr.am") {
         return "instagram";
     }
-    if matches("twitter.com") || matches("x.com") {
+    if matches("twitter.com") || matches("x.com") || matches("t.co") {
         return "twitter";
     }
     if matches("facebook.com") || matches("fb.watch") || matches("fb.com") {
@@ -289,6 +289,57 @@ pub fn detect_platform(raw_url: &str) -> &'static str {
     }
     if matches("soundcloud.com") {
         return "soundcloud";
+    }
+    if matches("pinterest.com") || matches("pin.it") || host.contains("pinterest.") {
+        return "pinterest";
+    }
+    if matches("snapchat.com") {
+        return "snapchat";
+    }
+    if matches("linkedin.com") {
+        return "linkedin";
+    }
+    if matches("twitch.tv") {
+        return "twitch";
+    }
+    if matches("kick.com") {
+        return "kick";
+    }
+    if matches("dailymotion.com") || matches("dai.ly") {
+        return "dailymotion";
+    }
+    if matches("bilibili.com") || matches("b23.tv") {
+        return "bilibili";
+    }
+    if matches("kuaishou.com") || matches("kwai.com") {
+        return "kwai";
+    }
+    if matches("douyin.com") {
+        return "douyin";
+    }
+    if matches("bsky.app") {
+        return "bluesky";
+    }
+    if matches("tumblr.com") {
+        return "tumblr";
+    }
+    if matches("streamable.com") {
+        return "streamable";
+    }
+    if matches("loom.com") {
+        return "loom";
+    }
+    if matches("vk.com") || matches("vkvideo.ru") {
+        return "vk";
+    }
+    if matches("rumble.com") {
+        return "rumble";
+    }
+    if matches("odysee.com") {
+        return "odysee";
+    }
+    if matches("bandcamp.com") {
+        return "bandcamp";
     }
     let path = url.path().to_ascii_lowercase();
     if [
@@ -521,5 +572,47 @@ mod tests {
             deduplicate_filename("backup.tar.gz", &existing),
             "backup (2).tar.gz"
         );
+    }
+
+    #[test]
+    fn detects_all_supported_social_platforms() {
+        assert_eq!(detect_platform("https://www.youtube.com/watch?v=123"), "youtube");
+        assert_eq!(detect_platform("https://youtu.be/123"), "youtube");
+        assert_eq!(detect_platform("https://www.tiktok.com/@u/video/123"), "tiktok");
+        assert_eq!(detect_platform("https://www.instagram.com/reel/123/"), "instagram");
+        assert_eq!(detect_platform("https://x.com/u/status/123"), "twitter");
+        assert_eq!(detect_platform("https://t.co/xyz123"), "twitter");
+        assert_eq!(detect_platform("https://www.facebook.com/reel/123"), "facebook");
+        assert_eq!(detect_platform("https://fb.watch/123"), "facebook");
+        assert_eq!(detect_platform("https://www.reddit.com/r/rust/comments/123/"), "reddit");
+        assert_eq!(detect_platform("https://v.redd.it/123"), "reddit");
+        assert_eq!(detect_platform("https://www.pinterest.com/pin/123/"), "pinterest");
+        assert_eq!(detect_platform("https://pin.it/123"), "pinterest");
+        assert_eq!(detect_platform("https://www.snapchat.com/spotlight/123"), "snapchat");
+        assert_eq!(detect_platform("https://www.twitch.tv/videos/123"), "twitch");
+        assert_eq!(detect_platform("https://kick.com/video/123"), "kick");
+        assert_eq!(detect_platform("https://www.bilibili.com/video/123"), "bilibili");
+        assert_eq!(detect_platform("https://bsky.app/profile/u/post/123"), "bluesky");
+        assert_eq!(detect_platform("https://example.com/movie.mp4"), "direct");
+        assert_eq!(detect_platform("https://example.com/installer.iso"), "other");
+    }
+
+    #[test]
+    fn detects_categories_reliably() {
+        assert_eq!(detect_category("song.opus"), TaskCategory::Media);
+        assert_eq!(detect_category("track.m4a"), TaskCategory::Media);
+        assert_eq!(detect_category("photo.avif"), TaskCategory::Media);
+        assert_eq!(detect_category("film.m4v"), TaskCategory::Media);
+        assert_eq!(detect_category("stream.flv"), TaskCategory::Media);
+        assert_eq!(detect_category("video.wmv"), TaskCategory::Media);
+        assert_eq!(detect_category("clip.3gp"), TaskCategory::Media);
+        assert_eq!(detect_category("icon.ico"), TaskCategory::Media);
+        assert_eq!(detect_category("image.bmp"), TaskCategory::Media);
+        assert_eq!(detect_category("setup.exe"), TaskCategory::Programs);
+        assert_eq!(detect_category("paper.pdf"), TaskCategory::Documents);
+        assert_eq!(detect_category("backup.tar.gz"), TaskCategory::Archives);
+        assert_eq!(detect_category("archive.7z"), TaskCategory::Archives);
+        assert_eq!(detect_category("ubuntu.iso.torrent"), TaskCategory::Torrents);
+        assert_eq!(detect_category("file.unknown_xyz"), TaskCategory::Other);
     }
 }

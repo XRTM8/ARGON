@@ -42,6 +42,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
   const [nightStart, setNightStart] = useState(s.nightSchedulerStartHour ?? 2);
   const [nightEnd, setNightEnd] = useState(s.nightSchedulerEndHour ?? 8);
   const [autoShutdown, setAutoShutdown] = useState(s.autoShutdownOnComplete ?? false);
+  const [debridEnabled, setDebridEnabled] = useState(s.debridEnabled ?? false);
+  const [debridApiKey, setDebridApiKey] = useState(s.debridApiKey ?? '');
   const [mediaTools, setMediaTools] = useState<MediaToolsStatus | null>(null);
   const [toolBusy, setToolBusy] = useState<'ffmpeg' | 'yt-dlp' | null>(null);
   const [toolProgress, setToolProgress] = useState<{ downloaded: number; total?: number } | null>(null);
@@ -539,6 +541,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 />
               )}
               {toolMessage && <p style={{ margin: 0, fontSize: 12, color: 'var(--argon-accent)' }}>{toolMessage}</p>}
+            </div>
+          )}
+
+          <div className="settings-row">
+            <div className="settings-label">
+              <strong>{ar ? 'تكامل Real-Debrid لفك الروابط المقيدة والتورنت' : 'Real-Debrid Unrestriction'}</strong>
+              <span>
+                {ar
+                  ? 'تحويل روابط Rapidgator و 1fichier و Mega والتورنت إلى روابط مباشرة فائقة السرعة'
+                  : 'Convert locked filehosts and torrents into direct high-speed downloads'}
+              </span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={debridEnabled}
+              className="argon-switch"
+              onClick={() => {
+                const next = !debridEnabled;
+                setDebridEnabled(next);
+                void downloadManager.updateSettings({ debridEnabled: next });
+              }}
+            >
+              <span className="argon-switch-thumb" />
+            </button>
+          </div>
+
+          {debridEnabled && (
+            <div className="settings-row">
+              <div className="settings-label">
+                <strong>{ar ? 'مفتاح API الخاص بـ Real-Debrid' : 'Real-Debrid API Token'}</strong>
+                <span>{ar ? 'من إعدادات حسابك في real-debrid.com/apitoken' : 'From real-debrid.com/apitoken'}</span>
+              </div>
+              <input
+                type="password"
+                className="argon-input"
+                style={{ width: 'min(300px, 100%)', padding: '6px 10px', fontSize: '0.85rem' }}
+                placeholder={ar ? 'أدخل مفتاح API هنا...' : 'Enter API token...'}
+                value={debridApiKey}
+                onChange={(e) => {
+                  setDebridApiKey(e.target.value);
+                  void downloadManager.updateSettings({ debridApiKey: e.target.value.trim() });
+                }}
+              />
             </div>
           )}
 

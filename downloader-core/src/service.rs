@@ -57,6 +57,7 @@ pub trait MediaExtractor: Send + Sync {
         format_id: Option<String>,
     ) -> BoxFuture<'static, Result<ResolvedMediaSpec, String>>;
 
+    #[allow(clippy::too_many_arguments)]
     fn download_muxed_media(
         &self,
         task_id: String,
@@ -240,7 +241,7 @@ impl DownloaderService {
             .filter(|task| !task.awaiting_browser_commit)
             .cloned()
             .collect();
-        tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        tasks.sort_by_key(|a| std::cmp::Reverse(a.created_at));
         let stats = compute_stats(&tasks, self.throttle.get_global_limit());
         DownloaderSnapshot {
             tasks,
@@ -369,6 +370,12 @@ impl DownloaderService {
             }
             if let Some(v) = patch.start_with_windows {
                 state.settings.start_with_windows = v;
+            }
+            if let Some(v) = patch.debrid_enabled {
+                state.settings.debrid_enabled = v;
+            }
+            if let Some(v) = patch.debrid_api_key {
+                state.settings.debrid_api_key = Some(v);
             }
             state.settings.clone()
         };
@@ -985,12 +992,11 @@ impl DownloaderService {
                     }
                 }
                 let forced = state.force_start_ids.contains(&candidate.id);
-                if !forced {
-                    if (settings.night_scheduler_enabled || candidate.queue_id == QueueId::Night)
-                        && !in_window
-                    {
-                        continue;
-                    }
+                if !forced
+                    && (settings.night_scheduler_enabled || candidate.queue_id == QueueId::Night)
+                    && !in_window
+                {
+                    continue;
                 }
                 let host = url_host(&candidate.url);
                 if let Some(ref h) = host {
@@ -1106,6 +1112,61 @@ impl DownloaderService {
             .throttle
             .get_or_create_task_pacer(&task_id, task.speed_limit_bytes_per_sec);
 
+        // 0. Optional Debrid unrestriction for locked hosts & torrents
+        let mut debrid_failure: Option<String> = None;
+        if settings.debrid_enabled {
+            if let Some(ref api_key) = settings.debrid_api_key {
+                if !api_key.trim().is_empty()
+                    && crate::debrid::is_debrid_supported_host(&task.original_url)
+                {
+                    let debrid_res = if crate::torrent::is_magnet_uri(&task.original_url) {
+                        crate::debrid::unrestrict_magnet(
+                            &self.http_client,
+                            api_key,
+                            &task.original_url,
+                        )
+                        .await
+                    } else {
+                        crate::debrid::unrestrict_link(
+                            &self.http_client,
+                            api_key,
+                            &task.original_url,
+                            None,
+                        )
+                        .await
+                    };
+
+                    match debrid_res {
+                        Ok(unrestricted) => {
+                            task.url = unrestricted.download_url;
+                            if !task.custom_filename && !task.file_prepared {
+                                task.filename =
+                                    self.unique_filename(&task_id, &unrestricted.filename).await;
+                                task.category = crate::resolver::detect_category(&task.filename);
+                            }
+                            if let Some(sz) = unrestricted.filesize {
+                                if sz > 0 {
+                                    task.total_bytes = sz;
+                                }
+                            }
+                            self.sync_task_metadata(&task).await?;
+                        }
+                        Err(e) => {
+                            debrid_failure = Some(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Catch unresolved torrent magnet URIs with clear diagnostic
+        if crate::torrent::is_magnet_uri(&task.url) {
+            let reason = debrid_failure.unwrap_or_else(|| {
+                "تنزيل روابط التورنت يتطلب تفعيل خدمة Real-Debrid وإدخال مفتاح API في الإعدادات".to_string()
+            });
+            return Err(format!("تعذر تنزيل التورنت: {reason}"));
+        }
+
         // 1. Optional platform media resolution / muxing
         let platform = detect_platform(&task.original_url);
         let stream_manifest = is_stream_manifest(&task.original_url);
@@ -1116,7 +1177,9 @@ impl DownloaderService {
         if explicit_mux && !self.media.as_ref().is_some_and(|media| media.supports_hd_mux()) {
             return Err("media_tools_required".into());
         }
-        if explicit_mux || !["direct", "other"].contains(&platform) {
+        let has_media_info = task.media_info.is_some();
+        let is_media_target = explicit_mux || has_media_info || !["direct", "other"].contains(&platform);
+        if is_media_target {
             if let Some(ref media_hook) = self.media {
                 let audio_only = task
                     .media_info
@@ -1130,7 +1193,7 @@ impl DownloaderService {
                         .as_ref()
                         .and_then(|m| m.selected_format_id.as_ref())
                         .is_none()
-                    && platform == "youtube"
+                    && is_media_target
                     && media_hook.supports_hd_mux();
 
                 if explicit_mux || auto_hd_mux {
@@ -1503,6 +1566,11 @@ impl DownloaderService {
         let disk = CoalescedDiskWriter::open(final_path)?;
         let use_range = resource_url.is_some();
         let validator = task.etag.clone();
+
+        // If this is a fresh download with known size, preallocate the file on disk to eliminate fragmentation
+        if use_range && task.total_bytes > 0 && task.downloaded_bytes == 0 {
+            let _ = disk.preallocate(task.total_bytes).await;
+        }
 
         // Attempt-local cancel token so one failing sibling aborts the rest cleanly on RANGE_UNSUPPORTED/error.
         let attempt_flag = Arc::new(AtomicBool::new(false));
@@ -2226,7 +2294,8 @@ mod tests {
             Box::pin(async { Err("Expected the media downloader".into()) })
         }
 
-        fn download_muxed_media(
+        #[allow(clippy::too_many_arguments)]
+    fn download_muxed_media(
             &self,
             _task_id: String,
             url: String,

@@ -931,7 +931,7 @@ async fn extract_vimeo(client: &Client, url: &str) -> Result<SocialMediaBundle, 
     let parsed = Url::parse(url.trim()).map_err(|_| "Invalid Vimeo URL")?;
     let clip_id = parsed
         .path_segments()
-        .and_then(|s| s.filter(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit())).next_back())
+        .and_then(|mut s| s.rfind(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit())))
         .ok_or("لم يُعثر على رقم فيديو Vimeo")?;
     let cfg_url = format!("https://player.vimeo.com/video/{clip_id}/config");
     let (_, raw) = fetch_text(client, &cfg_url, CHROME_UA, Some("https://vimeo.com/")).await?;

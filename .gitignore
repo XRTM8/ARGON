@@ -18,3 +18,10 @@ flow-core/target/
 flow-core/.test-tmp/
 downloader-core/target/
 downloader-core/.test-tmp/
+
+# Temporary design research assets and scratch scripts
+research/icons/
+research/final-icon/
+research/minimal-identity/
+research/new-identity/
+research/*.mjs

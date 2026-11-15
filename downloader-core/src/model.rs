@@ -202,6 +202,8 @@ pub struct DownloaderSettings {
     pub max_auto_retries: u32,
     pub minimize_to_tray: bool,
     pub start_with_windows: bool,
+    pub debrid_enabled: bool,
+    pub debrid_api_key: Option<String>,
 }
 
 impl Default for DownloaderSettings {
@@ -227,6 +229,8 @@ impl Default for DownloaderSettings {
             max_auto_retries: 3,
             minimize_to_tray: true,
             start_with_windows: true,
+            debrid_enabled: false,
+            debrid_api_key: None,
         }
     }
 }
@@ -254,6 +258,8 @@ pub struct DownloaderSettingsPatch {
     pub max_auto_retries: Option<u32>,
     pub minimize_to_tray: Option<bool>,
     pub start_with_windows: Option<bool>,
+    pub debrid_enabled: Option<bool>,
+    pub debrid_api_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

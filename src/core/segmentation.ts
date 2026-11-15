@@ -292,7 +292,7 @@ export function detectCategory(filename: string): TaskCategory {
   if (['exe', 'msi', 'apk', 'dmg', 'deb', 'rpm', 'iso', 'img', 'bin'].includes(ext)) {
     return 'programs';
   }
-  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'mp3', 'flac', 'wav', 'aac', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'].includes(ext)) {
+  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'mp3', 'flac', 'wav', 'aac', 'opus', 'ogg', 'm4a', 'm4v', 'flv', 'wmv', '3gp', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'avif', 'bmp', 'ico'].includes(ext)) {
     return 'media';
   }
   if (['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'txt', 'csv', 'epub', 'md'].includes(ext)) {

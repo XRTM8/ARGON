@@ -1,4 +1,4 @@
-/** Parse without rewriting signed URLs or silently accepting invalid lines. */
+/** Parse without rewriting signed URLs or silently accepting invalid lines. Supports HTTP, HTTPS, and Magnet URIs. */
 export function parseDownloadInput(text: string) {
   const urls: string[] = [];
   const invalid: string[] = [];
@@ -7,6 +7,12 @@ export function parseDownloadInput(text: string) {
   for (const raw of text.split(/\r?\n/)) {
     const value = raw.trim();
     if (!value) continue;
+    if (/^magnet:\?[\s\S]*xt=urn:btih:/i.test(value)) {
+      if (seen.has(value)) { duplicates++; continue; }
+      seen.add(value);
+      urls.push(value);
+      continue;
+    }
     try {
       const url = new URL(value);
       if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) throw new Error();
@@ -79,12 +85,18 @@ export function expandWildcardPattern(pattern: string, maxUrls = 100): { urls: s
 }
 
 export function extractSharedUrl(raw: string): string {
-  const match = raw.match(/https?:\/\/[^\s<>"{}|\\^`\[\]]+/i);
-  if (!match) return raw.trim();
+  const trimmed = raw.trim();
+  const magnetMatch = trimmed.match(/magnet:\?[^\s<>"{}|\\^`\[\]]+/i);
+  if (magnetMatch && /xt=urn:btih:/i.test(magnetMatch[0])) {
+    return magnetMatch[0].replace(/[.,!?;:)'"]+$/, '');
+  }
+  const match = trimmed.match(/https?:\/\/[^\s<>"{}|\\^`\[\]]+/i);
+  if (!match) return trimmed;
   return match[0].replace(/[.,!?;:)'"]+$/, '');
 }
 
 export function downloadHost(url: string) {
+  if (/^magnet:\?[\s\S]*xt=urn:btih:/i.test(url)) return 'BitTorrent Magnet';
   try { return new URL(url).hostname.replace(/^www\./, ''); }
   catch { return ''; }
 }

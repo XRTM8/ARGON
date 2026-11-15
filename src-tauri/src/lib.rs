@@ -416,6 +416,45 @@ async fn browser_bridge_status(
 }
 
 #[tauri::command]
+async fn open_media_sniffer(
+    app: AppHandle,
+    url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let target = url.unwrap_or_else(|| "https://google.com".to_string());
+        flow_mobile::call(
+            app,
+            "openMediaSniffer",
+            serde_json::json!({ "url": target }),
+        )
+        .await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, url);
+        Err("متصفح اقتناص الوسائط متاح على أجهزة أندرويد".to_string())
+    }
+}
+
+#[tauri::command]
+fn parse_torrent_info(
+    raw_uri_or_path: String,
+) -> Result<argon_downloader_core::TorrentMetadata, String> {
+    if argon_downloader_core::is_magnet_uri(&raw_uri_or_path) {
+        argon_downloader_core::parse_magnet_uri(&raw_uri_or_path)
+    } else {
+        let path = std::path::Path::new(&raw_uri_or_path);
+        if path.exists() {
+            let bytes = std::fs::read(path).map_err(|e| format!("تعذر قراءة ملف التورنت: {e}"))?;
+            argon_downloader_core::parse_torrent_bytes(&bytes)
+        } else {
+            Err("الرابط أو الملف ليس رابط ماغنت صالحاً أو ملف تورنت موجود".to_string())
+        }
+    }
+}
+
+#[tauri::command]
 async fn verify_file_sha256(app: AppHandle, file_path: String) -> Result<String, String> {
     let resolved = resolve_destination_path(&app, &file_path);
     disk::verify_file_sha256(&resolved).await
@@ -605,7 +644,8 @@ fn start_clipboard_monitor(app_handle: AppHandle) {
                                 || path.ends_with(".mp3")
                                 || path.ends_with(".pdf")
                                 || path.ends_with(".epub");
-                            if is_downloadable {
+                            let is_media = !["direct", "other"].contains(&argon_downloader_core::resolver::detect_platform(trimmed));
+                            if is_downloadable || is_media {
                                 let _ = app_handle.emit("argon-clipboard-url", trimmed);
                             }
                         }
@@ -614,6 +654,41 @@ fn start_clipboard_monitor(app_handle: AppHandle) {
             }
         }
     });
+}
+
+#[cfg(all(windows, desktop))]
+fn register_native_messaging_host(app: &AppHandle) {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Ok(local_data) = app.path().app_local_data_dir() {
+            let manifest_path = local_data.join("com.otium.downloader.json");
+            let json_content = serde_json::json!({
+                "name": "com.otium.downloader",
+                "description": "ARGON Native Messaging Host",
+                "path": exe_path.to_string_lossy(),
+                "type": "stdio",
+                "allowed_origins": [
+                    "chrome-extension://ikdgdlmiillcilhcjcbmplacomoiemhk/",
+                    "chrome-extension://*/"
+                ]
+            });
+            if let Ok(content_str) = serde_json::to_string_pretty(&json_content) {
+                let _ = std::fs::create_dir_all(&local_data);
+                let _ = std::fs::write(&manifest_path, content_str);
+            }
+
+            use winreg::enums::HKEY_CURRENT_USER;
+            use winreg::RegKey;
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            for subkey in [
+                r"Software\Google\Chrome\NativeMessagingHosts\com.otium.downloader",
+                r"Software\Microsoft\Edge\NativeMessagingHosts\com.otium.downloader",
+            ] {
+                if let Ok((key, _)) = hkcu.create_subkey(subkey) {
+                    let _ = key.set_value("", &manifest_path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(desktop)]
@@ -999,6 +1074,8 @@ pub fn run() {
                 }
                 start_browser_bridge(app.handle().clone());
                 start_clipboard_monitor(app.handle().clone());
+                #[cfg(all(windows, desktop))]
+                register_native_messaging_host(app.handle());
             }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -1070,6 +1147,8 @@ pub fn run() {
             media::list_media_formats,
             set_browser_bridge_ready,
             browser_bridge_status,
+            open_media_sniffer,
+            parse_torrent_info,
             open_browser_test,
             verify_file_sha256,
             open_destination_folder,

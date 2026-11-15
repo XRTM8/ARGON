@@ -17,10 +17,14 @@
     host.style.left = `${Math.max(4, Math.min(innerWidth - width - 4, bounds.right - width - 10))}px`;
     host.style.top = `${Math.max(4, bounds.top + 10)}px`;
   }
+  function getVideoSource(el) {
+    if (!el) return '';
+    return el.currentSrc || el.src || el.querySelector('source')?.src || '';
+  }
   async function refresh() {
     if (!video) return;
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_VIDEO_TARGET', source: video.currentSrc || video.src });
+      const response = await chrome.runtime.sendMessage({ type: 'GET_VIDEO_TARGET', source: getVideoSource(video) });
       available = !!response?.ok; language = response?.language || 'ar';
       button.textContent = language === 'ar' ? '↓ تنزيل بـ ARGON' : '↓ Download · ARGON';
       if (!available) host.style.display = 'none';
@@ -40,7 +44,7 @@
     if (!event.isTrusted || !video || button.disabled) return;
     button.disabled = true;
     try {
-      const result = await chrome.runtime.sendMessage({ type: 'DOWNLOAD_VIDEO', source: video.currentSrc || video.src });
+      const result = await chrome.runtime.sendMessage({ type: 'DOWNLOAD_VIDEO', source: getVideoSource(video) });
       button.textContent = result?.ok ? (language === 'ar' ? 'أُضيف إلى ARGON' : 'Added to ARGON')
         : result?.error === 'media_tools_required' ? (language === 'ar' ? 'ثبّت FFmpeg من الإعدادات' : 'Install FFmpeg in Settings')
         : (language === 'ar' ? 'شغّل ARGON أولاً' : 'Open ARGON first');

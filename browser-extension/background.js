@@ -221,7 +221,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       const direct = mediaDescriptor(request.source);
       const target = platformVideo(sender.tab.url, sender.tab.title) || direct
         || media.find(item => item.url === request.source)
-        || (request.source?.startsWith('blob:') && streams.length === 1 ? streams[0] : undefined);
+        || (request.source?.startsWith('blob:') ? (streams[0] || (media.length ? media[media.length - 1] : undefined)) : undefined);
       if (!target || excludedHost(target.url, settings.excludedHosts)) return respond({ ok: false });
       if (request.type === 'GET_VIDEO_TARGET') return respond({ ok: true, target, language: settings.language });
       try {

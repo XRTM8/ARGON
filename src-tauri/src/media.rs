@@ -4,7 +4,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
@@ -125,7 +125,7 @@ async fn run_ytdlp_json(
     format_arg: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let (executable, node, _) = resolve_tool_paths(app)?;
-    let mut command = tokio::process::Command::new(executable);
+    let mut command = tokio::process::Command::new(&executable);
     command.kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
@@ -154,6 +154,51 @@ async fn run_ytdlp_json(
             format!("محرك الوسائط غير متاح؛ أعد تثبيت ARGON أو شغّل npm run prepare:tools. {e}")
         })?;
     if !output.status.success() {
+        let stderr_lossy = String::from_utf8_lossy(&output.stderr);
+        let looks_like_auth_or_bot_block = stderr_lossy.contains("Sign in")
+            || stderr_lossy.contains("login")
+            || stderr_lossy.contains("Login")
+            || stderr_lossy.contains("bot")
+            || stderr_lossy.contains("403")
+            || stderr_lossy.contains("confirm you");
+
+        if looks_like_auth_or_bot_block {
+            for browser in ["edge", "chrome", "firefox"] {
+                let mut cookie_cmd = tokio::process::Command::new(&executable);
+                cookie_cmd.kill_on_drop(true);
+                #[cfg(windows)]
+                cookie_cmd.creation_flags(0x08000000);
+                cookie_cmd.args([
+                    "--ignore-config",
+                    "--no-playlist",
+                    "--no-warnings",
+                    "--skip-download",
+                    "--dump-single-json",
+                    "--socket-timeout",
+                    "20",
+                    "--retries",
+                    "2",
+                    "--js-runtimes",
+                    &node,
+                    "--cookies-from-browser",
+                    browser,
+                ]);
+                if let Some(fmt) = format_arg {
+                    cookie_cmd.args(["--format", fmt]);
+                }
+                cookie_cmd.args(["--", url]);
+                if let Ok(Ok(cookie_output)) =
+                    tokio::time::timeout(Duration::from_secs(45), cookie_cmd.output()).await
+                {
+                    if cookie_output.status.success() {
+                        if let Ok(val) = serde_json::from_slice(&cookie_output.stdout) {
+                            return Ok(val);
+                        }
+                    }
+                }
+            }
+        }
+
         // Auto-heal: Try updating yt-dlp once in background and retry extraction
         if update_ytdlp_tool(app.clone()).await.is_ok() {
             if let Ok((executable_retry, node_retry, _)) = resolve_tool_paths(app) {
@@ -313,11 +358,31 @@ async fn download_with_ytdlp_internal(
     }
     command.args(["--", url]);
     command.stdout(std::process::Stdio::piped());
-    command.stderr(std::process::Stdio::null());
+    command.stderr(std::process::Stdio::piped());
 
     let mut child = command
         .spawn()
         .map_err(|e| format!("تعذر تشغيل محرك الوسائط: {e}"))?;
+
+    let err_buf = Arc::new(tokio::sync::Mutex::new(String::new()));
+    let err_buf_writer = err_buf.clone();
+    if let Some(err_pipe) = child.stderr.take() {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut reader = err_pipe;
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = reader.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+                let mut guard = err_buf_writer.lock().await;
+                if guard.len() < 2048 {
+                    guard.push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+            }
+        });
+    }
+
     if let Some(out) = child.stdout.take() {
         use tokio::io::AsyncBufReadExt;
         let mut lines = tokio::io::BufReader::new(out).lines();
@@ -353,6 +418,12 @@ async fn download_with_ytdlp_internal(
         }
     };
     if !status.success() {
+        let err_guard = err_buf.lock().await;
+        let snippet = err_guard.trim();
+        if !snippet.is_empty() {
+            let first_line = snippet.lines().find(|l| l.contains("ERROR:") || !l.trim().is_empty()).unwrap_or(snippet);
+            return Err(format!("فشل تنزيل الوسائط: {}", first_line.chars().take(200).collect::<String>()));
+        }
         return Err("فشل تنزيل الوسائط أو دمجها؛ تأكد من توفر ffmpeg وصلاحية الرابط.".into());
     }
     let mut outputs = tokio::fs::read_dir(working_dir).await.map_err(|e| e.to_string())?;
@@ -516,7 +587,7 @@ pub async fn install_ffmpeg_tool(app: AppHandle) -> Result<MediaToolsStatus, Str
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn extract_ffmpeg_from_zip(zip_path: &PathBuf, tools_dir: &PathBuf) -> Result<(), String> {
+fn extract_ffmpeg_from_zip(zip_path: &Path, tools_dir: &Path) -> Result<(), String> {
     let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid ffmpeg zip: {e}"))?;
     let mut found_exe = false;
@@ -637,7 +708,7 @@ pub async fn update_ytdlp_tool(app: AppHandle) -> Result<MediaToolsStatus, Strin
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn replace_bin_atomic(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
+fn replace_bin_atomic(src: &Path, dst: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -840,9 +911,9 @@ pub async fn resolve_media(
 
         let fmt = format_id.clone().unwrap_or_else(|| {
             if audio_only {
-                "bestaudio[protocol=https]/bestaudio[protocol=http]/best[protocol=https]/best[protocol=http]".to_string()
+                "bestaudio[protocol=https]/bestaudio[protocol=http]/best[protocol=https]/best[protocol=http]/bestaudio/best".to_string()
             } else {
-                "best[vcodec!=none][acodec!=none][protocol=https]/best[vcodec!=none][acodec!=none][protocol=http]/best[protocol=https]/best[protocol=http]".to_string()
+                "best[vcodec!=none][acodec!=none][protocol=https]/best[vcodec!=none][acodec!=none][protocol=http]/best[ext=mp4]/best".to_string()
             }
         });
 

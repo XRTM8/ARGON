@@ -34,8 +34,10 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
     private val worker = Executors.newSingleThreadExecutor()
     private val picking = AtomicBoolean(false)
     private val staging get() = File(activity.cacheDir, "argon-share")
+    private var mainWebView: WebView? = null
 
     override fun load(webView: WebView) {
+        mainWebView = webView
         // This runs at process startup, before transfers exist. Never remove current-session files.
         worker.execute {
             val cutoff = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
@@ -311,6 +313,206 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
                 clipboard.setPrimaryClip(ClipData.newPlainText("ARGON", text))
                 invoke.resolve()
             } catch (error: Exception) { invoke.reject(error.message) }
+        }
+    }
+
+    @Command
+    fun openMediaSniffer(invoke: Invoke) {
+        activity.runOnUiThread {
+            try {
+                val initialUrl = invoke.getArgs().optString("url", "https://google.com").ifBlank { "https://google.com" }
+                val dialog = android.app.Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen)
+                val density = activity.resources.displayMetrics.density
+                fun dp(px: Int) = (px * density).toInt()
+
+                val root = android.widget.LinearLayout(activity).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    setBackgroundColor(android.graphics.Color.parseColor("#0A0C10"))
+                }
+
+                val topBar = android.widget.LinearLayout(activity).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    setBackgroundColor(android.graphics.Color.parseColor("#111827"))
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+
+                val backBtn = android.widget.Button(activity).apply {
+                    text = "◀"
+                    setTextColor(android.graphics.Color.parseColor("#94A3B8"))
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    minWidth = dp(40)
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                }
+
+                val forwardBtn = android.widget.Button(activity).apply {
+                    text = "▶"
+                    setTextColor(android.graphics.Color.parseColor("#94A3B8"))
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    minWidth = dp(40)
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                }
+
+                val urlInput = android.widget.EditText(activity).apply {
+                    setText(initialUrl)
+                    setTextColor(android.graphics.Color.WHITE)
+                    setHintTextColor(android.graphics.Color.parseColor("#64748B"))
+                    hint = "https://..."
+                    setSingleLine(true)
+                    setBackgroundColor(android.graphics.Color.parseColor("#1E293B"))
+                    setPadding(dp(10), dp(8), dp(10), dp(8))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f).apply {
+                        setMargins(dp(6), 0, dp(6), 0)
+                    }
+                    imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_GO
+                    inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+                }
+
+                var isDesktopMode = false
+                val desktopBtn = android.widget.Button(activity).apply {
+                    text = "📱"
+                    setTextColor(android.graphics.Color.WHITE)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    minWidth = dp(40)
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                }
+
+                val closeBtn = android.widget.Button(activity).apply {
+                    text = "✕"
+                    setTextColor(android.graphics.Color.parseColor("#EF4444"))
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    minWidth = dp(40)
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                }
+
+                topBar.addView(backBtn)
+                topBar.addView(forwardBtn)
+                topBar.addView(urlInput)
+                topBar.addView(desktopBtn)
+                topBar.addView(closeBtn)
+
+                val frame = android.widget.FrameLayout(activity).apply {
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1.0f
+                    )
+                }
+
+                val sniffWebView = android.webkit.WebView(activity)
+                sniffWebView.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    databaseEnabled = true
+                    mediaPlaybackRequiresUserGesture = false
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                }
+
+                val defaultMobileUa = sniffWebView.settings.userAgentString
+                val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+                desktopBtn.setOnClickListener {
+                    isDesktopMode = !isDesktopMode
+                    desktopBtn.text = if (isDesktopMode) "🖥" else "📱"
+                    sniffWebView.settings.userAgentString = if (isDesktopMode) desktopUa else defaultMobileUa
+                    sniffWebView.reload()
+                }
+
+                val detectedStreams = java.util.concurrent.CopyOnWriteArrayList<String>()
+                val badge = android.widget.TextView(activity).apply {
+                    text = "📥 Download Media"
+                    setTextColor(android.graphics.Color.WHITE)
+                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setBackgroundColor(android.graphics.Color.parseColor("#2563EB"))
+                    setPadding(dp(16), dp(12), dp(16), dp(12))
+                    visibility = android.view.View.GONE
+                    layoutParams = android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
+                        setMargins(0, 0, 0, dp(24))
+                    }
+                }
+
+                fun onStreamFound(url: String) {
+                    if (!detectedStreams.contains(url)) {
+                        detectedStreams.add(url)
+                        activity.runOnUiThread {
+                            badge.visibility = android.view.View.VISIBLE
+                            badge.text = "📥 Download Detected Media (${detectedStreams.size})"
+                        }
+                    }
+                }
+
+                badge.setOnClickListener {
+                    val lastStream = detectedStreams.lastOrNull()
+                    if (lastStream != null) {
+                        dialog.dismiss()
+                        val quoted = org.json.JSONObject.quote(lastStream)
+                        val js = "window.dispatchEvent(new CustomEvent('argon-share-url', { detail: $quoted }));"
+                        mainWebView?.post { mainWebView?.evaluateJavascript(js, null) }
+                        invoke.resolveObject(mapOf("url" to lastStream))
+                    }
+                }
+
+                sniffWebView.webViewClient = object : android.webkit.WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: android.webkit.WebView?,
+                        request: android.webkit.WebResourceRequest?
+                    ): android.webkit.WebResourceResponse? {
+                        val reqUrl = request?.url?.toString() ?: ""
+                        val lower = reqUrl.lowercase()
+                        if (lower.contains(".m3u8") || lower.contains(".mpd") || lower.contains(".mp4") ||
+                            lower.contains(".webm") || lower.contains("videoplayback") ||
+                            lower.contains("/hls/") || lower.contains("/dash/") || lower.contains("mime=video")) {
+                            onStreamFound(reqUrl)
+                        }
+                        return super.shouldInterceptRequest(view, request)
+                    }
+
+                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        if (url != null && !urlInput.hasFocus()) {
+                            urlInput.setText(url)
+                        }
+                    }
+                }
+
+                backBtn.setOnClickListener {
+                    if (sniffWebView.canGoBack()) sniffWebView.goBack()
+                }
+                forwardBtn.setOnClickListener {
+                    if (sniffWebView.canGoForward()) sniffWebView.goForward()
+                }
+                urlInput.setOnEditorActionListener { _, actionId, _ ->
+                    if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                        var target = urlInput.text.toString().trim()
+                        if (!target.startsWith("http://") && !target.startsWith("https://")) {
+                            target = "https://" + target
+                        }
+                        sniffWebView.loadUrl(target)
+                        true
+                    } else false
+                }
+                closeBtn.setOnClickListener {
+                    dialog.dismiss()
+                    invoke.resolveObject(mapOf("cancelled" to true))
+                }
+
+                frame.addView(sniffWebView)
+                frame.addView(badge)
+                root.addView(topBar)
+                root.addView(frame)
+
+                dialog.setContentView(root)
+                dialog.show()
+
+                sniffWebView.loadUrl(initialUrl)
+            } catch (e: Exception) {
+                invoke.reject(e.message ?: "Failed to open media sniffer")
+            }
         }
     }
 }

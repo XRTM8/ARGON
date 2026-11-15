@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -106,11 +106,11 @@ fn package_mode() -> &'static str {
             }
             Some(false)
         };
-        return if installed() == Some(true) {
+        if installed() == Some(true) {
             "installed"
         } else {
             "portable"
-        };
+        }
     }
     #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
@@ -197,9 +197,9 @@ async fn save_package(
     Ok(())
 }
 
-async fn replace_cached_file(source: &PathBuf, destination: &PathBuf) -> Result<(), String> {
-    let src = source.clone();
-    let dst = destination.clone();
+async fn replace_cached_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let src = source.to_path_buf();
+    let dst = destination.to_path_buf();
     tokio::task::spawn_blocking(move || {
         #[cfg(windows)]
         {
@@ -314,7 +314,7 @@ pub async fn update_check(
         }
         .into();
         cache.update = update;
-        return Ok(status(&cache));
+        Ok(status(&cache))
     }
     #[cfg(not(desktop))]
     {
@@ -376,7 +376,7 @@ pub async fn update_download(
         cache.phase = "ready".into();
         cache.downloaded = bytes.len() as u64;
         cache.total = Some(bytes.len() as u64);
-        return Ok(status(&cache));
+        Ok(status(&cache))
     }
     #[cfg(not(desktop))]
     {

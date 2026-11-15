@@ -8,14 +8,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
 /**
  * Keeps active downloads alive when the user locks the screen or switches apps on Android.
+ * Manages WakeLock and High-Performance WifiLock to prevent OS throttling.
  */
 class DownloadForegroundService : Service() {
+  private var wakeLock: PowerManager.WakeLock? = null
+  private var wifiLock: WifiManager.WifiLock? = null
+
   companion object {
     const val CHANNEL_ID = "argon_transfers"
     const val NOTIFICATION_ID = 41523
@@ -60,9 +66,11 @@ class DownloadForegroundService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
+      releaseLocks()
       stopSelf()
       return START_NOT_STICKY
     }
+    acquireLocks()
     val title = intent?.getStringExtra(EXTRA_TITLE) ?: "ARGON"
     val text = intent?.getStringExtra(EXTRA_TEXT) ?: "Downloading..."
     val progress = intent?.getIntExtra(EXTRA_PROGRESS, 0) ?: 0
@@ -79,6 +87,50 @@ class DownloadForegroundService : Service() {
       startForeground(NOTIFICATION_ID, notification)
     }
     return START_NOT_STICKY
+  }
+
+  override fun onDestroy() {
+    releaseLocks()
+    super.onDestroy()
+  }
+
+  private fun acquireLocks() {
+    try {
+      if (wakeLock == null) {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        wakeLock = powerManager?.newWakeLock(
+          PowerManager.PARTIAL_WAKE_LOCK,
+          "ARGON::DownloadTransferWakeLock"
+        )?.apply {
+          setReferenceCounted(false)
+          // Safety timeout of 4 hours
+          acquire(4 * 60 * 60 * 1000L)
+        }
+      }
+      if (wifiLock == null) {
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        wifiLock = wifiManager?.createWifiLock(
+          WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+          "ARGON::DownloadTransferWifiLock"
+        )?.apply {
+          setReferenceCounted(false)
+          acquire()
+        }
+      }
+    } catch (_: Exception) {}
+  }
+
+  private fun releaseLocks() {
+    try {
+      wakeLock?.let {
+        if (it.isHeld) it.release()
+      }
+      wakeLock = null
+      wifiLock?.let {
+        if (it.isHeld) it.release()
+      }
+      wifiLock = null
+    } catch (_: Exception) {}
   }
 
   override fun onBind(intent: Intent?): IBinder? = null

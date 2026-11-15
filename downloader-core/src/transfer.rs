@@ -151,7 +151,7 @@ impl TelemetryTracker {
         let total_speed: f64 = speeds.iter().sum();
         out.extend_from_slice(&total_speed.to_le_bytes());
 
-        for ((id, m), speed) in map.iter().zip(speeds.into_iter()) {
+        for ((id, m), speed) in map.iter().zip(speeds) {
             let (h1, h2) = dual_hash_id(id);
             out.extend_from_slice(&h1.to_le_bytes());
             out.extend_from_slice(&h2.to_le_bytes());
@@ -384,8 +384,7 @@ pub async fn probe_resource(
             response
                 .url()
                 .path_segments()?
-                .filter(|s| !s.is_empty())
-                .next_back()
+                .rfind(|s| !s.is_empty())
                 .filter(|s| s.contains('.'))
                 .map(|s| sanitize_filename(&percent_decode(s)))
         });
@@ -432,6 +431,7 @@ pub struct SegmentTransfer<'a> {
     pub post_body: Option<&'a str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn download_segment(
     spec: SegmentTransfer<'_>,
     client: &Client,

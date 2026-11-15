@@ -40,4 +40,14 @@ describe('batch download input', () => {
       'https://www.instagram.com/reel/Dfj5LzrMWup/?igsh=abc'
     );
   });
+
+  it('parses valid BitTorrent magnet URIs', () => {
+    const magnet = 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Test';
+    expect(parseDownloadInput(magnet)).toEqual({
+      urls: [magnet],
+      invalid: [],
+      duplicates: 0
+    });
+    expect(extractSharedUrl(`Check this torrent: ${magnet}`)).toBe(magnet);
+  });
 });

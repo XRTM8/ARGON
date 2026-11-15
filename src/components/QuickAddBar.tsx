@@ -6,12 +6,14 @@ import {
   Loader2,
   Film,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Magnet
 } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
 import { expandWildcardPattern, extractSharedUrl, parseDownloadInput } from '../core/downloadInput';
 import { readClipboardText } from '../core/clipboard';
 import { detectPlatform, listMediaFormats } from '../core/mediaResolver';
+import { isMagnetUri } from '../core/torrent';
 import { formatBytes } from '../core/segmentation';
 import type { MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
 
@@ -53,9 +55,17 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   const wildcard = looksLikeWildcard ? expandWildcardPattern(trimmed) : null;
   const parsed = parseDownloadInput(value);
   const singleUrl = !isMultiline && !looksLikeWildcard && parsed.urls.length === 1 ? parsed.urls[0] : '';
-  const platform = singleUrl ? detectPlatform(singleUrl) : 'other';
-  const streamManifest = !!singleUrl && /\.(?:m3u8|mpd)$/i.test(new URL(singleUrl).pathname);
-  const isMediaPlatform = streamManifest || !['direct', 'other'].includes(platform);
+  const isMagnet = !!singleUrl && isMagnetUri(singleUrl);
+  const platform = singleUrl && !isMagnet ? detectPlatform(singleUrl) : 'other';
+  let streamManifest = false;
+  if (singleUrl && !isMagnet) {
+    try {
+      streamManifest = /\.(?:m3u8|mpd)$/i.test(new URL(singleUrl).pathname);
+    } catch {
+      streamManifest = false;
+    }
+  }
+  const isMediaPlatform = !isMagnet && (streamManifest || !['direct', 'other'].includes(platform));
 
   useEffect(() => {
     if (detectedClipboardUrl) {
@@ -123,8 +133,8 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     if (candidateList.invalid.length || !candidateList.urls.length) {
       setError(
         ar
-          ? 'أدخل رابط HTTP أو HTTPS صحيح.'
-          : 'Enter a valid HTTP or HTTPS URL.'
+          ? 'أدخل رابط HTTP أو HTTPS أو Magnet صحيح.'
+          : 'Enter a valid HTTP, HTTPS, or Magnet URL.'
       );
       return;
     }
@@ -195,7 +205,24 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     reddit: 'Reddit',
     threads: 'Threads',
     vimeo: 'Vimeo',
-    soundcloud: 'SoundCloud'
+    soundcloud: 'SoundCloud',
+    pinterest: 'Pinterest',
+    snapchat: 'Snapchat',
+    linkedin: 'LinkedIn',
+    twitch: 'Twitch',
+    kick: 'Kick',
+    dailymotion: 'Dailymotion',
+    bilibili: 'Bilibili',
+    kwai: 'Kwai',
+    douyin: 'Douyin',
+    bluesky: 'Bluesky',
+    tumblr: 'Tumblr',
+    streamable: 'Streamable',
+    loom: 'Loom',
+    vk: 'VK',
+    rumble: 'Rumble',
+    odysee: 'Odysee',
+    bandcamp: 'Bandcamp'
   };
 
   return (
@@ -300,6 +327,23 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
                     : ar ? `${platformNames[platform] || 'وسائط'} · اختيار الجودة` : `${platformNames[platform] || 'Media'} · Quality`}
                 </span>
               </button>
+            )}
+
+            {isMagnet && (
+              <div
+                className="media-pill-btn"
+                style={{
+                  borderColor: 'rgba(234, 179, 8, 0.4)',
+                  color: '#FACC15',
+                  cursor: 'default',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                <Magnet size={13} />
+                <span>{ar ? 'رابط تورنت Magnet' : 'BitTorrent Magnet'}</span>
+              </div>
             )}
           </div>
 

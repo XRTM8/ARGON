@@ -13,6 +13,11 @@ describe('mediaResolver', () => {
     expect(detectPlatform('https://www.reddit.com/r/rust/comments/abc/')).toBe('reddit');
     expect(detectPlatform('https://vimeo.com/123456789')).toBe('vimeo');
     expect(detectPlatform('https://www.threads.net/@user/post/xyz')).toBe('threads');
+    expect(detectPlatform('https://www.pinterest.com/pin/12345/')).toBe('pinterest');
+    expect(detectPlatform('https://pin.it/abc1234')).toBe('pinterest');
+    expect(detectPlatform('https://www.snapchat.com/spotlight/W7v4_8?')).toBe('snapchat');
+    expect(detectPlatform('https://www.twitch.tv/videos/123456789')).toBe('twitch');
+    expect(detectPlatform('https://www.bilibili.com/video/BV1xx411c7mD')).toBe('bilibili');
     expect(detectPlatform('https://example.com/videos/stream.mp4')).toBe('direct');
     expect(detectPlatform('https://example.com/podcast.mp3')).toBe('direct');
     expect(detectPlatform('https://example.com/archive.zip')).toBe('other');

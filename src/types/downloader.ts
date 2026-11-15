@@ -51,11 +51,41 @@ export interface MediaToolsStatus {
   toolsDir: string;
 }
 
+export type PlatformType =
+  | 'youtube'
+  | 'tiktok'
+  | 'instagram'
+  | 'twitter'
+  | 'facebook'
+  | 'reddit'
+  | 'threads'
+  | 'vimeo'
+  | 'soundcloud'
+  | 'pinterest'
+  | 'snapchat'
+  | 'linkedin'
+  | 'twitch'
+  | 'kick'
+  | 'dailymotion'
+  | 'bilibili'
+  | 'kwai'
+  | 'douyin'
+  | 'bluesky'
+  | 'tumblr'
+  | 'streamable'
+  | 'loom'
+  | 'vk'
+  | 'rumble'
+  | 'odysee'
+  | 'bandcamp'
+  | 'direct'
+  | 'other';
+
 export interface MediaMetadata {
   title?: string;
   author?: string;
   thumbnail?: string;
-  platform?: 'youtube' | 'tiktok' | 'instagram' | 'twitter' | 'facebook' | 'reddit' | 'threads' | 'vimeo' | 'soundcloud' | 'direct' | 'other';
+  platform?: PlatformType;
   quality?: string;
   duration?: number;
   isAudioOnly?: boolean;
@@ -131,6 +161,8 @@ export interface AppSettings {
   maxAutoRetries?: number;
   minimizeToTray?: boolean;
   startWithWindows?: boolean;
+  debridEnabled?: boolean;
+  debridApiKey?: string;
 }
 
 export interface DownloaderSnapshot {
