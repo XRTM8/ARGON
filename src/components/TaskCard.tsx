@@ -178,8 +178,9 @@ export function TaskCard({
           </span>
           {(known || task.downloadedBytes > 0) && (
             <span ref={bytesRef} className="transfer-numbers" dir="ltr">
-              {formatBytes(task.downloadedBytes)}
-              {known ? ` / ${formatBytes(task.totalBytes)}` : ''}
+              {completed
+                ? formatBytes(task.totalBytes || task.downloadedBytes)
+                : `${formatBytes(task.downloadedBytes)}${known ? ` / ${formatBytes(task.totalBytes)}` : ''}`}
             </span>
           )}
           {active && (
@@ -257,7 +258,7 @@ export function TaskCard({
           )}
           {completed && task.savePath && onShare && (
             <button
-              className="icon-button"
+              className="icon-button hide-on-mobile-action"
               onClick={() => onShare(task)}
               aria-label={ar ? 'إرسال لجهاز' : 'Send to device'}
               title={ar ? 'إرسال لجهاز' : 'Send to device'}

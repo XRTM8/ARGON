@@ -296,12 +296,12 @@ export function App() {
       <div className="argon-content">
         <header className="argon-topbar">
           <div className="topbar-leading">
-            <div className="mobile-brand-pill" dir="ltr">
-              <ArgonMark size={18} />
-              <span>ARGON</span>
+            <div className="mobile-brand-pill" dir={ar ? 'rtl' : 'ltr'}>
+              <ArgonMark size={22} withTile />
+              <span className="brand-title">{ar ? 'آرغون' : 'ARGON'}</span>
             </div>
             <div className="breadcrumb">
-              <span>ARGON</span>
+              <span>{ar ? 'آرغون' : 'ARGON'}</span>
               <span>/</span>
               <strong>{viewNames[activeView]}</strong>
             </div>
@@ -392,7 +392,7 @@ export function App() {
         <main className="argon-main" id="main-content">
           {activeView === 'downloads' && (
             <>
-              <div className="view-header">
+              <div className="view-header downloads-view-header">
                 <div className="view-header-title">
                   <h1>{ar ? 'التنزيلات' : 'Downloads'}</h1>
                   {tasks.length > 0 && (
@@ -466,11 +466,42 @@ export function App() {
                         <span>{stats.completedCount}</span>
                       </button>
                     </div>
-                    <button className="text-button hide-on-mobile" onClick={() => setActiveView('browser')}>
-                      <Puzzle size={14} />
-                      {ar ? 'ربط المتصفح' : 'Connect browser'}
-                      <ArrowUpRight size={13} />
-                    </button>
+
+                    <div className="download-toolbar-actions">
+                      {finished && stats.completedCount > 0 && (
+                        <button
+                          type="button"
+                          className="text-button text-danger"
+                          onClick={() => downloadManager.clearCompleted()}
+                          title={ar ? 'مسح التنزيلات المكتملة من القائمة' : 'Clear completed from list'}
+                        >
+                          <Trash2 size={13} />
+                          <span>{ar ? 'مسح المكتملة' : 'Clear'}</span>
+                        </button>
+                      )}
+                      {!finished && stats.activeCount > 0 && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => downloadManager.pauseAll()}
+                          title={ar ? 'إيقاف مؤقت للكل' : 'Pause all'}
+                        >
+                          <Pause size={13} />
+                          <span>{ar ? 'إيقاف الكل' : 'Pause all'}</span>
+                        </button>
+                      )}
+                      {!finished && stats.activeCount === 0 && tasks.some((t) => t.status === 'paused') && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => downloadManager.resumeAll()}
+                          title={ar ? 'استئناف الكل' : 'Resume all'}
+                        >
+                          <Play size={13} />
+                          <span>{ar ? 'استئناف' : 'Resume'}</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <TaskList {...taskProps} mode={finished ? 'finished' : 'downloads'} onSwitchToDownloads={() => setFinished(false)} />

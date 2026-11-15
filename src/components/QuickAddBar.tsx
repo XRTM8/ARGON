@@ -319,8 +319,8 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               autoComplete="off"
               placeholder={
                 ar
-                  ? 'الصق رابط ملف أو فيديو من إنستغرام، تيك توك، يوتيوب، X…'
-                  : 'Paste a file link or YouTube, Instagram, TikTok, X URL…'
+                  ? 'أدخل الرابط أو أسقط ملفاً…'
+                  : 'Enter URL or drop a file…'
               }
               aria-invalid={!!error}
               onChange={(event) => {
