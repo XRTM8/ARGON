@@ -18,7 +18,7 @@ function labels(){
 function items(){
  const platform=platformVideo(tab?.url,tab?.title);
  const found=new Map();
- for(const item of [...(platform?[platform]:media.filter(item=>item.supported||(hasFfmpeg&&item.playlist))),...pageFiles.filter(item=>!platform||!item.media)])if(!found.has(item.url))found.set(item.url,item);
+ for(const item of [...(platform?[platform]:media.filter(item=>item.supported||item.playlist)),...pageFiles.filter(item=>!platform||!item.media)])if(!found.has(item.url))found.set(item.url,item);
  return [...found.values()].slice(0,40);
 }
 function render(){
@@ -27,7 +27,7 @@ function render(){
  for(const item of files){
   const row=document.createElement('div');row.className='file-item';const info=document.createElement('div');info.className='file-info';const title=document.createElement('span');title.className='file-title';title.dir='auto';title.textContent=item.filename;title.title=item.filename;
   const meta=document.createElement('span');meta.className='file-type';meta.textContent=`${item.type}${item.playlist?' · FFmpeg':''} · ${httpUrl(item.url)?.hostname||''}`;info.append(title,meta);
-  const button=document.createElement('button');button.className='primary';button.textContent=sent.has(item.url)?t('أُضيف','Added'):t('تنزيل','Download');button.disabled=busy||!online||sent.has(item.url);button.addEventListener('click',()=>void send(item));row.append(info,button);$('mediaList').append(row);
+  const needsTool=item.playlist&&!hasFfmpeg;const button=document.createElement('button');button.className='primary';button.textContent=needsTool?t('ثبّت FFmpeg','Install FFmpeg'):sent.has(item.url)?t('أُضيف','Added'):t('تنزيل','Download');button.disabled=busy||!online||sent.has(item.url);button.addEventListener('click',()=>needsTool?message(t('ثبّت FFmpeg من إعدادات الوسائط داخل ARGON.','Install FFmpeg from media settings in ARGON.'),true):void send(item));row.append(info,button);$('mediaList').append(row);
  }
 }
 async function check(){
@@ -38,7 +38,7 @@ async function check(){
 }
 async function send(item){
  if(busy)return;busy=true;render();
- try{const ping=await connection();const allowPlaylists=!!ping.capabilities?.includes('ffmpeg-hls');const headers=await buildAuthHeaders(item.url,tab?.url,settings,!!tab?.incognito);await sendDownload(item.url,item.platform?undefined:item.filename,tab?.url,headers,undefined,undefined,allowPlaylists);sent.add(item.url);message(t('أُضيف إلى ARGON.','Added to ARGON.'));}
+ try{const ping=await connection();const allowPlaylists=!!ping.capabilities?.includes('ffmpeg-hls');const headers=await buildAuthHeaders(item.url,tab?.url,settings,!!tab?.incognito);await sendDownload(item.url,item.platform?undefined:item.filename,tab?.url,headers,undefined,undefined,allowPlaylists,{streamKind:item.playlist?item.type:undefined});sent.add(item.url);message(t('أُضيف إلى ARGON.','Added to ARGON.'));}
  catch{message(t('تعذّر التسليم؛ شغّل ARGON وأعد المحاولة.','Could not hand off. Open ARGON and try again.'),true);}
  finally{busy=false;render();void check();}
 }

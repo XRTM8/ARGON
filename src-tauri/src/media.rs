@@ -1,4 +1,4 @@
-use argon_downloader_core::{social, BoxFuture, MediaExtractor, ResolvedMediaSpec};
+use argon_downloader_core::{social, BoxFuture, MediaDownloadUpdate, MediaExtractor, ResolvedMediaSpec};
 use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -223,33 +223,51 @@ impl MediaExtractor for TauriMediaExtractor {
 
     fn download_muxed_media(
         &self,
-        _task_id: String,
+        task_id: String,
         url: String,
         destination_path: PathBuf,
         format_spec: String,
         cancel_flag: Arc<AtomicBool>,
         cancel_rx: watch::Receiver<bool>,
-        on_progress: Arc<dyn Fn(u64, u64) + Send + Sync>,
+        on_progress: Arc<dyn Fn(MediaDownloadUpdate) + Send + Sync>,
     ) -> BoxFuture<'static, Result<PathBuf, String>> {
         let app = self.app.clone();
         Box::pin(async move {
             #[cfg(target_os = "android")]
             {
-                let _ = (app, url, destination_path, format_spec, cancel_flag, cancel_rx, on_progress);
+                let _ = (app, task_id, url, destination_path, format_spec, cancel_flag, cancel_rx, on_progress);
                 Err("تنزيل HLS/DASH عبر yt-dlp متاح على سطح المكتب فقط حاليًا".into())
             }
             #[cfg(not(target_os = "android"))]
             {
-                download_with_ytdlp_internal(
+                let parent = destination_path.parent().ok_or("Invalid media destination")?;
+                tokio::fs::create_dir_all(parent).await.map_err(|e| format!("Cannot create download folder: {e}"))?;
+                let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?.as_nanos();
+                let key = format!("{:x}", Sha256::digest(task_id.as_bytes()));
+                let working_dir = parent.join(format!(".argon-media-{}-{nonce}", &key[..12]));
+                tokio::fs::create_dir(&working_dir).await.map_err(|e| format!("Cannot create media workspace: {e}"))?;
+                let result = download_with_ytdlp_internal(
                     &app,
                     &url,
-                    destination_path,
+                    &working_dir,
                     &format_spec,
-                    cancel_flag,
+                    cancel_flag.clone(),
                     cancel_rx,
                     on_progress,
                 )
-                .await
+                .await;
+                let committed = match result {
+                    Ok(output) if !cancel_flag.load(std::sync::atomic::Ordering::Acquire) => {
+                        let target = output.extension().map_or_else(|| destination_path.clone(), |ext| destination_path.with_extension(ext));
+                        let name = target.file_name().unwrap_or_default().to_string_lossy();
+                        argon_flow_core::commit_file(&output, parent, &name).await
+                    }
+                    Ok(_) => Err("CANCELLED".into()),
+                    Err(error) => Err(error),
+                };
+                let _ = tokio::fs::remove_dir_all(&working_dir).await;
+                committed
             }
         })
     }
@@ -259,18 +277,13 @@ impl MediaExtractor for TauriMediaExtractor {
 async fn download_with_ytdlp_internal(
     app: &AppHandle,
     url: &str,
-    target: PathBuf,
+    working_dir: &std::path::Path,
     format_spec: &str,
     cancel_flag: Arc<AtomicBool>,
     mut cancel_rx: watch::Receiver<bool>,
-    on_progress: Arc<dyn Fn(u64, u64) + Send + Sync>,
+    on_progress: Arc<dyn Fn(MediaDownloadUpdate) + Send + Sync>,
 ) -> Result<PathBuf, String> {
     let (executable, node, ffmpeg) = resolve_tool_paths(app)?;
-    if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Cannot create download folder: {e}"))?;
-    }
     let mut command = tokio::process::Command::new(executable);
     command.kill_on_drop(true);
     #[cfg(windows)]
@@ -283,6 +296,7 @@ async fn download_with_ytdlp_internal(
         "--progress",
         "--concurrent-fragments",
         "4",
+        "--abort-on-unavailable-fragments",
         "--js-runtimes",
         &node,
         "--format",
@@ -290,7 +304,7 @@ async fn download_with_ytdlp_internal(
         "--merge-output-format",
         "mp4",
         "-o",
-        &target.to_string_lossy(),
+        &working_dir.join("media.%(ext)s").to_string_lossy(),
     ]);
     if let Some(ff) = ffmpeg {
         if let Some(dir) = ff.parent() {
@@ -299,7 +313,7 @@ async fn download_with_ytdlp_internal(
     }
     command.args(["--", url]);
     command.stdout(std::process::Stdio::piped());
-    command.stderr(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::null());
 
     let mut child = command
         .spawn()
@@ -321,30 +335,37 @@ async fn download_with_ytdlp_internal(
             };
             match next_line {
                 Ok(Some(line)) => {
-                    if let Some((dl, total)) = parse_ytdlp_progress(&line) {
-                        on_progress(dl, total);
+                    if line.starts_with("[Merger]") || line.starts_with("[Fixup") {
+                        on_progress(MediaDownloadUpdate::Finalizing);
+                    } else if let Some((dl, total)) = parse_ytdlp_progress(&line) {
+                        on_progress(MediaDownloadUpdate::Bytes(dl, total));
                     }
                 }
                 Ok(None) | Err(_) => break,
             }
         }
     }
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("Media download error: {e}"))?;
+    let status = tokio::select! {
+        status = child.wait() => status.map_err(|e| format!("Media download error: {e}"))?,
+        _ = argon_downloader_core::throttle::wait_cancelled(&mut cancel_rx, &cancel_flag) => {
+            let _ = child.kill().await;
+            return Err("CANCELLED".into());
+        }
+    };
     if !status.success() {
         return Err("فشل تنزيل الوسائط أو دمجها؛ تأكد من توفر ffmpeg وصلاحية الرابط.".into());
     }
-    if target.exists() {
-        return Ok(target);
+    let mut outputs = tokio::fs::read_dir(working_dir).await.map_err(|e| e.to_string())?;
+    while let Some(entry) = outputs.next_entry().await.map_err(|e| e.to_string())? {
+        let path = entry.path();
+        if path.file_stem().is_some_and(|stem| stem == "media")
+            && path.extension().is_some_and(|ext| !matches!(ext.to_str(), Some("part" | "ytdl" | "temp")))
+            && entry.metadata().await.is_ok_and(|data| data.is_file() && data.len() > 0)
+        {
+            return Ok(path);
+        }
     }
-    // yt-dlp may append .mp4 when merging separate video/audio streams
-    let mp4_fallback = PathBuf::from(format!("{}.mp4", target.display()));
-    if mp4_fallback.exists() {
-        return Ok(mp4_fallback);
-    }
-    Ok(target)
+    Err("Media download finished without an output file".into())
 }
 
 #[tauri::command]

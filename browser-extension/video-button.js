@@ -41,7 +41,9 @@
     button.disabled = true;
     try {
       const result = await chrome.runtime.sendMessage({ type: 'DOWNLOAD_VIDEO', source: video.currentSrc || video.src });
-      button.textContent = result?.ok ? (language === 'ar' ? 'أُضيف إلى ARGON' : 'Added to ARGON') : (language === 'ar' ? 'شغّل ARGON أولاً' : 'Open ARGON first');
+      button.textContent = result?.ok ? (language === 'ar' ? 'أُضيف إلى ARGON' : 'Added to ARGON')
+        : result?.error === 'media_tools_required' ? (language === 'ar' ? 'ثبّت FFmpeg من الإعدادات' : 'Install FFmpeg in Settings')
+        : (language === 'ar' ? 'شغّل ARGON أولاً' : 'Open ARGON first');
     } catch { button.textContent = language === 'ar' ? 'أعد تحميل الصفحة' : 'Reload this page'; }
     finally { setTimeout(() => { button.disabled = false; host.style.display = 'none'; }, 2500); }
   });

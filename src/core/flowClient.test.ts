@@ -36,6 +36,15 @@ describe('native Flow client',()=>{
     invoke.mockResolvedValueOnce([{id:'selected',name:'file.pdf',size:5}]);await client.chooseFiles();invoke.mockResolvedValueOnce([]);await client.chooseFiles();
     expect(client.getState().selectedFiles).toHaveLength(1);
   });
+  it('sends a completed download by task ID without changing the manual file selection',async()=>{
+    await vi.waitFor(()=>expect(client.getState().snapshot).not.toBeNull());
+    invoke.mockResolvedValueOnce([{id:'other-file',name:'other.pdf',size:5}]);
+    await client.chooseFiles();
+    invoke.mockResolvedValueOnce(['transfer-id']);
+    await expect(client.sendDownload('completed-task','paired-peer')).resolves.toEqual(['transfer-id']);
+    expect(invoke).toHaveBeenCalledWith('flow_send_download',{taskId:'completed-task',peerId:'paired-peer'});
+    expect(client.getState().selectedFiles.map(file=>file.id)).toEqual(['other-file']);
+  });
   it('keeps native failures visible and does not send arbitrary paths on failure',async()=>{
     await vi.waitFor(()=>expect(client.getState().snapshot).not.toBeNull());invoke.mockRejectedValueOnce('Pair the device first');
     await expect(client.execute('flow_send_text',{peerId:'unknown',text:'exact?token=keep'})).rejects.toBe('Pair the device first');

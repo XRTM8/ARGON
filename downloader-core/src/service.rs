@@ -3,12 +3,14 @@ use crate::{
     model::*,
     resolver::{
         calculate_segments, deduplicate_filename, detect_category, detect_platform,
-        extract_filename_from_url, resolve_universal_link, same_resource_url, sanitize_filename,
+        extract_filename_from_url, is_stream_manifest, resolve_universal_link, same_resource_url,
+        sanitize_filename,
     },
     throttle::ThrottleController,
     transfer::{
         build_http_client, download_segment, is_retryable_network_error, probe_resource,
-        verify_destination_size, SegmentOutcome, SegmentTransfer, TelemetryTracker,
+        range_resource_key, strong_etag, verify_destination_size, SegmentOutcome, SegmentTransfer,
+        TelemetryTracker,
     },
 };
 use reqwest::Client;
@@ -29,6 +31,11 @@ use tokio::{
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub enum MediaDownloadUpdate {
+    Bytes(u64, u64),
+    Finalizing,
+}
 
 #[derive(Clone, Debug)]
 pub struct ResolvedMediaSpec {
@@ -58,7 +65,7 @@ pub trait MediaExtractor: Send + Sync {
         format_spec: String,
         cancel_flag: Arc<AtomicBool>,
         cancel_rx: watch::Receiver<bool>,
-        on_progress: Arc<dyn Fn(u64, u64) + Send + Sync>,
+        on_progress: Arc<dyn Fn(MediaDownloadUpdate) + Send + Sync>,
     ) -> BoxFuture<'static, Result<PathBuf, String>>;
 }
 
@@ -66,6 +73,7 @@ struct ActiveRun {
     run_id: String,
     cancel_flag: Arc<AtomicBool>,
     cancel_tx: watch::Sender<bool>,
+    finished: watch::Receiver<()>,
 }
 
 struct EngineState {
@@ -225,7 +233,12 @@ impl DownloaderService {
 
     pub async fn snapshot(&self) -> DownloaderSnapshot {
         let state = self.state.read().await;
-        let mut tasks: Vec<DownloadTask> = state.tasks.values().cloned().collect();
+        let mut tasks: Vec<DownloadTask> = state
+            .tasks
+            .values()
+            .filter(|task| !task.awaiting_browser_commit)
+            .cloned()
+            .collect();
         tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         let stats = compute_stats(&tasks, self.throttle.get_global_limit());
         DownloaderSnapshot {
@@ -235,6 +248,25 @@ impl DownloaderService {
             speed_history: state.speed_history.clone(),
             updating: self.is_updating(),
         }
+    }
+
+    pub async fn completed_download_path(&self, id: &str) -> Result<PathBuf, String> {
+        let (path, size, roots) = {
+            let state = self.state.read().await;
+            let task = state.tasks.get(id)
+                .filter(|task| task.status == TaskStatus::Completed)
+                .ok_or("download_file_missing")?;
+            let path = task.save_path.as_deref().ok_or("download_file_missing")?;
+            (PathBuf::from(path), task.total_bytes, state.allowed_roots.clone())
+        };
+        let metadata = tokio::fs::symlink_metadata(&path).await.map_err(|_| "download_file_missing")?;
+        let canonical = tokio::fs::canonicalize(path).await.map_err(|_| "download_file_missing")?;
+        if !metadata.is_file() || metadata.len() != size || disk::is_forbidden_system_path(&canonical)
+            || !roots.iter().any(|root| canonical.starts_with(root))
+        {
+            return Err("download_file_missing".into());
+        }
+        Ok(canonical)
     }
 
     pub async fn update_settings(
@@ -347,7 +379,7 @@ impl DownloaderService {
     }
 
     pub async fn add_task(self: &Arc<Self>, req: AddTaskRequest) -> Result<DownloadTask, String> {
-        let task = self.insert_task(req, false).await?;
+        let task = Self::insert_task(&mut *self.state.write().await, req, false, None)?;
         self.save_tasks().await?;
         (self.emit)(DownloadEvent::StateChanged);
         if task.status == TaskStatus::Queued {
@@ -359,7 +391,10 @@ impl DownloaderService {
     pub async fn add_browser_download(
         self: &Arc<Self>,
         payload: BrowserDownloadPayload,
+        media_info: Option<MediaMetadata>,
     ) -> Result<DownloadTask, String> {
+        let id = payload.request_id.as_deref().map(browser_task_id).transpose()?;
+        let queue_id = media_info.as_ref().map(|_| QueueId::Media);
         let req = AddTaskRequest {
             url: payload.url,
             filename: payload.filename,
@@ -368,15 +403,68 @@ impl DownloaderService {
             headers: payload.headers,
             post_body: payload.post_body,
             method: payload.method,
-            media_info: None,
-            queue_id: None,
+            media_info,
+            queue_id,
             mirrors: None,
         };
-        let task = self.insert_task(req, true).await?;
-        // Persist atomically BEFORE returning ok so the browser never cancels on lost memory!
-        self.save_tasks().await?;
-        (self.emit)(DownloadEvent::StateChanged);
-        if task.status == TaskStatus::Queued {
+        let task = {
+            let _persist = self.persist_lock.lock().await;
+            let mut state = self.state.write().await;
+            if let Some(previous) = id.as_ref().and_then(|id| state.tasks.get(id)) {
+                return Ok(previous.clone());
+            }
+            let task = Self::insert_task(&mut state, req, true, id)?;
+            if let Err(error) = self.write_tasks(&state).await {
+                state.tasks.remove(&task.id);
+                return Err(error);
+            }
+            task
+        };
+        if !task.awaiting_browser_commit {
+            (self.emit)(DownloadEvent::StateChanged);
+            self.process_queue().await;
+        }
+        Ok(task)
+    }
+
+    pub async fn browser_handoff(
+        self: &Arc<Self>,
+        request_id: &str,
+        action: &str,
+    ) -> Result<Option<DownloadTask>, String> {
+        let id = browser_task_id(request_id)?;
+        if action == "status" {
+            return Ok(self.state.read().await.tasks.get(&id).cloned());
+        }
+        let task = {
+            let _persist = self.persist_lock.lock().await;
+            let mut state = self.state.write().await;
+            let Some(previous) = state.tasks.get(&id).cloned() else { return Ok(None); };
+            if !previous.awaiting_browser_commit {
+                return Ok(Some(previous));
+            }
+            let task = match action {
+                "commit" => {
+                    let mut task = previous.clone();
+                    task.awaiting_browser_commit = false;
+                    task.status = TaskStatus::Queued;
+                    state.tasks.insert(id.clone(), task.clone());
+                    Some(task)
+                }
+                "abort" => {
+                    state.tasks.remove(&id);
+                    None
+                }
+                _ => return Err("Invalid browser handoff action".into()),
+            };
+            if let Err(error) = self.write_tasks(&state).await {
+                state.tasks.insert(id, previous);
+                return Err(error);
+            }
+            task
+        };
+        if task.is_some() {
+            (self.emit)(DownloadEvent::StateChanged);
             self.process_queue().await;
         }
         Ok(task)
@@ -413,10 +501,11 @@ impl DownloaderService {
         Ok(added)
     }
 
-    async fn insert_task(
-        &self,
+    fn insert_task(
+        state: &mut EngineState,
         req: AddTaskRequest,
         reject_invalid: bool,
+        browser_id: Option<String>,
     ) -> Result<DownloadTask, String> {
         let original_url = req.url.trim().to_owned();
         let resolved = resolve_universal_link(&original_url);
@@ -468,7 +557,6 @@ impl DownloaderService {
             .is_some_and(|m| m.eq_ignore_ascii_case("POST"))
             || req.post_body.is_some();
 
-        let state = &mut *self.state.write().await;
         let existing_names: Vec<String> =
             state.tasks.values().map(|t| t.filename.clone()).collect();
         let raw_name = req
@@ -485,6 +573,7 @@ impl DownloaderService {
             .map(str::to_owned)
             .unwrap_or_else(|| extract_filename_from_url(&resolved.resolved_url));
         let filename = deduplicate_filename(&sanitize_filename(&raw_name), &existing_names);
+        let stream_manifest = is_stream_manifest(&original_url);
 
         let segments = if is_post {
             1
@@ -496,14 +585,15 @@ impl DownloaderService {
 
         let platform = detect_platform(&original_url);
         let queue_id = req.queue_id.unwrap_or_else(|| {
-            if !["direct", "other"].contains(&platform) {
+            if stream_manifest || !["direct", "other"].contains(&platform) {
                 QueueId::Media
             } else {
                 QueueId::Main
             }
         });
 
-        let id = new_id("task");
+        let awaiting_browser_commit = browser_id.is_some();
+        let id = browser_id.unwrap_or_else(|| new_id("task"));
         let task = DownloadTask {
             id: id.clone(),
             url: resolved.resolved_url,
@@ -513,6 +603,8 @@ impl DownloaderService {
             downloaded_bytes: 0,
             status: if error_message.is_some() {
                 TaskStatus::Error
+            } else if awaiting_browser_commit {
+                TaskStatus::Paused
             } else {
                 TaskStatus::Queued
             },
@@ -527,7 +619,7 @@ impl DownloaderService {
             headers,
             post_body: req.post_body,
             method: req.method,
-            category: if !["direct", "other"].contains(&platform) {
+            category: if stream_manifest || !["direct", "other"].contains(&platform) {
                 TaskCategory::Media
             } else {
                 detect_category(&filename)
@@ -542,6 +634,10 @@ impl DownloaderService {
             accept_ranges: false,
             etag: None,
             last_modified: None,
+            range_resource_key: None,
+            resume_notice: None,
+            awaiting_browser_commit,
+            media_finalizing: None,
             probed: false,
             queue_id,
             speed_limit_bytes_per_sec: 0,
@@ -587,7 +683,7 @@ impl DownloaderService {
             if !matches!(
                 task.status,
                 TaskStatus::Paused | TaskStatus::Error | TaskStatus::Queued
-            ) {
+            ) || task.awaiting_browser_commit {
                 return Ok(());
             }
             task.status = TaskStatus::Queued;
@@ -616,6 +712,7 @@ impl DownloaderService {
                 return Ok(());
             };
             task.downloaded_bytes = 0;
+            task.resume_notice = None;
             task.completed_at = None;
             task.error_message = None;
             task.probed = false;
@@ -654,12 +751,15 @@ impl DownloaderService {
             if !matches!(task.status, TaskStatus::Paused | TaskStatus::Error) {
                 return Err("Pause the download before replacing its URL.".into());
             }
-            // Retain existing chunks and progress; re-probe will verify content length
+            // Keep the partial until the new URL has been probed against its saved identity.
             task.probed = false;
             task.original_url = trimmed;
             task.url = resolved.resolved_url;
+            task.active_mirror_index = 0;
             task.media_info = None;
             task.headers = resolved.suggested_headers;
+            task.method = None;
+            task.post_body = None;
             task.error_message = None;
             task.retry_count = 0;
             if let Some(ref mut cs) = task.checksum {
@@ -697,7 +797,7 @@ impl DownloaderService {
         {
             let mut state = self.state.write().await;
             for task in state.tasks.values_mut() {
-                if matches!(task.status, TaskStatus::Paused | TaskStatus::Error) {
+                if !task.awaiting_browser_commit && matches!(task.status, TaskStatus::Paused | TaskStatus::Error) {
                     task.status = TaskStatus::Queued;
                     task.error_message = None;
                     task.retry_count = 0;
@@ -899,6 +999,7 @@ impl DownloaderService {
                 if let Some(t) = state.tasks.get_mut(&candidate.id) {
                     t.status = TaskStatus::Downloading;
                     t.error_message = None;
+                    t.media_finalizing = None;
                 }
                 state.retry_deadlines.remove(&candidate.id);
                 state.force_start_ids.remove(&candidate.id);
@@ -931,8 +1032,13 @@ impl DownloaderService {
             let run_id = uuid::Uuid::new_v4().to_string();
             let cancel_flag = Arc::new(AtomicBool::new(false));
             let (cancel_tx, cancel_rx) = watch::channel(false);
+            let (finished_tx, finished) = watch::channel(());
 
-            {
+            let task = {
+                let state = self.state.read().await;
+                let Some(task) = state.tasks.get(&id).filter(|task| task.status == TaskStatus::Downloading) else {
+                    return;
+                };
                 let mut runs = self.active_runs.lock().await;
                 runs.insert(
                     id.clone(),
@@ -940,25 +1046,35 @@ impl DownloaderService {
                         run_id: run_id.clone(),
                         cancel_flag: cancel_flag.clone(),
                         cancel_tx,
+                        finished,
                     },
                 );
-            }
+                task.clone()
+            };
 
             let service = self.clone();
             tokio::spawn(async move {
                 let outcome = service
                     .execute_download(task, settings, &run_id, cancel_flag.clone(), cancel_rx)
                     .await;
+                drop(finished_tx);
                 service.finalize_run(&id, &run_id, outcome).await;
             });
         })
     }
 
     async fn cancel_run(&self, id: &str) {
-        let old = self.active_runs.lock().await.remove(id);
-        if let Some(run) = old {
+        let (run_id, mut finished) = {
+            let runs = self.active_runs.lock().await;
+            let Some(run) = runs.get(id) else { return; };
             run.cancel_flag.store(true, Ordering::Release);
             let _ = run.cancel_tx.send(true);
+            (run.run_id.clone(), run.finished.clone())
+        };
+        let _ = finished.changed().await;
+        let mut runs = self.active_runs.lock().await;
+        if runs.get(id).is_some_and(|run| run.run_id == run_id) {
+            runs.remove(id);
         }
     }
 
@@ -988,12 +1104,16 @@ impl DownloaderService {
 
         // 1. Optional platform media resolution / muxing
         let platform = detect_platform(&task.original_url);
-        if !["direct", "other"].contains(&platform) {
+        let stream_manifest = is_stream_manifest(&task.original_url);
+        let selected_mux = task.media_info.as_ref()
+            .filter(|media| media.use_ytdlp_mux == Some(true))
+            .and_then(|media| media.selected_format_id.clone());
+        let explicit_mux = stream_manifest || selected_mux.is_some();
+        if explicit_mux && !self.media.as_ref().is_some_and(|media| media.supports_hd_mux()) {
+            return Err("media_tools_required".into());
+        }
+        if explicit_mux || !["direct", "other"].contains(&platform) {
             if let Some(ref media_hook) = self.media {
-                let explicit_mux = task
-                    .media_info
-                    .as_ref()
-                    .is_some_and(|m| m.use_ytdlp_mux == Some(true) && m.selected_format_id.is_some());
                 let audio_only = task
                     .media_info
                     .as_ref()
@@ -1010,15 +1130,10 @@ impl DownloaderService {
                     && media_hook.supports_hd_mux();
 
                 if explicit_mux || auto_hd_mux {
-                    let fmt = if explicit_mux {
-                        task.media_info
-                            .as_ref()
-                            .and_then(|m| m.selected_format_id.clone())
-                            .unwrap_or_default()
-                    } else {
+                    let fmt = selected_mux.unwrap_or_else(|| {
                         "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
                             .to_owned()
-                    };
+                    });
                     if auto_hd_mux && !task.custom_filename && !task.file_prepared {
                         if let Ok(meta) = crate::social::resolve_social_media(
                             &self.http_client,
@@ -1031,7 +1146,7 @@ impl DownloaderService {
                             task.filename =
                                 self.unique_filename(&task_id, &meta.suggested_filename).await;
                             task.category = detect_category(&task.filename);
-                            self.sync_task_metadata(&task).await;
+                            self.sync_task_metadata(&task).await?;
                         }
                     }
                     let dest = self.resolve_task_target_path(&task, &settings);
@@ -1046,15 +1161,32 @@ impl DownloaderService {
                             fmt,
                             cancel_flag.clone(),
                             cancel_rx,
-                            Arc::new(move |dl, total| {
-                                svc_prog.telemetry.record_segment_progress(&tid, 0, dl, total);
+                            Arc::new(move |update| match update {
+                                MediaDownloadUpdate::Bytes(dl, total) => {
+                                    svc_prog.telemetry.record_segment_progress(&tid, 0, dl, total);
+                                }
+                                MediaDownloadUpdate::Finalizing => {
+                                    if let Ok(mut state) = svc_prog.state.try_write() {
+                                        if let Some(task) = state.tasks.get_mut(&tid) {
+                                            task.media_finalizing = Some(true);
+                                        }
+                                    }
+                                    (svc_prog.emit)(DownloadEvent::StateChanged);
+                                }
                             }),
                         )
                         .await?;
                     if !self.is_current_run(&task_id, run_id, &cancel_flag).await {
                         return Err("CANCELLED".into());
                     }
-                    let size = tokio::fs::metadata(&saved).await.map(|m| m.len()).unwrap_or(0);
+                    let size = tokio::fs::metadata(&saved).await
+                        .map_err(|error| format!("Cannot read finished media file: {error}"))?.len();
+                    if size == 0 {
+                        return Err("Media tool produced an empty file".into());
+                    }
+                    if let Some(parent) = saved.parent() {
+                        self.allow_root(parent.to_path_buf()).await;
+                    }
                     task.save_path = Some(saved.to_string_lossy().into_owned());
                     task.filename = saved
                         .file_name()
@@ -1180,19 +1312,26 @@ impl DownloaderService {
         }
 
         let probe_len = probe.content_length.unwrap_or(0);
-        let same_resource = !is_post
+        let resource_url = probe.final_url.as_deref();
+        let resource_key = resource_url.map(range_resource_key);
+        let use_range = !is_post
             && probe.accept_ranges
-            && (
-                // When refreshing an expired URL or resuming: if Content-Length matches and server accepts ranges, resume cleanly
-                (task.total_bytes > 0 && task.total_bytes == probe_len)
-                || (task.etag.is_some() && probe.etag.as_ref() == task.etag.as_ref())
-                || (task.last_modified.is_some() && task.last_modified == probe.last_modified)
-            );
-
-        let resume = task.downloaded_bytes > 0 && same_resource;
+            && probe_len > 0
+            && resource_url.is_some()
+            && probe.etag.as_deref().and_then(strong_etag).is_some();
+        let resume = use_range
+            && task.file_prepared
+            && task.accept_ranges
+            && task.downloaded_bytes > 0
+            && task.total_bytes == probe_len
+            && task.range_resource_key == resource_key
+            && task.etag == probe.etag;
         if !resume {
+            if task.downloaded_bytes > 0 {
+                task.resume_notice = Some("resource-unverified".into());
+            }
             task.downloaded_bytes = 0;
-            let segs = if probe.accept_ranges && !is_post {
+            let segs = if use_range {
                 task.requested_segments
             } else {
                 1
@@ -1201,9 +1340,10 @@ impl DownloaderService {
         }
 
         task.total_bytes = probe_len;
-        task.accept_ranges = probe.accept_ranges && !is_post;
+        task.accept_ranges = use_range;
         task.etag = probe.etag.clone();
         task.last_modified = probe.last_modified.clone();
+        task.range_resource_key = resource_key.filter(|_| use_range);
         task.probed = true;
         if !task.custom_filename && !task.file_prepared {
             if let Some(ref suggested) = probe.suggested_filename {
@@ -1231,7 +1371,7 @@ impl DownloaderService {
             .to_string_lossy()
             .into_owned();
 
-        self.sync_task_metadata(&task).await;
+        self.sync_task_metadata(&task).await?;
 
         let initial_pairs: Vec<(u32, u64)> =
             task.chunks.iter().map(|c| (c.index, c.downloaded)).collect();
@@ -1241,17 +1381,17 @@ impl DownloaderService {
         // 4. Execute transfer (Ranged parallel with work-stealing, falling back to single stream on RANGE_UNSUPPORTED)
         let transfer_url = probe
             .final_url
+            .as_ref()
             .filter(|u| same_resource_url(u, &effective_url))
-            .unwrap_or(effective_url);
+            .map_or(effective_url.as_str(), String::as_str);
 
-        let use_range = task.accept_ranges && task.total_bytes > 0;
         if use_range {
             match self
                 .run_chunk_pool(
                     &mut task,
-                    &transfer_url,
+                    transfer_url,
                     &final_path,
-                    true,
+                    resource_url,
                     probe.content_length,
                     settings.dynamic_work_stealing,
                     pacer.clone(),
@@ -1266,14 +1406,17 @@ impl DownloaderService {
                         return Err("CANCELLED".into());
                     }
                     task.accept_ranges = false;
+                    task.range_resource_key = None;
+                    task.resume_notice = Some("range-rejected".into());
                     task.downloaded_bytes = 0;
                     task.chunks = calculate_segments(0, 1);
-                    self.sync_task_metadata(&task).await;
+                    self.sync_task_metadata(&task).await?;
+                    self.telemetry.init_task(&task_id, task.total_bytes, &[(0, 0)]);
                     self.run_chunk_pool(
                         &mut task,
-                        &transfer_url,
+                        transfer_url,
                         &final_path,
-                        false,
+                        None,
                         probe.content_length,
                         false,
                         pacer,
@@ -1287,9 +1430,9 @@ impl DownloaderService {
         } else {
             self.run_chunk_pool(
                 &mut task,
-                &transfer_url,
+                transfer_url,
                 &final_path,
-                false,
+                None,
                 probe.content_length,
                 false,
                 pacer,
@@ -1346,7 +1489,7 @@ impl DownloaderService {
         task: &mut DownloadTask,
         url: &str,
         final_path: &Path,
-        use_range: bool,
+        resource_url: Option<&str>,
         expected_total: Option<u64>,
         dynamic_work_stealing: bool,
         pacer: Arc<crate::throttle::TaskPacer>,
@@ -1354,10 +1497,8 @@ impl DownloaderService {
         cancel_rx: watch::Receiver<bool>,
     ) -> Result<(), String> {
         let disk = CoalescedDiskWriter::open(final_path)?;
-        let validator = task
-            .etag
-            .clone()
-            .or_else(|| task.last_modified.clone());
+        let use_range = resource_url.is_some();
+        let validator = task.etag.clone();
 
         // Attempt-local cancel token so one failing sibling aborts the rest cleanly on RANGE_UNSUPPORTED/error.
         let attempt_flag = Arc::new(AtomicBool::new(false));
@@ -1387,6 +1528,7 @@ impl DownloaderService {
             let task_id = task.id.clone();
             let url = url.to_owned();
             let validator = validator.clone();
+            let resource_url = resource_url.map(str::to_owned);
             let headers = task.headers.clone();
             let method = task.method.clone();
             let post_body = task.post_body.clone();
@@ -1403,6 +1545,7 @@ impl DownloaderService {
                         use_range,
                         expected_total,
                         validator: validator.as_deref(),
+                        resource_url: resource_url.as_deref(),
                         custom_headers: Some(&headers),
                         method: method.as_deref(),
                         post_body: post_body.as_deref(),
@@ -1466,7 +1609,7 @@ impl DownloaderService {
                             };
                             next_chunk_index += 1;
                             task.chunks.push(stolen.clone());
-                            self.sync_task_metadata(task).await;
+                            let _ = self.sync_task_metadata(task).await;
                             spawn_chunk(&mut join_set, &stolen);
                         }
                     }
@@ -1487,27 +1630,31 @@ impl DownloaderService {
         forwarder.abort();
 
         // Always sync flushed bytes on disk and persist latest chunk progress before returning.
-        if errors.is_empty() {
-            disk.sync().await?;
-            Ok(())
-        } else {
-            let _ = disk.flush().await;
-            self.sync_chunks_from_telemetry(&mut task.chunks, &task.id);
-            {
-                let mut state = self.state.write().await;
-                if let Some(t) = state.tasks.get_mut(&task.id) {
-                    t.chunks = task.chunks.clone();
-                    t.downloaded_bytes = t.chunks.iter().map(|c| c.downloaded).sum();
-                }
-            }
-            let cause = errors
-                .iter()
-                .find(|e| e.contains("RANGE_UNSUPPORTED"))
-                .or_else(|| errors.iter().find(|e| !e.contains("CANCELLED")))
-                .unwrap_or(&errors[0])
-                .clone();
-            Err(cause)
+        let disk_result = disk.sync().await;
+        if errors.is_empty() && disk_result.is_ok() {
+            return Ok(());
         }
+        if disk_result.is_ok() {
+            self.sync_chunks_from_telemetry(&mut task.chunks, &task.id);
+        } else {
+            task.range_resource_key = None;
+        }
+        {
+            let mut state = self.state.write().await;
+            if let Some(t) = state.tasks.get_mut(&task.id) {
+                t.range_resource_key = task.range_resource_key.clone();
+                t.chunks = task.chunks.clone();
+                t.downloaded_bytes = t.chunks.iter().map(|c| c.downloaded).sum();
+            }
+        }
+        disk_result?;
+        let cause = errors
+            .iter()
+            .find(|e| e.contains("RANGE_UNSUPPORTED"))
+            .or_else(|| errors.iter().find(|e| !e.contains("CANCELLED")))
+            .unwrap_or(&errors[0])
+            .clone();
+        Err(cause)
     }
 
     fn sync_chunks_from_telemetry(&self, chunks: &mut [DownloadChunk], task_id: &str) {
@@ -1551,7 +1698,7 @@ impl DownloaderService {
         }
     }
 
-    async fn sync_task_metadata(&self, snapshot_task: &DownloadTask) {
+    async fn sync_task_metadata(&self, snapshot_task: &DownloadTask) -> Result<(), String> {
         {
             let mut state = self.state.write().await;
             if let Some(t) = state.tasks.get_mut(&snapshot_task.id) {
@@ -1564,14 +1711,17 @@ impl DownloaderService {
                 t.accept_ranges = snapshot_task.accept_ranges;
                 t.etag = snapshot_task.etag.clone();
                 t.last_modified = snapshot_task.last_modified.clone();
+                t.range_resource_key = snapshot_task.range_resource_key.clone();
+                t.resume_notice = snapshot_task.resume_notice.clone();
                 t.probed = snapshot_task.probed;
                 t.file_prepared = snapshot_task.file_prepared;
                 t.category = snapshot_task.category.clone();
                 t.headers = snapshot_task.headers.clone();
             }
         }
-        let _ = self.save_tasks().await;
+        self.save_tasks().await?;
         (self.emit)(DownloadEvent::StateChanged);
+        Ok(())
     }
 
     async fn finalize_run(
@@ -1582,7 +1732,9 @@ impl DownloaderService {
     ) {
         let still_current = {
             let mut runs = self.active_runs.lock().await;
-            if runs.get(id).is_some_and(|r| r.run_id == run_id) {
+            if runs.get(id).is_some_and(|r| {
+                r.run_id == run_id && !r.cancel_flag.load(Ordering::Acquire)
+            }) {
                 runs.remove(id);
                 true
             } else {
@@ -1604,6 +1756,7 @@ impl DownloaderService {
             if let Some(task) = state.tasks.get_mut(id) {
                 task.speed_bytes_per_sec = 0.0;
                 task.eta_seconds = 0;
+                task.media_finalizing = None;
                 if task.status == TaskStatus::Downloading {
                     match outcome {
                         Ok(done) => {
@@ -1819,12 +1972,14 @@ impl DownloaderService {
 
     async fn save_tasks(&self) -> Result<(), String> {
         let _guard = self.persist_lock.lock().await;
-        let bytes = {
-            let state = self.state.read().await;
-            let mut list: Vec<&DownloadTask> = state.tasks.values().collect();
-            list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            serde_json::to_vec(&list).map_err(|e| e.to_string())?
-        };
+        let state = self.state.read().await;
+        self.write_tasks(&state).await
+    }
+
+    async fn write_tasks(&self, state: &EngineState) -> Result<(), String> {
+        let mut list: Vec<&DownloadTask> = state.tasks.values().collect();
+        list.sort_by_key(|task| std::cmp::Reverse(task.created_at));
+        let bytes = serde_json::to_vec(&list).map_err(|error| error.to_string())?;
         disk::save_json_atomic(self.config.state_dir.join("tasks.json"), bytes).await
     }
 
@@ -1848,6 +2003,12 @@ impl DownloaderService {
         }
         let _ = self.save_tasks().await;
     }
+}
+
+fn browser_task_id(request_id: &str) -> Result<String, String> {
+    uuid::Uuid::parse_str(request_id)
+        .map(|id| format!("browser-{id}"))
+        .map_err(|_| "Invalid browser handoff request ID".into())
 }
 
 fn load_json_opt<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
@@ -2011,6 +2172,78 @@ mod tests {
         .expect("download timed out")
     }
 
+    struct TestMediaExtractor;
+
+    impl MediaExtractor for TestMediaExtractor {
+        fn supports_hd_mux(&self) -> bool { true }
+
+        fn resolve_media(
+            &self,
+            _url: String,
+            _audio_only: bool,
+            _format_id: Option<String>,
+        ) -> BoxFuture<'static, Result<ResolvedMediaSpec, String>> {
+            Box::pin(async { Err("Expected the media downloader".into()) })
+        }
+
+        fn download_muxed_media(
+            &self,
+            _task_id: String,
+            url: String,
+            destination_path: PathBuf,
+            format_spec: String,
+            _cancel_flag: Arc<AtomicBool>,
+            _cancel_rx: watch::Receiver<bool>,
+            on_progress: Arc<dyn Fn(MediaDownloadUpdate) + Send + Sync>,
+        ) -> BoxFuture<'static, Result<PathBuf, String>> {
+            Box::pin(async move {
+                if url.ends_with("/stream") && format_spec != "selected-quality" {
+                    return Err("The selected media quality was lost".into());
+                }
+                let target = destination_path.with_extension("mp4");
+                let parent = target.parent().ok_or("Missing destination directory")?;
+                tokio::fs::create_dir_all(parent).await.map_err(|error| error.to_string())?;
+                on_progress(MediaDownloadUpdate::Finalizing);
+                tokio::fs::write(&target, b"completed mux").await.map_err(|error| error.to_string())?;
+                Ok(target)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_urls_and_mime_identified_streams_reach_the_media_downloader() {
+        let root = TempDir::new();
+        let config = new_service(&root).await;
+        config.shutdown().await;
+        let service = DownloaderService::new(config.config.clone(), Some(Arc::new(TestMediaExtractor)), |_| {})
+            .await.unwrap();
+        for (path, media_info) in [
+            ("/film.m3u8", None),
+            ("/stream", Some(MediaMetadata {
+                selected_format_id: Some("selected-quality".into()),
+                use_ytdlp_mux: Some(true),
+                ..Default::default()
+            })),
+        ] {
+            let task = service.add_browser_download(BrowserDownloadPayload {
+                url: format!("http://127.0.0.1{path}"),
+                filename: None,
+                headers: None,
+                method: None,
+                post_body: None,
+                request_id: None,
+                stream_kind: None,
+            }, media_info).await.unwrap();
+            let done = wait_settled(&service, &task.id).await;
+            assert_eq!(done.status, TaskStatus::Completed, "{:?}", done.error_message);
+            assert_eq!(done.total_bytes, b"completed mux".len() as u64);
+            assert_eq!(done.media_finalizing, None);
+            let path = service.completed_download_path(&task.id).await.unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), b"completed mux");
+        }
+        service.shutdown().await;
+    }
+
     #[tokio::test]
     async fn segmented_download_persists_verifies_sha256_and_survives_restart() {
         let root = TempDir::new();
@@ -2055,12 +2288,14 @@ mod tests {
                 method: None,
                 post_body: None,
                 request_id: None,
-            })
+                stream_kind: None,
+            }, None)
             .await
             .unwrap();
         let done = wait_settled(&svc, &task.id).await;
         assert_eq!(done.status, TaskStatus::Completed, "{:?}", done.error_message);
         assert_eq!(done.downloaded_bytes, data.len() as u64);
+        assert!(svc.completed_download_path(&task.id).await.unwrap().is_file());
         let verified = svc.verify_task_hash(&task.id).await.unwrap().unwrap();
         assert_eq!(verified, expected_hash);
         svc.shutdown().await;
@@ -2071,6 +2306,65 @@ mod tests {
         assert_eq!(snap2.tasks.len(), 1);
         assert_eq!(snap2.tasks[0].status, TaskStatus::Completed);
         svc2.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn staged_browser_handoff_survives_restart_and_commits_only_once() {
+        let root = TempDir::new();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let server = spawn_server(move |_| {
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            http_resp("200 OK", "Content-Length: 5\r\n", b"argon")
+        }).await;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let payload = BrowserDownloadPayload {
+            url: format!("{}/file.bin", server.base_url),
+            filename: None,
+            headers: None,
+            method: None,
+            post_body: None,
+            request_id: Some(request_id.clone()),
+            stream_kind: None,
+        };
+        let svc = new_service(&root).await;
+        let (first, retry) = tokio::join!(
+            svc.add_browser_download(payload.clone(), None),
+            svc.add_browser_download(payload.clone(), None),
+        );
+        let first = first.unwrap();
+        assert_eq!(first.id, retry.unwrap().id);
+        assert!(first.awaiting_browser_commit);
+        svc.resume_all().await.unwrap();
+        assert!(svc.snapshot().await.tasks.is_empty());
+        svc.shutdown().await;
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+
+        let svc = new_service(&root).await;
+        let prepared = svc.browser_handoff(&request_id, "status").await.unwrap().unwrap();
+        assert!(prepared.awaiting_browser_commit);
+        assert_eq!(first.id, prepared.id);
+        let (commit, retry) = tokio::join!(
+            svc.browser_handoff(&request_id, "commit"),
+            svc.browser_handoff(&request_id, "commit"),
+        );
+        for task in [commit, retry] {
+            let task = task.unwrap().unwrap();
+            assert_eq!(task.id, first.id);
+            assert!(!task.awaiting_browser_commit);
+        }
+        let done = wait_settled(&svc, &first.id).await;
+        assert_eq!(done.status, TaskStatus::Completed, "{:?}", done.error_message);
+        assert_eq!(svc.snapshot().await.tasks.len(), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+
+        let abandoned_id = uuid::Uuid::new_v4().to_string();
+        svc.add_browser_download(BrowserDownloadPayload {
+            request_id: Some(abandoned_id.clone()), ..payload
+        }, None).await.unwrap();
+        assert!(svc.browser_handoff(&abandoned_id, "abort").await.unwrap().is_none());
+        assert!(svc.browser_handoff(&abandoned_id, "status").await.unwrap().is_none());
+        svc.shutdown().await;
     }
 
     #[tokio::test]
@@ -2151,15 +2445,21 @@ mod tests {
     async fn range_unsupported_falls_back_cleanly_to_single_stream() {
         let root = TempDir::new();
         let data = b"hello-fallback-stream";
+        let ignored_range = Arc::new(AtomicBool::new(false));
+        let ignored_range_in_server = ignored_range.clone();
         let srv = spawn_server(move |req| {
-            if req.contains("Range: bytes=0-0") {
+            let req = req.to_ascii_lowercase();
+            if req.contains("range: bytes=0-0") {
                 // Probe says 206 supported, then real segment returns 200 OK ignoring Range!
                 http_resp(
                     "206 Partial Content",
-                    &format!("Content-Length: 1\r\nContent-Range: bytes 0-0/{}\r\n", data.len()),
+                    &format!("Content-Length: 1\r\nContent-Range: bytes 0-0/{}\r\nETag: \"probe\"\r\n", data.len()),
                     &data[0..1],
                 )
             } else {
+                if req.contains("range: bytes=") {
+                    ignored_range_in_server.store(true, Ordering::SeqCst);
+                }
                 http_resp(
                     "200 OK",
                     &format!("Content-Length: {}\r\n", data.len()),
@@ -2187,6 +2487,7 @@ mod tests {
             .unwrap();
         let done = wait_settled(&svc, &task.id).await;
         assert_eq!(done.status, TaskStatus::Completed, "{:?}", done.error_message);
+        assert!(ignored_range.load(Ordering::SeqCst));
         assert!(!done.accept_ranges);
         assert_eq!(std::fs::read(done.save_path.unwrap()).unwrap(), data);
         svc.shutdown().await;
@@ -2322,9 +2623,50 @@ mod tests {
 
     #[tokio::test]
     async fn pause_and_resume_preserves_partial_bytes_without_corruption() {
+        assert_safe_resume(ResumeScenario::Unchanged).await;
+    }
+
+    #[tokio::test]
+    async fn changed_etag_restarts_even_when_the_size_matches() {
+        assert_safe_resume(ResumeScenario::NewVersion).await;
+    }
+
+    #[tokio::test]
+    async fn replacement_url_restarts_even_when_the_etag_and_size_match() {
+        assert_safe_resume(ResumeScenario::Replacement).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_partial_without_identity_restarts_after_upgrade() {
+        assert_safe_resume(ResumeScenario::Legacy).await;
+    }
+
+    #[tokio::test]
+    async fn renewed_link_that_resolves_to_the_same_file_preserves_the_partial() {
+        assert_safe_resume(ResumeScenario::RenewedLink).await;
+    }
+
+    #[derive(PartialEq, Eq)]
+    enum ResumeScenario {
+        Unchanged,
+        NewVersion,
+        Replacement,
+        Legacy,
+        RenewedLink,
+    }
+
+    async fn assert_safe_resume(scenario: ResumeScenario) {
+        let change_etag = scenario == ResumeScenario::NewVersion;
+        let replace_url = scenario == ResumeScenario::Replacement;
         let root = TempDir::new();
         let data: Vec<u8> = (0..(256 * 1024)).map(|i| ((i * 31) % 251) as u8).collect();
         let data_clone = data.clone();
+        let version_changed = Arc::new(AtomicBool::new(false));
+        let server_version_changed = version_changed.clone();
+        let resumed_at_start = Arc::new(AtomicBool::new(false));
+        let server_resumed_at_start = resumed_at_start.clone();
+        let resuming = Arc::new(AtomicBool::new(false));
+        let server_resuming = resuming.clone();
         let stalled_once = Arc::new(AtomicBool::new(false));
         let (tx_started, mut rx_started) = tokio::sync::watch::channel(false);
         let (tx_release, rx_release) = tokio::sync::watch::channel(false);
@@ -2336,7 +2678,10 @@ mod tests {
                 let Ok((mut socket, _)) = listener.accept().await else {
                     break;
                 };
-                let payload = data_clone.clone();
+                let mut payload = data_clone.clone();
+                let version_changed = server_version_changed.load(Ordering::SeqCst);
+                let resuming = server_resuming.load(Ordering::SeqCst);
+                let resumed_at_start = server_resumed_at_start.clone();
                 let stalled = stalled_once.clone();
                 let tx_started = tx_started.clone();
                 let mut rx_release = rx_release.clone();
@@ -2349,6 +2694,19 @@ mod tests {
                         req.extend_from_slice(&buf[..n]);
                     }
                     let req_str = String::from_utf8_lossy(&req);
+                    if req_str.starts_with("GET /renewed?token=fresh ") {
+                        let _ = socket.write_all(&http_resp(
+                            "302 Found",
+                            "Content-Length: 0\r\nLocation: /partial.bin\r\n",
+                            b"",
+                        )).await;
+                        return;
+                    }
+                    let replacement = req_str.starts_with("GET /partial.bin?file=other ");
+                    let etag = if version_changed { "\"p2\"" } else { "\"p1\"" };
+                    if version_changed || replacement {
+                        payload.iter_mut().for_each(|byte| *byte = !*byte);
+                    }
                     let range = req_str.lines().find_map(|l| {
                         l.to_ascii_lowercase()
                             .strip_prefix("range: bytes=")
@@ -2358,7 +2716,7 @@ mod tests {
                         let _ = socket
                             .write_all(&http_resp(
                                 "200 OK",
-                                &format!("Content-Length: {}\r\nETag: \"p1\"\r\n", payload.len()),
+                                &format!("Content-Length: {}\r\nETag: {etag}\r\n", payload.len()),
                                 &payload,
                             ))
                             .await;
@@ -2367,6 +2725,9 @@ mod tests {
                     let (s_str, e_str) = r.split_once('-').unwrap();
                     let s: usize = s_str.parse().unwrap();
                     let e: usize = e_str.parse().unwrap();
+                    if resuming && s == 0 && e > 0 {
+                        resumed_at_start.store(true, Ordering::SeqCst);
+                    }
                     if s > 0 && e - s + 1 > 65536 && !stalled.swap(true, Ordering::SeqCst) {
                         // Hold the very first chunk-1 request open while chunk 0 finishes and test pauses.
                         let _ = tx_started.send(true);
@@ -2377,7 +2738,7 @@ mod tests {
                         .write_all(&http_resp(
                             "206 Partial Content",
                             &format!(
-                                "Content-Length: {}\r\nContent-Range: bytes {s}-{e}/{}\r\nETag: \"p1\"\r\n",
+                                "Content-Length: {}\r\nContent-Range: bytes {s}-{e}/{}\r\nETag: {etag}\r\n",
                                 e - s + 1,
                                 payload.len()
                             ),
@@ -2431,11 +2792,40 @@ mod tests {
         assert!(paused.downloaded_bytes > 0);
         assert!(paused.downloaded_bytes < data.len() as u64);
 
-        svc.resume_task(&task.id, false).await.unwrap();
+        let svc = if scenario == ResumeScenario::Legacy {
+            let tasks_path = svc.config.state_dir.join("tasks.json");
+            svc.shutdown().await;
+            let mut tasks: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(&tasks_path).unwrap()).unwrap();
+            assert!(tasks[0].as_object_mut().unwrap().remove("rangeResourceKey").is_some());
+            std::fs::write(&tasks_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+            new_service(&root).await
+        } else {
+            svc
+        };
+        version_changed.store(change_etag, Ordering::SeqCst);
+        resuming.store(true, Ordering::SeqCst);
+        if replace_url {
+            svc.refresh_task_url(&task.id, format!("{base_url}/partial.bin?file=other"))
+                .await
+                .unwrap();
+        } else if scenario == ResumeScenario::RenewedLink {
+            svc.refresh_task_url(&task.id, format!("{base_url}/renewed?token=fresh"))
+                .await
+                .unwrap();
+        } else {
+            svc.resume_task(&task.id, false).await.unwrap();
+        }
         let done = wait_settled(&svc, &task.id).await;
         assert_eq!(done.status, TaskStatus::Completed, "{:?}", done.error_message);
         assert_eq!(done.downloaded_bytes, data.len() as u64);
-        assert_eq!(std::fs::read(done.save_path.unwrap()).unwrap(), data);
+        assert_eq!(resumed_at_start.load(Ordering::SeqCst), change_etag || replace_url || scenario == ResumeScenario::Legacy);
+        let expected = if change_etag || replace_url {
+            data.into_iter().map(|byte| !byte).collect()
+        } else {
+            data
+        };
+        let saved = std::fs::read(done.save_path.unwrap()).unwrap();
+        assert_eq!(Sha256::digest(saved), Sha256::digest(expected));
         srv_task.abort();
         svc.shutdown().await;
     }
@@ -2563,6 +2953,10 @@ mod tests {
             accept_ranges: true,
             etag: None,
             last_modified: None,
+            range_resource_key: None,
+            resume_notice: None,
+            awaiting_browser_commit: false,
+            media_finalizing: None,
             probed: true,
             queue_id: QueueId::Main,
             speed_limit_bytes_per_sec: 0,

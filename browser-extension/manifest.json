@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ARGON Integration",
-  "version": "2.4.2",
+  "version": "2.5.0",
   "description": "Send downloads to ARGON, choose files from a page, and control automatic capture per website.",
   "minimum_chrome_version": "109",
   "author": "XRTM8",
@@ -9,6 +9,7 @@
     "contextMenus",
     "downloads",
     "storage",
+    "alarms",
     "notifications",
     "webRequest",
     "activeTab",

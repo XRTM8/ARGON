@@ -12,7 +12,7 @@ pub use model::{
     DownloaderSnapshot, MediaMetadata, QueueId, TaskCategory, TaskStatus, UrlProbeResult,
     DEFAULT_USER_AGENT,
 };
-pub use service::{BoxFuture, DownloaderService, MediaExtractor, ResolvedMediaSpec};
+pub use service::{BoxFuture, DownloaderService, MediaDownloadUpdate, MediaExtractor, ResolvedMediaSpec};
 pub use transfer::{
     build_headers, build_http_client, dual_hash_id, parse_content_range, probe_resource,
     SegmentOutcome, SegmentTransfer, TelemetryTracker,

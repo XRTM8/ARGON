@@ -79,6 +79,17 @@ pub async fn flow_connect(
     service(&app, &state).await?.connect(&address).await
 }
 #[tauri::command]
+pub async fn flow_connect_invited(
+    app: AppHandle,
+    state: tauri::State<'_, FlowRuntime>,
+    address: String,
+    peer_id: String,
+    expires_at: u64,
+) -> Result<(), String> {
+    service(&app, &state).await?.connect_invited(&address, peer_id, expires_at).await
+}
+
+#[tauri::command]
 pub async fn flow_pair_peer(
     app: AppHandle,
     state: tauri::State<'_, FlowRuntime>,
@@ -138,6 +149,19 @@ pub async fn flow_send_files(
         .send_files(&peer_id, file_ids)
         .await
 }
+#[tauri::command]
+pub async fn flow_send_download(
+    app: AppHandle,
+    state: tauri::State<'_, FlowRuntime>,
+    peer_id: String,
+    task_id: String,
+) -> Result<Vec<String>, String> {
+    let path = crate::ensure_downloader(&app).await?.completed_download_path(&task_id).await?;
+    let engine = service(&app, &state).await?;
+    let files = engine.select_files(vec![path]).await?;
+    engine.send_files(&peer_id, files.into_iter().map(|file| file.id).collect()).await
+}
+
 #[tauri::command]
 pub async fn flow_send_text(
     app: AppHandle,

@@ -50,6 +50,20 @@ describe('confirmed browser handoff', () => {
     expect(privateReply).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  it('passes a detected HLS type to ARGON even if the URL has no playlist extension', async () => {
+    const source = 'https://cdn.example.com/playlist?token=keep%2Bexact';
+    fetchMock.mockImplementation(async (url) => response(url.endsWith('/ping')
+      ? { status: 'ok', app: 'ARGON', capabilities: ['persisted-handoff', 'ffmpeg-hls'] }
+      : { status: 'accepted' }));
+    await import('../../browser-extension/background.js');
+    listeners.headers({ tabId: 7, url: source, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+    await vi.waitFor(() => expect(session['media:7']).toHaveLength(1));
+    const respond = vi.fn();
+    listeners.message({ type: 'DOWNLOAD_VIDEO', source }, { id: 'test-extension', tab: { id: 7, url: 'https://example.com/video' } }, respond);
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledWith({ ok: true }));
+    const [, options] = fetchMock.mock.calls.find(([url]) => url.endsWith('/add'));
+    expect(JSON.parse(options.body)).toMatchObject({ url: source, streamKind: 'HLS' });
+  });
   it('pauses before dispatch, then cancels only after ARGON acknowledges a saved task', async () => {
     const order = [];
     chromeMock.downloads.pause.mockImplementation(async () => { order.push('pause'); });
@@ -76,6 +90,47 @@ describe('confirmed browser handoff', () => {
     await import('../../browser-extension/background.js');
     await vi.waitFor(() => expect(chromeMock.downloads.resume).toHaveBeenCalledWith(42));
     expect(chromeMock.downloads.cancel).not.toHaveBeenCalled();
+  });
+  it('reconciles lost prepare and commit replies using a single persisted request ID', async () => {
+    const ids = [];
+    let status = 'missing';
+    const order = [];
+    chromeMock.downloads.cancel.mockImplementation(async () => { order.push('cancel'); });
+    fetchMock.mockImplementation(async (url, options) => {
+      if (url.endsWith('/ping')) return response({ status: 'ok', app: 'ARGON', capabilities: ['persisted-handoff', 'staged-handoff'] });
+      ids.push(JSON.parse(options.body).requestId);
+      if (url.endsWith('/add')) {
+        expect(item.paused).toBe(true);
+        status = 'prepared';
+        throw new Error('prepare reply lost');
+      }
+      if (url.endsWith('/commit')) {
+        status = 'accepted';
+        order.push('commit');
+        throw new Error('commit reply lost');
+      }
+      return response({ status });
+    });
+    await import('../../browser-extension/background.js');
+    listeners.created({ ...item });
+    await vi.waitFor(() => expect(order).toEqual(['commit', 'cancel']));
+    expect(ids[0]).toMatch(/^[\da-f-]{36}$/);
+    expect(new Set(ids).size).toBe(1);
+    expect(chromeMock.downloads.resume).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(local['handoff:42']).toBeUndefined());
+  });
+  it('resumes the browser and aborts after the app rejects a staged write', async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (url.endsWith('/ping')) return response({ status: 'ok', app: 'ARGON', capabilities: ['persisted-handoff', 'staged-handoff'] });
+      if (url.endsWith('/add')) return response({ error: 'handoff_not_saved' }, false);
+      return response({ status: 'missing' });
+    });
+    await import('../../browser-extension/background.js');
+    listeners.created({ ...item });
+    await vi.waitFor(() => expect(chromeMock.downloads.resume).toHaveBeenCalledWith(42));
+    await vi.waitFor(() => expect(local['handoff:42']).toBeUndefined());
+    expect(chromeMock.downloads.cancel).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/commit'))).toBe(false);
   });
   it('retains detected media across service-worker suspension', async () => {
     await import('../../browser-extension/background.js');

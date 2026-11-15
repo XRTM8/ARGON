@@ -1,7 +1,7 @@
 {
   "name": "argon-downloader",
   "private": true,
-  "version": "2.4.2",
+  "version": "2.5.0",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "description": "ARGON — Sovereign, High-Performance Multi-Segment Download Accelerator",
@@ -24,7 +24,9 @@
     "@fontsource/tajawal": "^5.3.0",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-opener": "^2.7.2",
+    "jsqr": "1.4.0",
     "lucide-react": "^1.61.0",
+    "qrcode-generator": "2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

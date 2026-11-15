@@ -18,17 +18,17 @@ Both devices need **ARGON 2**. The new `argon-flow/2` protocol does not communic
 
 - HTTP/HTTPS files, redirects, custom request headers and URLs with Basic authentication.
 - Parallel ranges verified using a real GET probe. Servers that ignore ranges fall back to a single stream after all other writers have stopped.
-- Resume when the remote size and ETag/Last-Modified still match. Otherwise restart safely from zero.
+- Resume verified partial files when the effective URL, length and strong ETag match. Older unverified partial files restart safely. A single stream is used for servers without a strong validator.
 - Unknown-length streams and empty/one-byte files.
 - Collision-safe file creation; existing unrelated files are not overwritten.
 - Files become complete only after transfer results, disk length and an optional SHA-256 check succeed.
 - A shared global speed limit and bounded concurrent download queue.
 - Chrome/Edge browser extension, included in installers and portable ZIPs.
-- Native social-video URL extraction through bundled yt-dlp and Node.js on Windows. The extractor selects an available combined HTTP/HTTPS format and preserves CDN request headers. Available quality depends on the source.
+- Native social-video URL extraction through bundled yt-dlp and Node.js on Windows. With FFmpeg available, the desktop app can download unprotected HLS/DASH streams and merge separate audio and video tracks. Available quality depends on the source.
 
 Browser-only Vite previews do **not** download or simulate progress. Run the native app for downloads.
 
-Private, expired or restricted links may require authentication or a fresh direct URL. Webpages and HLS/DASH manifests are reported as unsupported rather than saved as completed media. Magnet/torrent metadata parsing is present; a P2P transfer engine is not included. Android currently supports direct files only; platform video extraction requires desktop tools.
+Private, expired or restricted links may require authentication or a fresh direct URL. Magnet/torrent metadata parsing is present. Android supports direct files and uses the desktop app for downloading HLS/DASH streams.
 
 ## Build and run on Windows
 
@@ -59,7 +59,7 @@ The installer is generated under `src-tauri/target/release/bundle/nsis/`. A port
 
 ## Browser extension
 
-Open Chrome/Edge's extension manager, enable Developer mode, choose **Load unpacked**, and select `browser-extension/`. The **Browser extension** section in ARGON includes setup instructions, folder access and bridge diagnostics. The extension offers Arabic/English controls, transient media discovery, selected page-file downloads and opt-in automatic capture with website exclusions and minimum sizes. It uses the native bridge on `127.0.0.1:41523`. Browser downloads are paused for handoff, then cancelled only after ARGON confirms saving the task; failed handoffs resume the browser download. Update the native app and extension together for this protocol. See [extension usage, permissions and validation](browser-extension/README.md).
+Open Chrome/Edge's extension manager, enable Developer mode, choose **Load unpacked**, and select `browser-extension/`. The **Browser extension** section in ARGON includes setup instructions, connection diagnostics and a test file. The extension offers Arabic/English controls, transient media discovery, selected page-file downloads and opt-in automatic capture with website exclusions and minimum sizes. It uses the native bridge on `127.0.0.1:41523`. Automatic capture records a saved task before transferring responsibility to ARGON. Update the native app and extension together to use staged recovery. See [extension usage, permissions and validation](browser-extension/README.md).
 
 ## Android preview
 

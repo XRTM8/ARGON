@@ -61,7 +61,11 @@ where
     }
 }
 async fn pair(a: &Arc<FlowService>, b: &Arc<FlowService>) {
-    a.connect(&format!("127.0.0.1:{}", b.snapshot().await.port))
+    let target = b.snapshot().await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let endpoint = format!("127.0.0.1:{}", target.port);
+    assert!(a.connect_invited(&endpoint, target.id.clone(), now).await.is_err());
+    a.connect_invited(&endpoint, target.id, now + 120_000)
         .await
         .unwrap();
     until(|| async {

@@ -147,6 +147,14 @@ pub struct DownloadTask {
     pub etag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_resource_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_notice: Option<String>,
+    #[serde(default)]
+    pub awaiting_browser_commit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_finalizing: Option<bool>,
     pub probed: bool,
     pub queue_id: QueueId,
     #[serde(default)]
@@ -273,6 +281,8 @@ pub struct BrowserDownloadPayload {
     pub post_body: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub stream_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

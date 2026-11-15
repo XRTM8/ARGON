@@ -76,6 +76,8 @@ export interface DownloadTask {
   createdAt: number;
   completedAt?: number;
   errorMessage?: string;
+  resumeNotice?: 'resource-unverified' | 'range-rejected';
+  mediaFinalizing?: boolean;
   checksum?: ChecksumInfo;
   savePath?: string;
   headers?: Record<string, string>;

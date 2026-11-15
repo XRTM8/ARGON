@@ -54,7 +54,8 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   const parsed = parseDownloadInput(value);
   const singleUrl = !isMultiline && !looksLikeWildcard && parsed.urls.length === 1 ? parsed.urls[0] : '';
   const platform = singleUrl ? detectPlatform(singleUrl) : 'other';
-  const isMediaPlatform = !['direct', 'other'].includes(platform);
+  const streamManifest = !!singleUrl && /\.(?:m3u8|mpd)$/i.test(new URL(singleUrl).pathname);
+  const isMediaPlatform = streamManifest || !['direct', 'other'].includes(platform);
 
   useEffect(() => {
     if (detectedClipboardUrl) {
@@ -145,7 +146,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
           selectedFormatId: chosenFormat.hasVideo && !chosenFormat.hasAudio && mediaMeta?.hasFfmpeg
             ? `${chosenFormat.id}+bestaudio/best`
             : chosenFormat.id,
-          useYtdlpMux: !!(chosenFormat.hasVideo && !chosenFormat.hasAudio && mediaMeta?.hasFfmpeg)
+          useYtdlpMux: streamManifest || !!(chosenFormat.hasVideo && !chosenFormat.hasAudio && mediaMeta?.hasFfmpeg)
         }
       : undefined;
 

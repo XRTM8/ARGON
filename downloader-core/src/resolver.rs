@@ -250,6 +250,13 @@ pub fn detect_category(filename: &str) -> TaskCategory {
     }
 }
 
+pub fn is_stream_manifest(raw_url: &str) -> bool {
+    Url::parse(raw_url).is_ok_and(|url| {
+        let path = url.path().to_ascii_lowercase();
+        path.ends_with(".m3u8") || path.ends_with(".mpd")
+    })
+}
+
 pub fn detect_platform(raw_url: &str) -> &'static str {
     let Ok(url) = Url::parse(raw_url.trim()) else {
         return "other";

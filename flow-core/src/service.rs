@@ -385,11 +385,30 @@ impl FlowService {
         Ok(result)
     }
     pub async fn connect(self: &Arc<Self>, address: &str) -> Result<()> {
+        self.connect_endpoint(address, None).await
+    }
+
+    pub async fn connect_invited(
+        self: &Arc<Self>,
+        address: &str,
+        peer_id: String,
+        expires_at: u64,
+    ) -> Result<()> {
+        if expires_at <= now() || expires_at > now() + 180_000 {
+            return Err("Pairing invitation expired or has an invalid date".into());
+        }
+        if peer_id.len() != 64 || !peer_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Invalid device identity in pairing invitation".into());
+        }
+        self.connect_endpoint(address, Some(peer_id)).await
+    }
+
+    async fn connect_endpoint(self: &Arc<Self>, address: &str, peer_id: Option<String>) -> Result<()> {
         let address = files::local_endpoint(address)?;
         let stop = self.stop_receiver().await?;
         let service = self.clone();
         self.spawn_job(stop, async move {
-            let mut channel = service.open(address, None).await?;
+            let mut channel = service.open(address, peer_id.as_deref()).await?;
             channel.send(&Message::Ping).await?;
             if !matches!(channel.receive().await?, Message::Pong) {
                 return Err("Unexpected pairing confirmation".into());

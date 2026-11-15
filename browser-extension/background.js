@@ -1,24 +1,61 @@
 import { DEFAULTS, httpUrl, shouldCapture, mediaDescriptor, platformVideo, excludedHost } from './core.js';
-import { buildAuthHeaders, connection, sendDownload } from './bridge-client.js';
+import { browserHandoff, buildAuthHeaders, connection, sendDownload } from './bridge-client.js';
 
 // Session storage survives MV3 worker suspension, but is cleared with the browser session.
 const writes = new Map();
 const handoffKey = (id) => `handoff:${id}`;
-// Recover a paused browser transfer if the worker was interrupted mid-handoff.
-const recovered = (async () => {
+const handoffAlarm = 'argon-recover-handoffs';
+const activeHandoffs = new Set();
+
+function retryRecovery() {
+  chrome.alarms?.create(handoffAlarm, { delayInMinutes: 1 });
+}
+
+async function reconcileHandoff(key, record) {
+  const [download] = await chrome.downloads.search({ id: record.id });
+  const item = download?.startTime === record.startTime ? download : undefined;
+  const inProgress = item?.state === 'in_progress';
+  if (record.phase === 'committing') {
+    let { status } = await browserHandoff('status', record.requestId);
+    if (status === 'prepared') {
+      ({ status } = await browserHandoff(inProgress && item.paused ? 'commit' : 'abort', record.requestId));
+    }
+    if (status === 'prepared') throw new Error('handoff_still_pending');
+    if (status === 'accepted' && inProgress) {
+      await chrome.downloads.cancel(item.id);
+      await notify(['حُفظ التنزيل في ARGON.', 'Download saved in ARGON.']);
+    }
+    if (status === 'missing' && inProgress && item.paused) await chrome.downloads.resume(item.id);
+  } else if (record.requestId) {
+    // A prepare-only request cannot start a native transfer. Restore the browser first.
+    if (inProgress && item.paused) await chrome.downloads.resume(item.id);
+    await browserHandoff('abort', record.requestId);
+  } else if (inProgress) {
+    if (record.saved) await chrome.downloads.cancel(item.id);
+    else if (item.paused) await chrome.downloads.resume(item.id);
+  }
+  await chrome.storage.local.remove(key);
+}
+
+async function recoverHandoffs() {
   const data = await chrome.storage.local.get(null);
   for (const [key, record] of Object.entries(data)) {
-    if (!key.startsWith('handoff:') || !record?.id) continue;
+    if (!key.startsWith('handoff:') || !record?.id || activeHandoffs.has(key)) continue;
+    activeHandoffs.add(key);
     try {
-      const [item] = await chrome.downloads.search({ id: record.id });
-      if (item?.state === 'in_progress' && item.startTime === record.startTime) {
-        if (record.saved) await chrome.downloads.cancel(item.id);
-        else if (item.paused) await chrome.downloads.resume(item.id);
-      }
-      await chrome.storage.local.remove(key);
-    } catch { /* Keep the record for the next worker wake-up. */ }
+      await reconcileHandoff(key, record);
+    } catch {
+      retryRecovery();
+    } finally {
+      activeHandoffs.delete(key);
+    }
   }
-})();
+}
+
+const recovered = recoverHandoffs().catch(retryRecovery);
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === handoffAlarm) void recoverHandoffs().catch(retryRecovery);
+});
 const keyFor = (id) => `media:${id}`;
 function updateTab(id, operation) {
   const previous = writes.get(id) || Promise.resolve();
@@ -70,13 +107,6 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 chrome.downloads.onCreated.addListener((item) => { void capture(item).catch(() => {}); });
 
-if (chrome.downloads?.onDeterminingFilename) {
-  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-    // Suggesting the filename immediately prevents Chromium from popping up the Save As dialog
-    suggest({ filename: item.filename || 'download', conflictAction: 'uniquify' });
-  });
-}
-
 async function capture(item) {
   if (item.state !== 'in_progress' || item.paused || item.incognito || item.byExtensionId) return;
   await recovered;
@@ -87,9 +117,55 @@ async function capture(item) {
   const [current] = await chrome.downloads.search({ id: item.id });
   if (!current || !shouldCapture(current, settings)) return;
   const key = handoffKey(item.id);
-  await chrome.storage.local.set({ [key]: { id: item.id, startTime: current.startTime, saved: false } });
+  if (activeHandoffs.has(key)) return;
+  activeHandoffs.add(key);
+  try {
+    if (ping.capabilities?.includes('staged-handoff')) {
+      await captureStaged(key, current, settings, ping);
+    } else {
+      await captureLegacy(key, current, settings, ping);
+    }
+  } finally {
+    activeHandoffs.delete(key);
+  }
+}
+
+async function captureStaged(key, item, settings, ping) {
+  const requestId = crypto.randomUUID();
+  const record = { id: item.id, startTime: item.startTime, requestId, phase: 'preparing' };
+  await chrome.storage.local.set({ [key]: record });
+  try {
+    await chrome.downloads.pause(item.id);
+    const url = item.finalUrl || item.url;
+    const headers = await buildAuthHeaders(url, item.referrer, settings);
+    const filename = item.filename?.split(/[\\/]+/).pop();
+    try {
+      await sendDownload(url, filename, item.referrer, headers, undefined, undefined, !!ping.capabilities?.includes('ffmpeg-hls'), { requestId });
+    } catch (error) {
+      const { status } = await browserHandoff('status', requestId);
+      if (status === 'missing') throw error;
+    }
+    await chrome.storage.local.set({ [key]: { ...record, phase: 'committing' } });
+    record.phase = 'committing';
+    await reconcileHandoff(key, record);
+  } catch {
+    try {
+      await reconcileHandoff(key, record);
+    } catch {
+      retryRecovery();
+      if (record.phase === 'committing') await notify([
+        'توقف تنزيل المتصفح مؤقتاً بانتظار التحقق من تسليمه إلى ARGON.',
+        'The browser download is paused while ARGON verifies the handoff.'
+      ]);
+    }
+  }
+}
+
+async function captureLegacy(key, current, settings, ping) {
+  const id = current.id;
+  await chrome.storage.local.set({ [key]: { id, startTime: current.startTime, saved: false } });
   // Pause, then send: prevents small files completing while ARGON takes over.
-  try { await chrome.downloads.pause(item.id); } catch { await chrome.storage.local.remove(key); return; }
+  try { await chrome.downloads.pause(id); } catch { await chrome.storage.local.remove(key); return; }
   try {
     const targetUrl = current.finalUrl || current.url;
     const headers = await buildAuthHeaders(targetUrl, current.referrer, settings, !!current.incognito);
@@ -103,16 +179,19 @@ async function capture(item) {
       !!ping.capabilities?.includes('ffmpeg-hls')
     );
   } catch {
-    try { await chrome.downloads.resume(item.id); await chrome.storage.local.remove(key); } catch { /* Recover on the next wake-up. */ }
+    try { await chrome.downloads.resume(id); await chrome.storage.local.remove(key); } catch { retryRecovery(); }
     return;
   }
   // Only an acknowledgement of a saved task permits cancellation. Keep browser history.
   try {
-    await chrome.storage.local.set({ [key]: { id: item.id, startTime: current.startTime, saved: true } });
-    await chrome.downloads.cancel(item.id);
+    await chrome.storage.local.set({ [key]: { id, startTime: current.startTime, saved: true } });
+    await chrome.downloads.cancel(id);
     await chrome.storage.local.remove(key);
     await notify(['حُفظ التنزيل في ARGON.', 'Download saved in ARGON.']);
-  } catch { await notify(['حُفظ التنزيل في ARGON؛ تحقق من تنزيل المتصفح أيضاً.', 'Saved in ARGON; also check the browser download.']); }
+  } catch {
+    retryRecovery();
+    await notify(['حُفظ التنزيل في ARGON؛ تحقق من تنزيل المتصفح أيضاً.', 'Saved in ARGON; also check the browser download.']);
+  }
 }
 
 chrome.webRequest.onHeadersReceived.addListener((details) => {
@@ -137,13 +216,18 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       const settings = await chrome.storage.local.get(DEFAULTS);
       if (!settings.showVideoButton || excludedHost(sender.tab.url, settings.excludedHosts)) return respond({ ok: false });
       const data = await chrome.storage.session.get(keyFor(sender.tab.id));
+      const media = (data[keyFor(sender.tab.id)] || []).filter(item => Date.now() - item.timestamp < 30 * 60 * 1000);
+      const streams = media.filter(item => item.playlist && !excludedHost(item.url, settings.excludedHosts));
       const direct = mediaDescriptor(request.source);
-      const target = platformVideo(sender.tab.url, sender.tab.title) || (direct?.supported ? direct : (data[keyFor(sender.tab.id)] || []).find(item => item.url === request.source && item.supported));
+      const target = platformVideo(sender.tab.url, sender.tab.title) || direct
+        || media.find(item => item.url === request.source)
+        || (request.source?.startsWith('blob:') && streams.length === 1 ? streams[0] : undefined);
       if (!target || excludedHost(target.url, settings.excludedHosts)) return respond({ ok: false });
       if (request.type === 'GET_VIDEO_TARGET') return respond({ ok: true, target, language: settings.language });
       try {
         const ping = await connection();
         const headers = await buildAuthHeaders(target.url, sender.tab.url, settings, false);
+        if (target.playlist && !ping.capabilities?.includes('ffmpeg-hls')) return respond({ ok: false, error: 'media_tools_required' });
         await sendDownload(
           target.url,
           target.platform ? undefined : target.filename,
@@ -151,7 +235,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           headers,
           undefined,
           undefined,
-          !!ping.capabilities?.includes('ffmpeg-hls')
+          !!ping.capabilities?.includes('ffmpeg-hls'),
+          { streamKind: target.playlist ? target.type : undefined }
         );
         respond({ ok: true });
       }

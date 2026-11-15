@@ -91,5 +91,10 @@ export class FlowClient {
     const ids=await this.execute<string[]>('flow_send_files',{peerId:this.state.selectedPeerId,fileIds:this.state.selectedFiles.map(file=>file.id)});
     this.set({selectedFiles:[]});return ids;
   }
+  public async sendDownload(taskId: string, peerId: string) {
+    const ids = await this.execute<string[]>('flow_send_download', { taskId, peerId });
+    this.selectPeer(peerId);
+    return ids;
+  }
 }
 export const flowClient=new FlowClient();

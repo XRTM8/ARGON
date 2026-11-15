@@ -93,7 +93,9 @@ export function TaskCard({
     completed: ar ? 'مكتمل' : 'Completed',
     error: ar ? 'يحتاج انتباهك' : 'Needs attention',
     downloading:
-      task.downloadedBytes === 0 && !task.probed && task.queueId === 'media'
+      task.mediaFinalizing
+        ? ar ? 'جارٍ دمج الوسائط…' : 'Merging media…'
+        : task.downloadedBytes === 0 && !task.probed && task.queueId === 'media'
         ? ar ? 'جارٍ استخراج الرابط…' : 'Extracting media…'
         : task.downloadedBytes === 0
           ? ar ? 'جارٍ الاتصال…' : 'Connecting…'
@@ -245,6 +247,16 @@ export function TaskCard({
               <Share2 size={16} />
             </button>
           )}
+          {completed && task.savePath && onShare && (
+            <button
+              className="icon-button"
+              onClick={() => onShare(task)}
+              aria-label={ar ? 'إرسال لجهاز' : 'Send to device'}
+              title={ar ? 'إرسال لجهاز' : 'Send to device'}
+            >
+              <Send size={16} />
+            </button>
+          )}
           <button
             className="icon-button details-toggle"
             aria-expanded={expanded}
@@ -276,6 +288,14 @@ export function TaskCard({
         <p className="task-error">
           <AlertCircle size={14} />
           <span>{humanizeErrorMessage(task.errorMessage, lang)}</span>
+        </p>
+      )}
+
+      {task.resumeNotice && (
+        <p className="task-resume-notice" role="status">
+          {task.resumeNotice === 'range-rejected'
+            ? (ar ? 'أُعيد التنزيل من البداية لأن الخادم رفض طلب الأجزاء.' : 'Restarted from the beginning because the server rejected the byte ranges.')
+            : (ar ? 'أُعيد التنزيل من البداية لتعذّر التحقق من تطابق الملف.' : 'Restarted from the beginning because the existing data could not be verified against the remote file.')}
         </p>
       )}
 
@@ -417,12 +437,6 @@ export function TaskCard({
               <button className="action-button" onClick={() => void action(() => downloadManager.shareFile(task.savePath))}>
                 <Share2 size={14} />
                 {ar ? 'مشاركة الملف' : 'Share file'}
-              </button>
-            )}
-            {completed && task.savePath && onShare && (
-              <button className="action-button" onClick={() => onShare(task)}>
-                <Send size={14} />
-                {ar ? 'إرسال لجهاز' : 'Send to device'}
               </button>
             )}
             <button

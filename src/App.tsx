@@ -25,7 +25,7 @@ import { TaskInspector } from './components/TaskInspector';
 import { CommandPalette } from './components/CommandPalette';
 import { SettingsView, type SettingsTab } from './components/SettingsView';
 import { BrowserView } from './components/BrowserView';
-import { SharingView, ClipboardView, FlowDialogs, flowStatus } from './components/FlowPanels';
+import { SharingView, ClipboardView, FlowDialogs, SendDownloadDialog, flowStatus } from './components/FlowPanels';
 import { ThroughputSparkline } from './components/ThroughputSparkline';
 import { downloadManager } from './core/downloadManager';
 import { updateManager } from './core/updates/updateManager';
@@ -62,10 +62,9 @@ export function App() {
   };
 
   const flow = useFlow();
+  const [shareTask, setShareTask] = useState<DownloadTask | null>(null);
   const inspectedIdRef = useRef<string | null>(inspectedId);
   inspectedIdRef.current = inspectedId;
-  const flowClientRef = useRef(flow.client);
-  flowClientRef.current = flow.client;
   const lastStructSigRef = useRef('');
   const update = useSyncExternalStore(updateManager.subscribe, updateManager.getState);
   const ar = lang === 'ar';
@@ -97,7 +96,7 @@ export function App() {
                 : t.totalBytes > 0 && t.downloadedBytes >= t.totalBytes
                   ? '2'
                   : '1';
-          return `${t.id}:${t.status}:${phase}:${t.probed ? t.chunks.length : 0}:${t.filename}:${t.errorMessage || ''}`;
+          return `${t.id}:${t.status}:${phase}:${t.probed ? t.chunks.length : 0}:${t.filename}:${t.errorMessage || ''}:${t.resumeNotice || ''}:${!!t.mediaFinalizing}`;
         })
         .join('|');
 
@@ -233,8 +232,7 @@ export function App() {
   };
 
   const share = (task: DownloadTask) => {
-    setActiveView('sharing');
-    void flowClientRef.current.chooseFiles(task.savePath).catch(() => {});
+    setShareTask(task);
   };
 
   const toggleTheme = () => {
@@ -471,6 +469,15 @@ export function App() {
       </div>
 
       <FlowDialogs lang={lang} />
+      {shareTask && !flow.snapshot?.pairings.length && !flow.snapshot?.incoming.length && (
+        <SendDownloadDialog
+          key={shareTask.id}
+          lang={lang}
+          task={shareTask}
+          onClose={() => setShareTask(null)}
+          onOpenSharing={() => { setShareTask(null); setActiveView('sharing'); }}
+        />
+      )}
 
       <CommandPalette
         open={paletteOpen}

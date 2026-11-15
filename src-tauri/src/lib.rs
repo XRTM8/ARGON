@@ -414,6 +414,13 @@ async fn set_browser_bridge_ready(state: tauri::State<'_, Arc<TaskManager>>) -> 
 }
 
 #[tauri::command]
+fn open_browser_test(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("http://127.0.0.1:41523/sample.txt", None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn browser_bridge_status(
     app: AppHandle,
     state: tauri::State<'_, Arc<TaskManager>>,
@@ -749,8 +756,22 @@ fn start_browser_bridge(app_handle: AppHandle) {
 
                 let has_ffmpeg = media::has_ffmpeg_installed(&app);
 
+                if request.starts_with("GET /sample.txt ") {
+                    let body = "ARGON browser integration test.\r\n";
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=argon-browser-test.txt\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n",
+                        body.len(),
+                    );
+                    if socket.write_all(reply.as_bytes()).await.is_ok() {
+                        // Leave time for the browser's onCreated listener to claim the test file.
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        let _ = socket.write_all(body.as_bytes()).await;
+                    }
+                    return;
+                }
+
                 if request.starts_with("GET /ping ") || request.starts_with("GET /status ") {
-                    let mut caps = vec!["persisted-handoff", "direct-files", "cookies-post"];
+                    let mut caps = vec!["persisted-handoff", "staged-handoff", "direct-files", "cookies-post"];
                     if has_ffmpeg {
                         caps.push("ffmpeg-hls");
                     }
@@ -771,7 +792,10 @@ fn start_browser_bridge(app_handle: AppHandle) {
                     return;
                 }
 
-                if request.starts_with("POST /add ") {
+                let handoff_action = ["status", "commit", "abort"].into_iter().find(|action| {
+                    request.starts_with(&format!("POST /handoff/{action} "))
+                });
+                if request.starts_with("POST /add ") || handoff_action.is_some() {
                     let is_extension_origin = origin_header
                         .as_deref()
                         .map(|o| {
@@ -795,6 +819,35 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         return;
                     }
 
+                    if let Some(action) = handoff_action {
+                        let request_id = request.split_once("\r\n\r\n")
+                            .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(body).ok())
+                            .and_then(|body| body["requestId"].as_str().map(str::to_owned));
+                        let (status, body) = if let Some(request_id) = request_id {
+                            if let Ok(dl) = ensure_downloader(&app).await {
+                                match dl.browser_handoff(&request_id, action).await {
+                                    Ok(Some(task)) => ("200 OK", serde_json::json!({
+                                        "status": if task.awaiting_browser_commit { "prepared" } else { "accepted" },
+                                        "taskId": task.id,
+                                    })),
+                                    Ok(None) => ("200 OK", serde_json::json!({ "status": "missing" })),
+                                    Err(_) => ("503 Service Unavailable", serde_json::json!({ "error": "handoff_unavailable" })),
+                                }
+                            } else {
+                                ("503 Service Unavailable", serde_json::json!({ "error": "handoff_unavailable" }))
+                            }
+                        } else {
+                            ("400 Bad Request", serde_json::json!({ "error": "invalid_request_id" }))
+                        };
+                        let body = body.to_string();
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\n{cors_origin_str}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                            body.len(),
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        return;
+                    }
+
                     if let Some(body_start) = request.find("\r\n\r\n") {
                         let json_part = &request[body_start + 4..];
                         if let Ok(mut payload) =
@@ -804,10 +857,8 @@ fn start_browser_bridge(app_handle: AppHandle) {
                             let parsed_opt = reqwest::Url::parse(&url_trim).ok().filter(|url| {
                                 matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
                             });
-                            let is_playlist = parsed_opt.as_ref().is_some_and(|u| {
-                                let p = u.path().to_ascii_lowercase();
-                                p.ends_with(".m3u8") || p.ends_with(".mpd")
-                            });
+                            let is_playlist = argon_downloader_core::resolver::is_stream_manifest(&url_trim)
+                                || matches!(payload.stream_kind.as_deref(), Some("HLS" | "DASH"));
 
                             if parsed_opt.is_none() || (is_playlist && !has_ffmpeg) {
                                 let body = r#"{"error":"unsupported_url","message":"Use a direct HTTP/HTTPS file URL; install ffmpeg for HLS/DASH streams"}"#;
@@ -832,34 +883,18 @@ fn start_browser_bridge(app_handle: AppHandle) {
                                 return;
                             };
 
-                            let add_result = if is_playlist && has_ffmpeg {
-                                dl.add_task(AddTaskRequest {
-                                    url: url_trim,
-                                    filename: payload.filename,
-                                    segment_count: Some(4),
-                                    expected_sha256: None,
-                                    headers: payload.headers,
-                                    post_body: payload.post_body,
-                                    method: payload.method,
-                                    media_info: Some(MediaMetadata {
-                                        selected_format_id: Some("bestvideo+bestaudio/best".into()),
-                                        use_ytdlp_mux: Some(true),
-                                        ..Default::default()
-                                    }),
-                                    queue_id: Some(QueueId::Media),
-                                    mirrors: None,
-                                })
-                                .await
-                            } else {
-                                dl.add_browser_download(payload).await
-                            };
+                            let media_info = is_playlist.then(|| MediaMetadata {
+                                selected_format_id: Some("bestvideo+bestaudio/best".into()),
+                                use_ytdlp_mux: Some(true),
+                                ..Default::default()
+                            });
+                            let add_result = dl.add_browser_download(payload, media_info).await;
 
                             match add_result {
                                 Ok(task) => {
                                     let body = serde_json::json!({
-                                        "status": "accepted",
+                                        "status": if task.awaiting_browser_commit { "prepared" } else { "accepted" },
                                         "taskId": task.id,
-                                        "message": "Download queued in ARGON"
                                     })
                                     .to_string();
                                     let response = format!(
@@ -1011,12 +1046,14 @@ pub fn run() {
             flow::flow_start,
             flow::flow_stop,
             flow::flow_connect,
+            flow::flow_connect_invited,
             flow::flow_pair_peer,
             flow::flow_confirm_pairing,
             flow::flow_respond_incoming,
             flow::flow_revoke_peer,
             flow::flow_cancel_transfer,
             flow::flow_send_files,
+            flow::flow_send_download,
             flow::flow_send_text,
             flow::flow_choose_files,
             flow::flow_choose_receive_directory,
@@ -1053,6 +1090,7 @@ pub fn run() {
             media::list_media_formats,
             set_browser_bridge_ready,
             browser_bridge_status,
+            open_browser_test,
             verify_file_sha256,
             open_destination_folder,
             open_file_item,

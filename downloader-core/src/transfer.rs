@@ -6,6 +6,7 @@ use crate::{
 };
 use futures_util::StreamExt;
 use reqwest::{header, Client, Method, StatusCode};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     path::Path,
@@ -308,6 +309,20 @@ pub fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
     Some((start, end, total))
 }
 
+pub(crate) fn strong_etag(value: &str) -> Option<&str> {
+    let opaque = value.strip_prefix('"')?.strip_suffix('"')?;
+    opaque
+        .bytes()
+        .all(|byte| byte == b'!' || (b'#'..=b'~').contains(&byte))
+        .then_some(value)
+}
+
+pub(crate) fn range_resource_key(url: &str) -> String {
+    // Keep the effective URI, including any resource-selecting query parameters,
+    // out of the persisted resume metadata.
+    format!("{:x}", Sha256::digest(url.as_bytes()))
+}
+
 pub async fn probe_resource(
     client: &Client,
     url: &str,
@@ -328,7 +343,7 @@ pub async fn probe_resource(
     )
     .await
     .map_err(|_| "URL probe timed out")?
-    .map_err(|e| format!("URL probe failed: {e}"))?;
+    .map_err(|e| format!("URL probe failed: {}", e.without_url()))?;
 
     let empty = response.status() == StatusCode::RANGE_NOT_SATISFIABLE
         && response
@@ -383,7 +398,7 @@ pub async fn probe_resource(
         etag: h
             .get(header::ETAG)
             .and_then(|v| v.to_str().ok())
-            .filter(|v| !v.starts_with("W/"))
+            .and_then(strong_etag)
             .map(str::to_owned),
         last_modified: h
             .get(header::LAST_MODIFIED)
@@ -411,6 +426,7 @@ pub struct SegmentTransfer<'a> {
     pub use_range: bool,
     pub expected_total: Option<u64>,
     pub validator: Option<&'a str>,
+    pub resource_url: Option<&'a str>,
     pub custom_headers: Option<&'a HashMap<String, String>>,
     pub method: Option<&'a str>,
     pub post_body: Option<&'a str>,
@@ -537,7 +553,7 @@ pub async fn download_segment(
                     break Err(format!(
                         "Connection failed: {}",
                         match res {
-                            Ok(Err(e)) => e.to_string(),
+                            Ok(Err(e)) => e.without_url().to_string(),
                             _ => "response timeout".into(),
                         }
                     ));
@@ -598,6 +614,12 @@ pub async fn download_segment(
         }
 
         if spec.use_range {
+            let response_etag = response.headers().get(header::ETAG);
+            if spec.resource_url != Some(response.url().as_str())
+                || response_etag.is_some_and(|tag| tag.to_str().ok() != spec.validator)
+            {
+                break Err("RANGE_UNSUPPORTED: ranged response changed resource or ETag".into());
+            }
             let range = response
                 .headers()
                 .get(header::CONTENT_RANGE)
@@ -751,7 +773,7 @@ pub async fn download_segment(
             break Err(err);
         }
         if range_violation {
-            break Err("Server sent bytes outside the requested range".into());
+            break Err("RANGE_UNSUPPORTED: server sent bytes outside the requested range".into());
         }
         if let Err(e) = writer.flush().await {
             break Err(e);

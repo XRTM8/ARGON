@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Send,
   Smartphone,
@@ -23,14 +23,18 @@ import {
   AlertCircle,
   Cable,
   Unplug,
-  HardDrive
+  HardDrive,
+  QrCode,
+  Camera
 } from 'lucide-react';
 import { useFlow } from '../core/useFlow';
 import { nativeRuntime } from '../core/flowClient';
 import { downloadManager } from '../core/downloadManager';
 import { readClipboardText, writeClipboardText } from '../core/clipboard';
 import { formatBytes, formatSpeed } from '../core/segmentation';
+import { createPairingInvite, parsePairingInvite } from '../core/pairingInvite';
 import type { FlowTransfer } from '../types/flow';
+import type { DownloadTask } from '../types/downloader';
 import type { MainViewTab } from './Header';
 
 type Lang = 'ar' | 'en';
@@ -39,6 +43,93 @@ const run = (promise: Promise<unknown>) => {
 };
 const readablePath = (path: string) => path.replace(/^\\\\\?\\/, '');
 const android = () => /android/i.test(globalThis.navigator?.userAgent || '');
+
+function PairingQr({ lang }: { lang: Lang }) {
+  const ar = lang === 'ar';
+  const { snapshot, client } = useFlow();
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const available = snapshot?.enabled;
+
+  useEffect(() => {
+    if (!code) return;
+    const expiry = setTimeout(() => setCode(''), 120_000);
+    return () => clearTimeout(expiry);
+  }, [code]);
+
+  const showCode = async () => {
+    if (!snapshot) return;
+    setError('');
+    const invite = createPairingInvite(snapshot);
+    if (!invite) {
+      setError(ar ? 'اتصل أولاً بشبكة محلية ثم أعد المحاولة.' : 'Connect to a local network first.');
+      return;
+    }
+    const { default: makeQrCode } = await import('qrcode-generator');
+    const qr = makeQrCode(0, 'M');
+    qr.addData(invite);
+    qr.make();
+    setCode(qr.createDataURL(5, 20));
+  };
+
+  const readCode = async (file: File) => {
+    setBusy(true);
+    setError('');
+    try {
+      if (file.size > 30 * 1024 * 1024) throw new Error('Image is too large');
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const ctx = canvas.getContext('2d');
+      try {
+        if (!ctx) throw new Error('Cannot read image');
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      } finally {
+        bitmap.close();
+      }
+      const { default: decodeQr } = await import('jsqr');
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const decoded = decodeQr(pixels.data, pixels.width, pixels.height);
+      const invite = decoded && parsePairingInvite(decoded.data);
+      if (!invite) throw new Error('Invalid invitation');
+      await client.execute('flow_connect_invited', invite);
+    } catch {
+      setError(ar ? 'تعذّرت قراءة دعوة اقتران صالحة. أنشئ رمزاً جديداً وأعد المحاولة.' : 'Could not read a valid pairing invitation. Generate a fresh code and try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pairing-qr">
+      <div className="detail-actions">
+        <button type="button" className="action-button" disabled={!available} onClick={() => void showCode().catch(() => {
+          setError(ar ? 'تعذّر إنشاء رمز الاقتران.' : 'Could not create a pairing code.');
+        })}>
+          <QrCode size={15} />{ar ? 'عرض رمز QR' : 'Show pairing QR'}
+        </button>
+        <label className={`action-button pairing-qr-reader${!available || busy ? ' is-disabled' : ''}`}>
+          <Camera size={15} />{ar ? 'قراءة رمز QR' : 'Read pairing QR'}
+          <input type="file" accept="image/*" capture="environment" disabled={!available || busy} onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = '';
+            if (file) void readCode(file);
+          }} />
+        </label>
+      </div>
+      {available && code && (
+        <div className="pairing-qr-code">
+          <img src={code} alt={ar ? 'رمز QR لدعوة اقتران محلية' : 'Local pairing invitation QR code'} />
+          <p className="dialog-caption">{ar ? 'اقرأ الرمز من الجهاز الثاني خلال دقيقتين، ثم قارن رمز التأكيد على الجهازين.' : 'Read this code from the other device within two minutes, then verify the confirmation code on both devices.'}</p>
+        </div>
+      )}
+      {error && <p className="task-error" role="alert">{error}</p>}
+    </div>
+  );
+}
 
 export function flowStatus(status: string, lang: Lang) {
   const names: Record<string, [string, string]> = {
@@ -356,6 +447,8 @@ export function SharingView({ lang, onSwitchTab }: { lang: Lang; onSwitchTab?: (
             </div>
           </div>
 
+          <PairingQr lang={lang} />
+
           <div className="send-drop glass-panel">
             <div>
               <h2>{peer ? (ar ? `إرسال إلى: ${peer.name}` : `Target: ${peer.name}`) : ar ? 'إرسال ملفات' : 'Send Files'}</h2>
@@ -671,6 +764,77 @@ export function ClipboardView({
         </div>
       )}
     </div>
+  );
+}
+
+export function SendDownloadDialog({ lang, task, onClose, onOpenSharing }: {
+  lang: Lang;
+  task: DownloadTask;
+  onClose: () => void;
+  onOpenSharing: () => void;
+}) {
+  const { snapshot, selectedPeerId, client } = useFlow();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const [transferId, setTransferId] = useState('');
+  const ar = lang === 'ar';
+  const peers = (snapshot?.peers || []).filter((peer) => peer.trusted && peer.online);
+  peers.sort((a, b) => Number(b.id === selectedPeerId) - Number(a.id === selectedPeerId));
+  const transfer = snapshot?.transfers.find((entry) => entry.id === transferId);
+
+  useEffect(() => {
+    const element = dialog.current;
+    element?.showModal();
+    return () => element?.close();
+  }, []);
+
+  const send = async (peerId: string) => {
+    setSending(true);
+    setError('');
+    try {
+      const [id] = await client.sendDownload(task.id, peerId);
+      setTransferId(id);
+    } catch (cause) {
+      setError(String(cause).includes('download_file_missing')
+        ? (ar ? 'الملف المحفوظ غير متاح. ارجع إلى التنزيل لتنزيله مرة أخرى.' : 'The saved file is unavailable. Return to the download to download it again.')
+        : (ar ? 'تعذّر إرسال الملف. تحقق من اتصال الجهاز وحاول مجدداً.' : 'Could not send the file. Check that the device is online and try again.'));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <dialog ref={dialog} className="flow-dialog send-download-dialog" aria-labelledby="send-download-title" onCancel={onClose}>
+      <h2 id="send-download-title">{ar ? 'إرسال إلى جهاز' : 'Send to device'}</h2>
+      <p className="dialog-peer" dir="auto">{task.filename}</p>
+      {transferId ? (
+        <div className="send-download-status" role="status">
+          <span>{transfer ? flowStatus(transfer.status, lang) : (ar ? 'في الانتظار' : 'Queued')}</span>
+          {transfer && transfer.total > 0 && !['error', 'cancelled'].includes(transfer.status) && (
+            <progress aria-label={ar ? 'تقدّم الإرسال' : 'Transfer progress'} value={transfer.bytes} max={transfer.total} />
+          )}
+          {transfer?.error && <p className="task-error" dir="auto">{transfer.error}</p>}
+        </div>
+      ) : snapshot?.enabled && peers.length ? (
+        <div className="send-download-peers">
+          {peers.map((peer) => (
+            <button key={peer.id} type="button" className="action-button" disabled={sending} onClick={() => void send(peer.id)}>
+              <Send size={15} /><span dir="auto">{peer.name}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <>
+          <p className="dialog-caption">{ar ? 'فعّل المشاركة واربط جهازاً متاحاً على نفس الشبكة.' : 'Enable sharing and pair an available device on the same network.'}</p>
+          <button type="button" className="action-button primary" onClick={onOpenSharing}>{ar ? 'فتح المشاركة' : 'Open sharing'}</button>
+        </>
+      )}
+      {error && <p className="task-error" role="alert">{error}</p>}
+      <div className="dialog-buttons">
+        <button type="button" className="action-button" onClick={onClose}>{ar ? 'إغلاق' : 'Close'}</button>
+      </div>
+    </dialog>
   );
 }
 

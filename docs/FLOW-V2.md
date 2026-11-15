@@ -12,6 +12,8 @@ The Clipboard page sends only the reviewed text when Send is pressed. Received t
 
 On Windows, Settings lets the user choose a received-files directory. On Android, received files are inside application storage; open them from Activity to hand them to another application. Outgoing Android document selections are copied into app cache, so enough space is needed to prepare them. Old selection caches are removed at a subsequent process startup after 24 hours. Keep the Android app open while transferring.
 
+Use the send button in a completed download row to choose a paired, online device. ARGON resolves the file from the completed task and shows the transfer status after selecting the device. To pair by QR, enable Sharing on both devices, show the code on one device and read it from a photo on the other within two minutes. Verify the same six-digit code on both screens. The invitation includes the local address, expiration and the recipient device fingerprint used by the handshake.
+
 ## Implementation
 
 `flow-core/` is an independent Rust crate, shared by Tauri desktop and Android. `src-tauri/src/flow.rs` exposes typed app commands and emits `flow-event`; `src/core/flowClient.ts` owns event subscriptions, bounded polling and UI command state. The downloader's transfer engine remains separate.
@@ -50,4 +52,4 @@ Automated sharing tests exercise two real loopback services and encrypted socket
 
 Validation for this build: 68 frontend tests, 20 downloader/backend tests, and 22 sharing tests passed. The Windows release executable was opened and its Downloads, Sharing and Settings views inspected, including ARGON / BY Otium. Three real 2 MB downloads through the native browser bridge (ranges, ignored-range fallback and unknown-length streaming) all completed and matched SHA-256 `1e075c8d478ad21844e33e830a695ef03a4d2488b69ee275bd8947618bb1be1e`. The portable ZIP's executable, extension version, media tools and archive integrity were checked. The arm64 Android release build and development APK signature/alignment checks succeeded; no physical-phone test was performed.
 
-Windows packages include the downloader's media tools and browser extension. Android supports direct downloads and the new sharing adapters; desktop yt-dlp/Node resources are excluded. There is no Android foreground service, QR pairing, cloud relay, automatic clipboard sync or legacy Flow compatibility in this version. The Android preview is development-signed; production updates need the original application's release signing key.
+Windows packages include the downloader's media tools and browser extension. Android supports direct downloads and the sharing adapters. The Android preview is development-signed; production updates need the original application's release signing key.

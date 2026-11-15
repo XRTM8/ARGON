@@ -14,17 +14,17 @@ Manifest V3 integration for Chrome, Brave and Edge, versioned with the desktop a
 
 ## Confirmed handoff
 
-The extension connects only to `http://127.0.0.1:41523`. `/ping` must identify ARGON and advertise `persisted-handoff`; older app builds must be updated together with the extension.
+The extension connects to `http://127.0.0.1:41523`. `/ping` identifies ARGON and advertises the supported handoff and media capabilities. Run the test download on the **Browser extension** page after enabling capture.
 
-For automatic capture, the extension checks the latest browser download state, records a recovery entry, pauses the browser download, and posts to `/add`. The native bridge emits a uniquely identified request and waits up to four seconds. The frontend saves the task to local storage before acknowledging it through Tauri. Only the acknowledged response allows the extension to cancel the paused browser download. Failed handoffs resume it. Browser download history is retained. A recovery journal handles interrupted worker handoffs on its next startup; it contains browser download IDs and timestamps, not file URLs or credentials.
+With `staged-handoff`, automatic capture records a request ID before pausing the browser download. ARGON saves a prepared task under that ID, then starts it after the extension confirms the handoff. The browser cancels its own download after confirmation. A rejected preparation restores the browser download. If confirmation is uncertain, the extension keeps the browser paused and checks ARGON again when the worker restarts or its recovery alarm fires. The recovery journal stores identifiers and state. Browser history is retained.
 
-This does not guarantee exactly-once delivery across process or network failures: a response can be lost after ARGON has saved a task. Prefer a duplicate over losing the only copy. No native transfer is started before frontend acknowledgement completes.
+Older ARGON versions that advertise `persisted-handoff` use a single acknowledged request. If the response is lost in that mode, a second copy can result from browser recovery.
 
 ## Permissions and storage
 
-`downloads` controls browser handoffs; `contextMenus` adds explicit send actions; `storage` stores preferences, transient media and recovery records; `notifications` reports handoff results; `webRequest` observes media response headers; `activeTab` and `scripting` scan the selected page when opening the popup. A content script on HTTP/HTTPS pages adds the optional video button in an isolated shadow root. It does not expose a webpage-to-native command bridge. No analytics service is used, and browser cookies are not collected.
+`downloads` controls browser handoffs; `contextMenus` adds explicit send actions; `storage` stores preferences, transient media and recovery records; `alarms` retries interrupted handoffs; `notifications` reports handoff results; `webRequest` observes media response headers; `activeTab` and `scripting` scan the selected page when opening the popup. The optional `cookies` permission forwards cookies for the download URL when the user enables it. The extension sends data directly to the local bridge.
 
-`<all_urls>` is currently declared for media discovery. Sites requiring cookies, POST bodies, one-time tokens or private login state may not work with a replayed URL. Referer is forwarded when available; browser cookies and authorization are not copied. HLS/DASH playlists, blob URLs, DRM streams, magnet/torrent transfers and Firefox installation are not supported by this package.
+`<all_urls>` is declared for media discovery. The extension forwards Referer when available. Downloads that depend on original POST bodies or one-time tokens can require a fresh direct link. Unprotected HLS/DASH streams are available when the bridge advertises FFmpeg support. Firefox has a separate manifest for manual testing.
 
 ## Validation
 

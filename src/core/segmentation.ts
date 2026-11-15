@@ -200,6 +200,10 @@ export function humanizeErrorMessage(rawError?: string, lang: 'ar' | 'en' = 'ar'
   const err = rawError.toLowerCase();
   const isAr = lang === 'ar';
 
+  if (err.includes('media_tools_required')) return isAr
+    ? 'يتطلب تنزيل هذا البث تطبيق ARGON لسطح المكتب وFFmpeg. ثبّت FFmpeg من إعدادات الوسائط.'
+    : 'This stream needs ARGON desktop and FFmpeg. Install FFmpeg in media settings.';
+
   if (err.includes('could not delete file')) return isAr
     ? 'تعذّر حذف الملف. تحقق من الصلاحيات وأن الملف غير مفتوح في برنامج آخر.'
     : 'Could not delete the file. Check permissions and close any app using it.';
@@ -225,10 +229,6 @@ export function humanizeErrorMessage(rawError?: string, lang: 'ar' | 'en' = 'ar'
   if (err.includes('معاينة') || err.includes('preview')) return isAr
     ? 'افتح تطبيق ARGON لسطح المكتب لبدء التنزيل. هذه معاينة للواجهة.'
     : 'Open the ARGON desktop app to download. This is an interface preview.';
-  if (err.includes('hls') || err.includes('dash')) return isAr
-    ? 'قوائم البث HLS/DASH غير مدعومة حالياً. استخدم رابط ملف صوت أو فيديو مباشر.'
-    : 'HLS/DASH playlists are not supported yet. Use a direct audio or video file URL.';
-
   if (err.includes('401') || err.includes('403') || err.includes('forbidden') || err.includes('unauthorized')) {
     return isAr
       ? 'تم رفض الوصول: قد يكون الرابط منتهي الصلاحية أو يتطلب تسجيل دخول أو كوكيز'

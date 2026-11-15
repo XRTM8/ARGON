@@ -1008,6 +1008,7 @@ input[type=checkbox] {
   overflow-wrap: anywhere;
 }
 .task-error svg { flex-shrink: 0; margin-top: 2px; }
+.task-resume-notice { margin: 8px 16px 10px; color: var(--argon-muted); font-size: 12px; }
 
 .task-details {
   padding: 14px 16px;
@@ -1606,6 +1607,18 @@ kbd {
   border: 1px solid var(--argon-border-active);
 }
 .flow-dialog h2 { font-size: 17px; font-weight: 700; margin: 0; color: var(--argon-bright); }
+.send-download-dialog { width: min(420px, calc(100% - 32px)); margin: auto; border-radius: 14px; color: var(--argon-bright); }
+.send-download-dialog::backdrop { background: rgba(0, 0, 0, 0.72); }
+.send-download-dialog .dialog-peer { overflow-wrap: anywhere; }
+.send-download-peers, .send-download-status { display: grid; gap: 8px; margin-block: 14px; }
+.send-download-status progress { width: 100%; accent-color: var(--argon-accent); }
+.pairing-qr { display: grid; gap: 8px; }
+.pairing-qr-reader { position: relative; cursor: pointer; }
+.pairing-qr-reader input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: inherit; }
+.pairing-qr-reader:focus-within { outline: 2px solid var(--argon-accent); outline-offset: 2px; }
+.pairing-qr-reader.is-disabled { opacity: 0.55; cursor: default; }
+.pairing-qr-code { display: grid; gap: 8px; justify-items: start; }
+.pairing-qr-code img { width: min(220px, 100%); border-radius: 8px; image-rendering: pixelated; }
 .dialog-peer { font-size: 13px; margin: 8px 0; color: var(--argon-accent); font-weight: 600; }
 .dialog-caption { font-size: 12px; color: var(--argon-muted); line-height: 1.6; }
 .pairing-code {

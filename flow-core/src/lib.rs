@@ -6,6 +6,7 @@ mod service;
 mod wire;
 
 pub use cleaner::clean_text;
+pub use files::commit_file;
 pub use model::{
     Config, Event, Incoming, Pairing, Peer, SelectedFile, Snapshot, Transfer, MAX_TEXT, PROTOCOL,
 };

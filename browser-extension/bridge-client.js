@@ -40,7 +40,7 @@ export async function connection(allowWake = true) {
           await new Promise((r) => setTimeout(r, 600));
           try {
             const data = await request('/ping', null, 1000);
-            if (data.app === 'ARGON' && data.status === 'ok') return data;
+            if (data.app === 'ARGON' && data.status === 'ok' && data.capabilities?.includes('persisted-handoff')) return data;
           } catch {
             // Keep polling
           }
@@ -80,10 +80,11 @@ export async function sendDownload(
   extraHeaders,
   method,
   postBody,
-  allowPlaylists = false
+  allowPlaylists = false,
+  { requestId, streamKind } = {}
 ) {
   const desc = mediaDescriptor(url);
-  if (!httpUrl(url) || (desc?.supported === false && !(allowPlaylists && desc?.playlist))) {
+  if (!httpUrl(url) || ((desc?.playlist || streamKind) && !allowPlaylists)) {
     throw new Error('unsupported_url');
   }
   const merged = { ...(httpUrl(referer) ? { Referer: referer } : {}), ...(extraHeaders || {}) };
@@ -92,9 +93,17 @@ export async function sendDownload(
     url,
     filename: filename || null,
     headers,
+    ...(requestId ? { requestId } : {}),
+    ...(streamKind ? { streamKind } : {}),
     ...(method ? { method } : {}),
     ...(postBody ? { postBody } : {})
   });
-  if (result.status !== 'accepted') throw new Error('handoff_not_saved');
+  if (result.status !== 'accepted' && !(requestId && result.status === 'prepared')) throw new Error('handoff_not_saved');
+  return result;
+}
+
+export async function browserHandoff(action, requestId) {
+  const result = await request(`/handoff/${action}`, { requestId });
+  if (!['prepared', 'accepted', 'missing'].includes(result.status)) throw new Error('invalid_handoff_status');
   return result;
 }
