@@ -434,7 +434,7 @@ async fn open_media_sniffer(
     {
         let target = url.unwrap_or_else(|| "https://google.com".to_string());
         app.opener()
-            .open_url(&target, None)
+            .open_url(&target, None::<&str>)
             .map_err(|e| format!("تعذر فتح المتصفح: {e}"))?;
         Ok(serde_json::json!({ "status": "opened_in_browser", "url": target }))
     }
