@@ -269,7 +269,7 @@ pub fn detect_platform(raw_url: &str) -> &'static str {
     if matches("tiktok.com") {
         return "tiktok";
     }
-    if matches("instagram.com") || matches("instagr.am") {
+    if matches("instagram.com") || matches("instagr.am") || matches("ig.me") {
         return "instagram";
     }
     if matches("twitter.com") || matches("x.com") || matches("t.co") {

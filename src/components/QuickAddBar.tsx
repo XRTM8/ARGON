@@ -596,10 +596,26 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
         )}
 
         {error && (
-          <p className="inline-error" role="alert">
-            <AlertCircle size={14} />
-            <span>{error}</span>
-          </p>
+          <div className="inline-error" role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <AlertCircle size={14} style={{ flexShrink: 0 }} />
+              <span>{error}</span>
+            </div>
+            {singleUrl && (error.includes('تسجيل الدخول') || error.includes('cookies') || error.includes('خاص') || error.includes('login') || error.includes('private')) && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="action-button compact primary"
+                  onClick={() => {
+                    void downloadManager.openMediaSniffer(singleUrl);
+                  }}
+                  style={{ fontSize: 11, padding: '4px 10px', width: 'fit-content' }}
+                >
+                  {ar ? 'اقتناص الرابط المباشر عبر متصفح ARGON' : 'Sniff media via ARGON browser'}
+                </button>
+              </div>
+            )}
+          </div>
         )}
         {notice && (
           <output className="inline-notice" aria-live="polite">

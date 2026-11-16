@@ -109,6 +109,27 @@ pub fn resolve_tool_paths(app: &AppHandle) -> Result<(PathBuf, String, Option<Pa
 }
 
 #[cfg(not(target_os = "android"))]
+pub fn find_cookies_file(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(tools) = user_tools_dir(app) {
+        let p = tools.join("cookies.txt");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(local_data) = app.path().app_local_data_dir() {
+        let p = local_data.join("cookies.txt");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let manifest_cookies = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cookies.txt");
+    if manifest_cookies.exists() {
+        return Some(manifest_cookies);
+    }
+    None
+}
+
+#[cfg(not(target_os = "android"))]
 pub fn has_ffmpeg_installed(app: &AppHandle) -> bool {
     resolve_tool_paths(app).is_ok_and(|(_, _, ff)| ff.is_some())
 }
@@ -142,6 +163,9 @@ async fn run_ytdlp_json(
         "--js-runtimes",
         &node,
     ]);
+    if let Some(cookies_path) = find_cookies_file(app) {
+        command.arg("--cookies").arg(cookies_path);
+    }
     if let Some(fmt) = format_arg {
         command.args(["--format", fmt]);
     }
@@ -160,10 +184,17 @@ async fn run_ytdlp_json(
             || stderr_lossy.contains("Login")
             || stderr_lossy.contains("bot")
             || stderr_lossy.contains("403")
-            || stderr_lossy.contains("confirm you");
+            || stderr_lossy.contains("confirm you")
+            || stderr_lossy.contains("empty media response")
+            || stderr_lossy.contains("logged-in")
+            || stderr_lossy.contains("cookies-from-browser")
+            || stderr_lossy.contains("private")
+            || stderr_lossy.contains("Private")
+            || stderr_lossy.contains("rate-limit")
+            || stderr_lossy.contains("Rate-limit");
 
         if looks_like_auth_or_bot_block {
-            for browser in ["edge", "chrome", "firefox"] {
+            for browser in ["firefox", "edge", "chrome", "brave", "opera"] {
                 let mut cookie_cmd = tokio::process::Command::new(&executable);
                 cookie_cmd.kill_on_drop(true);
                 #[cfg(windows)]
@@ -963,9 +994,67 @@ pub async fn resolve_media(
                         return Ok(to_resolved(resolved));
                     }
                 }
-                Err(yt_err)
+                let helpful_err = if yt_err.contains("empty media response")
+                    || yt_err.contains("logged-in")
+                    || yt_err.contains("login")
+                    || yt_err.contains("Private")
+                    || yt_err.contains("private")
+                {
+                    "هذا الرابط يتطلب تسجيل الدخول أو حساباً يتابع هذا الناشر (حساب خاص). يمكنك استخدام إضافة متصفح ARGON أو وضع ملف cookies.txt في مجلد أدوات التطبيق لتنزيل المحتوى الخاص والمحمي.".to_string()
+                } else {
+                    yt_err
+                };
+                Err(helpful_err)
             }
         }
+    }
+}
+
+#[tauri::command]
+pub async fn save_cookies_text(app: AppHandle, content: String) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let dir = user_tools_dir(&app)?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("تعذر إنشاء مجلد الأدوات: {e}"))?;
+        let path = dir.join("cookies.txt");
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+            return Ok("تم مسح ملف الكوكيز".into());
+        }
+        let formatted = if trimmed.contains('\t') || trimmed.starts_with("# Netscape") {
+            trimmed.to_string()
+        } else if trimmed.len() > 10 && !trimmed.contains('\n') {
+            format!("# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t2147483647\tsessionid\t{}\n", trimmed)
+        } else {
+            trimmed.to_string()
+        };
+        std::fs::write(&path, formatted).map_err(|e| format!("تعذر كتابة ملف الكوكيز: {e}"))?;
+        Ok("تم حفظ ملف الكوكيز بنجاح".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, content);
+        Err("إدارة ملفات الكوكيز متاحة على سطح المكتب".into())
+    }
+}
+
+#[tauri::command]
+pub async fn load_cookies_text(app: AppHandle) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(path) = find_cookies_file(&app) {
+            std::fs::read_to_string(path).map_err(|e| format!("تعذر قراءة الكوكيز: {e}"))
+        } else {
+            Ok(String::new())
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        Ok(String::new())
     }
 }
 

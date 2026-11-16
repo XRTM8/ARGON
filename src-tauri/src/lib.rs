@@ -432,8 +432,11 @@ async fn open_media_sniffer(
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (app, url);
-        Err("متصفح اقتناص الوسائط متاح على أجهزة أندرويد".to_string())
+        let target = url.unwrap_or_else(|| "https://google.com".to_string());
+        app.opener()
+            .open_url(&target, None)
+            .map_err(|e| format!("تعذر فتح المتصفح: {e}"))?;
+        Ok(serde_json::json!({ "status": "opened_in_browser", "url": target }))
     }
 }
 
@@ -1145,6 +1148,8 @@ pub fn run() {
             media::update_ytdlp_tool,
             media::resolve_media,
             media::list_media_formats,
+            media::save_cookies_text,
+            media::load_cookies_text,
             set_browser_bridge_ready,
             browser_bridge_status,
             open_media_sniffer,

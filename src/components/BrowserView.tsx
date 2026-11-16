@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Puzzle, FolderOpen, Check, Copy, RefreshCw, ArrowUpRight, Globe, Compass } from 'lucide-react';
+import { FolderOpen, Check, Copy, RefreshCw, ArrowUpRight, Globe, Compass } from 'lucide-react';
 import { nativeRuntime } from '../core/flowClient';
 import { downloadManager } from '../core/downloadManager';
 import { writeClipboardText } from '../core/clipboard';
@@ -58,80 +58,80 @@ export function BrowserView({ lang }: { lang: 'ar' | 'en' }) {
   return <div className="browser-view">
     <div className="view-header">
       <div className="view-heading">
-        <h1>{ar ? (isAndroid ? 'اقتناص وسائط الويب' : 'إضافة المتصفح والالتقاط') : (isAndroid ? 'Mobile Media Sniffer' : 'Browser Integration')}</h1>
+        <h1>{ar ? 'اقتناص وسائط الويب والمتصفح' : 'Media Sniffer & Browser Integration'}</h1>
       </div>
-      {isAndroid ? <Compass size={24} /> : <Puzzle size={24} />}
+      <Compass size={24} />
     </div>
 
-    {isAndroid ? (
-      <div className="browser-setup glass-panel" style={{ marginTop: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-          <Globe size={22} className="text-accent" />
-          <h2 style={{ margin: 0 }}>{ar ? 'متصفح اقتناص التدفقات الداخلي' : 'In-App Media Sniffer'}</h2>
+    <div className="browser-setup glass-panel" style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+        <Globe size={22} className="text-accent" />
+        <h2 style={{ margin: 0 }}>{ar ? 'متصفح اقتناص الوسائط والتدفقات المباشر' : 'Live Media Sniffer & Browser'}</h2>
+      </div>
+      <p style={{ color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: 1.6 }}>
+        {ar
+          ? 'افتح أي موقع فيديو، منصة أفلام، أو حساب إنستغرام/تيك توك خاص. يقوم المتصفح باعتراض تدفقات HLS (.m3u8) وملفات الفيديو تلقائياً مع تنزيل فوري بضغطة واحدة.'
+          : 'Open any streaming site, video platform, or private Instagram/TikTok post. Automatically intercepts HLS (.m3u8) and direct video streams with instant one-click download.'}
+      </p>
+
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            type="url"
+            value={snifferUrl}
+            onChange={(e) => setSnifferUrl(e.target.value)}
+            placeholder="https://..."
+            className="action-input"
+            style={{
+              flex: 1,
+              padding: '0.75rem 1rem',
+              borderRadius: '8px',
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: '#fff',
+              fontFamily: 'monospace'
+            }}
+            dir="ltr"
+          />
+          <button
+            className="action-button primary"
+            onClick={() => void launchSniffer()}
+            style={{ padding: '0.75rem 1.25rem', whiteSpace: 'nowrap' }}
+          >
+            <Compass size={16} />
+            {ar ? 'فتح واقتناص' : 'Sniff Page'}
+          </button>
         </div>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: 1.6 }}>
-          {ar
-            ? 'تصفح أي موقع فيديو أو تواصل اجتماعي محمي. يقوم المتصفح الداخلي باعتراض تدفقات HLS (.m3u8) و DASH (.mpd) وملفات الفيديو تلقائياً مع زر تنزيل فوري بضغطة واحدة.'
-            : 'Browse any video or authenticated streaming site. The in-app sniffer automatically intercepts HLS (.m3u8), DASH (.mpd), and direct video streams with one-tap download.'}
-        </p>
 
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <input
-              type="url"
-              value={snifferUrl}
-              onChange={(e) => setSnifferUrl(e.target.value)}
-              placeholder="https://..."
-              className="action-input"
-              style={{
-                flex: 1,
-                padding: '0.75rem 1rem',
-                borderRadius: '8px',
-                background: 'rgba(255,255,255,0.05)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                color: '#fff',
-                fontFamily: 'monospace'
-              }}
-              dir="ltr"
-            />
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', alignSelf: 'center' }}>
+            {ar ? 'مواقع مقترحة:' : 'Quick shortcuts:'}
+          </span>
+          {[
+            { name: 'Instagram', url: 'https://instagram.com' },
+            { name: 'TikTok', url: 'https://tiktok.com' },
+            { name: 'YouTube', url: 'https://m.youtube.com' },
+            { name: 'Facebook', url: 'https://m.facebook.com' },
+            { name: 'Pinterest', url: 'https://pinterest.com' },
+            { name: 'Twitch', url: 'https://m.twitch.tv' },
+          ].map((item) => (
             <button
-              className="action-button primary"
-              onClick={() => void launchSniffer()}
-              style={{ padding: '0.75rem 1.25rem', whiteSpace: 'nowrap' }}
+              key={item.name}
+              className="action-button secondary"
+              style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+              onClick={() => {
+                setSnifferUrl(item.url);
+                void launchSniffer(item.url);
+              }}
             >
-              <Compass size={16} />
-              {ar ? 'فتح واقتناص' : 'Sniff Page'}
+              {item.name}
             </button>
-          </div>
-
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', alignSelf: 'center' }}>
-              {ar ? 'مواقع مقترحة:' : 'Quick shortcuts:'}
-            </span>
-            {[
-              { name: 'YouTube', url: 'https://m.youtube.com' },
-              { name: 'Instagram', url: 'https://instagram.com' },
-              { name: 'TikTok', url: 'https://tiktok.com' },
-              { name: 'Facebook', url: 'https://m.facebook.com' },
-              { name: 'Pinterest', url: 'https://pinterest.com' },
-              { name: 'Twitch', url: 'https://m.twitch.tv' },
-            ].map((item) => (
-              <button
-                key={item.name}
-                className="action-button secondary"
-                style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
-                onClick={() => {
-                  setSnifferUrl(item.url);
-                  void launchSniffer(item.url);
-                }}
-              >
-                {item.name}
-              </button>
-            ))}
-          </div>
+          ))}
         </div>
       </div>
-    ) : (
+    </div>
+
+    {desktop && (
       <>
         <div className="bridge-status">
           <span className={`presence ${status === 'ready' ? 'online' : ''}`} />

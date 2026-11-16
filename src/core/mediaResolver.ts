@@ -31,7 +31,7 @@ export function detectPlatform(rawUrl: string): PlatformType {
     const matches = (domain: string) => host === domain || host.endsWith(`.${domain}`);
     if (matches('youtube.com') || matches('youtu.be')) return 'youtube';
     if (matches('tiktok.com')) return 'tiktok';
-    if (matches('instagram.com') || matches('instagr.am')) return 'instagram';
+    if (matches('instagram.com') || matches('instagr.am') || matches('ig.me')) return 'instagram';
     if (matches('twitter.com') || matches('x.com') || matches('t.co')) return 'twitter';
     if (matches('facebook.com') || matches('fb.watch') || matches('fb.com')) return 'facebook';
     if (matches('reddit.com') || matches('redd.it') || matches('v.redd.it')) return 'reddit';

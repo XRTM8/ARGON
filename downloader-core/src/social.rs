@@ -438,11 +438,19 @@ async fn extract_youtube(client: &Client, url: &str) -> Result<SocialMediaBundle
 pub fn extract_instagram_shortcode(raw_url: &str) -> Option<String> {
     let url = Url::parse(raw_url.trim()).ok()?;
     let segs: Vec<&str> = url.path_segments()?.filter(|s| !s.is_empty()).collect();
-    for i in 0..segs.len().saturating_sub(1) {
-        if matches!(segs[i], "reel" | "reels" | "p" | "tv") {
-            let code = segs[i + 1].trim();
-            if !code.is_empty() && !code.starts_with('?') {
-                return Some(code.to_owned());
+    for i in 0..segs.len() {
+        if matches!(segs[i], "reel" | "reels" | "p" | "tv") && i + 1 < segs.len() {
+            let code = segs[i + 1].trim().trim_matches('/');
+            let clean = code.split('?').next().unwrap_or("").trim();
+            if !clean.is_empty() {
+                return Some(clean.to_owned());
+            }
+        }
+        if segs[i] == "stories" && i + 2 < segs.len() {
+            let code = segs[i + 2].trim().trim_matches('/');
+            let clean = code.split('?').next().unwrap_or("").trim();
+            if !clean.is_empty() {
+                return Some(clean.to_owned());
             }
         }
     }
@@ -452,22 +460,57 @@ pub fn extract_instagram_shortcode(raw_url: &str) -> Option<String> {
 pub fn parse_instagram_html(html: &str) -> Option<SocialMediaBundle> {
     let mut urls = extract_json_url_fields(
         html,
-        &["video_url", "playback_url", "playable_url", "contentUrl"],
+        &[
+            "video_url",
+            "playback_url",
+            "playable_url",
+            "contentUrl",
+            "video_dash_manifest",
+        ],
     );
-    for meta_key in ["og:video:secure_url", "og:video"] {
+    for meta_key in [
+        "og:video:secure_url",
+        "og:video",
+        "twitter:player:stream",
+    ] {
         if let Some(u) = extract_meta_content(html, meta_key) {
             push_unique_url(&mut urls, u);
         }
     }
+
+    let mut is_photo = false;
+    if urls.is_empty() {
+        let img_fields = extract_json_url_fields(html, &["display_url", "display_src"]);
+        for u in img_fields {
+            push_unique_url(&mut urls, u);
+        }
+        if let Some(og_img) = extract_meta_content(html, "og:image") {
+            push_unique_url(&mut urls, og_img);
+        }
+        if !urls.is_empty() {
+            is_photo = true;
+        }
+    }
+
     if urls.is_empty() {
         return None;
     }
 
     let raw_title = extract_meta_content(html, "og:title")
         .or_else(|| extract_html_title(html))
-        .unwrap_or_else(|| "Instagram Video".into());
+        .unwrap_or_else(|| {
+            if is_photo {
+                "Instagram Photo".into()
+            } else {
+                "Instagram Video".into()
+            }
+        });
     let title = if raw_title.eq_ignore_ascii_case("instagram") {
-        "Instagram Reel".into()
+        if is_photo {
+            "Instagram Photo".into()
+        } else {
+            "Instagram Reel".into()
+        }
     } else {
         raw_title
     };
@@ -481,23 +524,34 @@ pub fn parse_instagram_html(html: &str) -> Option<SocialMediaBundle> {
     let formats = urls
         .into_iter()
         .enumerate()
-        .map(|(i, url)| SocialFormat {
-            id: format!("ig-{}", i + 1),
-            ext: "mp4".into(),
-            resolution: if i == 0 { "HD" } else { "MP4" }.into(),
-            fps: None,
-            filesize: None,
-            vcodec: "h264".into(),
-            acodec: "aac".into(),
-            has_video: true,
-            has_audio: true,
-            label: if i == 0 {
-                "MP4 (Original)".into()
-            } else {
-                format!("MP4 #{}", i + 1)
-            },
-            url,
-            headers: headers.clone(),
+        .map(|(i, url)| {
+            let ext = if is_photo { "jpg" } else { "mp4" };
+            SocialFormat {
+                id: format!("ig-{}", i + 1),
+                ext: ext.into(),
+                resolution: if is_photo {
+                    "Image".into()
+                } else if i == 0 {
+                    "HD".into()
+                } else {
+                    "MP4".into()
+                },
+                fps: None,
+                filesize: None,
+                vcodec: if is_photo { "none".into() } else { "h264".into() },
+                acodec: if is_photo { "none".into() } else { "aac".into() },
+                has_video: !is_photo,
+                has_audio: !is_photo,
+                label: if is_photo {
+                    format!("Photo #{}", i + 1)
+                } else if i == 0 {
+                    "MP4 (Original)".into()
+                } else {
+                    format!("MP4 #{}", i + 1)
+                },
+                url,
+                headers: headers.clone(),
+            }
         })
         .collect();
 
@@ -514,12 +568,18 @@ async fn extract_instagram(client: &Client, raw_url: &str) -> Result<SocialMedia
     let mut canonical = raw_url.to_owned();
     if extract_instagram_shortcode(&canonical).is_none() {
         if let Ok((resolved, _)) = fetch_text(client, raw_url, CHROME_UA, None).await {
-            canonical = resolved;
+            if !resolved.is_empty() {
+                canonical = resolved;
+            }
         }
     }
 
     let mut candidates = Vec::new();
     if let Some(code) = extract_instagram_shortcode(&canonical) {
+        candidates.push((
+            format!("https://www.instagram.com/reel/{code}/embed/"),
+            IPHONE_UA,
+        ));
         candidates.push((
             format!("https://www.instagram.com/p/{code}/embed/"),
             IPHONE_UA,
@@ -532,6 +592,10 @@ async fn extract_instagram(client: &Client, raw_url: &str) -> Result<SocialMedia
             format!("https://www.instagram.com/reel/{code}/"),
             IPHONE_UA,
         ));
+        candidates.push((
+            format!("https://www.instagram.com/p/{code}/"),
+            CHROME_UA,
+        ));
     } else {
         candidates.push((canonical.clone(), IPHONE_UA));
     }
@@ -543,7 +607,28 @@ async fn extract_instagram(client: &Client, raw_url: &str) -> Result<SocialMedia
             }
         }
     }
-    Err("تعذر استخراج فيديو Instagram (قد يكون الحساب خاصاً أو الرابط منتهياً)".into())
+    Err("تعذر استخراج وسائط Instagram (قد يكون الحساب خاصاً أو يتطلب تسجيل الدخول؛ يمكنك استخدام إضافة المتصفح أو وضع ملف cookies.txt في مجلد أدوات التطبيق)".into())
+}
+
+pub fn extract_tiktok_video_id(raw_url: &str) -> Option<String> {
+    let url = Url::parse(raw_url.trim()).ok()?;
+    let segs: Vec<&str> = url.path_segments()?.filter(|s| !s.is_empty()).collect();
+    for i in 0..segs.len().saturating_sub(1) {
+        if matches!(segs[i], "video" | "v" | "photo") {
+            let code = segs[i + 1].trim();
+            let clean = code.split('?').next().unwrap_or("").trim();
+            if clean.chars().all(|c| c.is_ascii_digit()) && !clean.is_empty() {
+                return Some(clean.to_owned());
+            }
+        }
+    }
+    for seg in segs {
+        let clean = seg.split('?').next().unwrap_or("").trim();
+        if clean.len() >= 15 && clean.chars().all(|c| c.is_ascii_digit()) {
+            return Some(clean.to_owned());
+        }
+    }
+    None
 }
 
 pub fn parse_tikwm_json(val: &Value) -> Option<SocialMediaBundle> {
@@ -599,6 +684,26 @@ pub fn parse_tikwm_json(val: &Value) -> Option<SocialMediaBundle> {
             headers: headers.clone(),
         });
     }
+    if let Some(imgs) = d["images"].as_array() {
+        for (idx, img) in imgs.iter().enumerate() {
+            if let Some(img_url) = img.as_str().filter(|s| is_valid_http_url(s)) {
+                formats.push(SocialFormat {
+                    id: format!("tt-img-{}", idx + 1),
+                    ext: "jpg".into(),
+                    resolution: "Image".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: format!("Image #{}", idx + 1),
+                    url: img_url.to_owned(),
+                    headers: headers.clone(),
+                });
+            }
+        }
+    }
     if let Some(music) = d["music"].as_str().filter(|s| is_valid_http_url(s)) {
         formats.push(SocialFormat {
             id: "tt-audio".into(),
@@ -626,25 +731,47 @@ pub fn parse_tikwm_json(val: &Value) -> Option<SocialMediaBundle> {
 }
 
 async fn extract_tiktok(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
-    let api = format!(
-        "https://www.tikwm.com/api/?url={}&hd=1",
-        url_encode_component(url)
-    );
-    if let Ok((_, text)) = fetch_text(client, &api, CHROME_UA, None).await {
-        if let Ok(json_val) = serde_json::from_str::<Value>(&text) {
-            if let Some(bundle) = parse_tikwm_json(&json_val) {
-                return Ok(bundle);
+    let mut canonical = url.to_owned();
+    if canonical.contains("vt.tiktok.com")
+        || canonical.contains("vm.tiktok.com")
+        || canonical.contains("/t/")
+    {
+        if let Ok((resolved, _)) = fetch_text(client, url, CHROME_UA, None).await {
+            if !resolved.is_empty() {
+                canonical = resolved;
             }
         }
     }
 
-    let (final_url, html) = fetch_text(client, url, CHROME_UA, Some("https://www.tiktok.com/")).await?;
-    let mut urls = extract_json_url_fields(&html, &["playAddr", "downloadAddr"]);
+    let mut tikwm_candidates = vec![canonical.clone()];
+    if let Some(id) = extract_tiktok_video_id(&canonical) {
+        tikwm_candidates.push(format!("https://www.tiktok.com/@tiktok/video/{id}"));
+    }
+    if canonical != url {
+        tikwm_candidates.push(url.to_owned());
+    }
+
+    for target in tikwm_candidates {
+        let api = format!(
+            "https://www.tikwm.com/api/?url={}&hd=1",
+            url_encode_component(&target)
+        );
+        if let Ok((_, text)) = fetch_text(client, &api, CHROME_UA, None).await {
+            if let Ok(json_val) = serde_json::from_str::<Value>(&text) {
+                if let Some(bundle) = parse_tikwm_json(&json_val) {
+                    return Ok(bundle);
+                }
+            }
+        }
+    }
+
+    let (final_url, html) = fetch_text(client, &canonical, CHROME_UA, Some("https://www.tiktok.com/")).await?;
+    let mut urls = extract_json_url_fields(&html, &["playAddr", "downloadAddr", "play_addr", "download_addr"]);
     if let Some(og) = extract_meta_content(&html, "og:video") {
         push_unique_url(&mut urls, og);
     }
     if urls.is_empty() {
-        return Err("تعذر استخراج فيديو TikTok".into());
+        return Err("تعذر استخراج فيديو TikTok (تأكد من صحة الرابط أو استخدم إضافة المتصفح)".into());
     }
     let mut headers = HashMap::new();
     headers.insert("User-Agent".into(), CHROME_UA.into());
@@ -1177,5 +1304,36 @@ mod tests {
         });
         let x = parse_fxtwitter_json(&fx).unwrap();
         assert_eq!(x.formats[0].url, "https://video.twimg.com/hd.mp4");
+
+        let tikwm_images = json!({
+            "code": 0,
+            "data": {
+                "title": "Photo Slideshow",
+                "images": [
+                    "https://p16.tiktokcdn.com/img1.jpg",
+                    "https://p16.tiktokcdn.com/img2.jpg"
+                ],
+                "music": "https://v16.tiktokcdn.com/audio.mp3",
+                "author": { "nickname": "photo_creator" }
+            }
+        });
+        let tt_img = parse_tikwm_json(&tikwm_images).unwrap();
+        assert_eq!(tt_img.formats.len(), 3);
+        assert_eq!(tt_img.formats[0].ext, "jpg");
+        assert_eq!(tt_img.formats[0].label, "Image #1");
+        assert_eq!(tt_img.formats[2].ext, "mp3");
+
+        assert_eq!(
+            extract_instagram_shortcode("https://www.instagram.com/reel/C8r_6oIuGZz/"),
+            Some("C8r_6oIuGZz".into())
+        );
+        assert_eq!(
+            extract_instagram_shortcode("https://www.instagram.com/share/reel/C8r_6oIuGZz/?igsh=123"),
+            Some("C8r_6oIuGZz".into())
+        );
+        assert_eq!(
+            extract_tiktok_video_id("https://www.tiktok.com/@user/video/7106594312292453675?is_from_webapp=1"),
+            Some("7106594312292453675".into())
+        );
     }
 }

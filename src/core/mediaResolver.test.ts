@@ -7,6 +7,7 @@ describe('mediaResolver', () => {
     expect(detectPlatform('https://youtu.be/dQw4w9WgXcQ')).toBe('youtube');
     expect(detectPlatform('https://www.tiktok.com/@user/video/123456')).toBe('tiktok');
     expect(detectPlatform('https://www.instagram.com/reel/C123456/')).toBe('instagram');
+    expect(detectPlatform('https://ig.me/reel/C123456')).toBe('instagram');
     expect(detectPlatform('https://x.com/user/status/123456789')).toBe('twitter');
     expect(detectPlatform('https://twitter.com/user/status/123456789')).toBe('twitter');
     expect(detectPlatform('https://fb.watch/abc123/')).toBe('facebook');

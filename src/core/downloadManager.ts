@@ -732,6 +732,27 @@ export class DownloadManager {
     return invoke<MediaToolsStatus>('update_ytdlp_tool');
   }
 
+  public async saveCookiesText(content: string): Promise<string> {
+    if (!isTauri()) return 'Local mode';
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<string>('save_cookies_text', { content });
+  }
+
+  public async loadCookiesText(): Promise<string> {
+    if (!isTauri()) return '';
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<string>('load_cookies_text');
+  }
+
+  public async openMediaSniffer(url: string): Promise<void> {
+    if (!isTauri()) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_media_sniffer', { url });
+  }
+
   public async shareFile(filePath?: string) {
     if (!filePath || !isTauri()) throw new Error('Open the ARGON app to share saved files.');
     const { invoke } = await import('@tauri-apps/api/core');
