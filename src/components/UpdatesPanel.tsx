@@ -73,7 +73,31 @@ export function UpdatesPanel({ lang }: { lang: 'ar' | 'en' }) {
   const displayError = localError || state.error;
   return <section className="updates-panel glass-panel" aria-label={ar ? 'تحديثات التطبيق' : 'Application updates'}>
     <div className="update-heading"><ShieldCheck size={19} /><div><h2>{ar ? 'تحديثات التطبيق' : 'Application updates'}</h2><span dir="ltr">ARGON {CURRENT_VERSION}{state.mode === 'portable' ? ' · Portable' : installed ? ' · Windows installer' : android ? ' · Android' : ''}</span></div><button className="action-button" disabled={busy || state.phase === 'ready' || ['unknown', 'preview'].includes(state.mode)} onClick={() => { setLocalError(null); void updateManager.check(); }}><RefreshCw size={14} className={state.phase === 'checking' ? 'animate-spin' : ''} />{ar ? 'فحص الآن' : 'Check now'}</button></div>
-    <label className="update-preference"><div><strong>{ar ? 'فحص وتنزيل التحديثات تلقائياً' : 'Check and download updates automatically'}</strong><p>{installed ? (ar ? 'اختياري ومطفأ افتراضياً. يفحص عند التشغيل وكل 6 ساعات؛ التثبيت بموافقتك بعد انتهاء العمليات.' : 'Optional and off by default. Checks at startup and every 6 hours; you approve installation after transfers finish.') : state.mode === 'portable' ? (ar ? 'نسخة Portable تُحدّث بحزمة ZIP متوافقة حتى تبقى مستقلة عن المثبّت.' : 'Portable copies use a compatible ZIP to stay separate from the installer.') : android ? (ar ? 'على Android يتم تنزيل حزمة APK والتحقق من SHA-256 قبل تشغيل المثبّت.' : 'On Android, compatible APK releases are downloaded and SHA-256 verified before launching Android package installer.') : (ar ? 'التحديث التلقائي متاح حالياً لمثبّت Windows x64.' : 'Automatic background installation is currently available for the Windows x64 installer.')}</p></div><input type="checkbox" role="switch" checked={state.automatic} disabled={!installed || state.phase === 'installing'} onChange={event => void updateManager.setAutomatic(event.target.checked)} aria-label={ar ? 'تحديث تلقائي اختياري' : 'Optional automatic updates'} /></label>
+    <div className="update-preference">
+      <div>
+        <strong>{ar ? 'فحص وتنزيل التحديثات تلقائياً' : 'Check and download updates automatically'}</strong>
+        <p>
+          {installed
+            ? (ar ? 'اختياري ومطفأ افتراضياً. يفحص عند التشغيل وكل 6 ساعات؛ التثبيت بموافقتك بعد انتهاء العمليات.' : 'Optional and off by default. Checks at startup and every 6 hours; you approve installation after transfers finish.')
+            : state.mode === 'portable'
+            ? (ar ? 'نسخة Portable تُحدّث بحزمة ZIP متوافقة حتى تبقى مستقلة عن المثبّت.' : 'Portable copies use a compatible ZIP to stay separate from the installer.')
+            : android
+            ? (ar ? 'على Android يتم تنزيل حزمة APK والتحقق من SHA-256 قبل تشغيل المثبّت.' : 'On Android, compatible APK releases are downloaded and SHA-256 verified before launching Android package installer.')
+            : (ar ? 'التحديث التلقائي متاح حالياً لمثبّت Windows x64 و Android.' : 'Automatic background installation is currently available for the Windows x64 installer and Android.')}
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={state.automatic}
+        disabled={(!installed && !android) || state.phase === 'installing'}
+        className="argon-switch"
+        onClick={() => void updateManager.setAutomatic(!state.automatic)}
+        aria-label={ar ? 'تحديث تلقائي اختياري' : 'Optional automatic updates'}
+      >
+        <span className="argon-switch-thumb" />
+      </button>
+    </div>
     <p className="update-description" role="status">{state.mode === 'preview' ? (ar ? 'هذه معاينة للواجهة؛ التحديث يتطلب تطبيق سطح المكتب.' : 'Interface preview. Updates require the desktop app.') : descriptions[state.phase]}</p>
     {state.phase === 'downloading' && <div className="update-progress"><progress value={state.total ? state.downloaded : undefined} max={state.total || undefined} aria-label={ar ? 'تقدم تنزيل التحديث' : 'Update download progress'} /><span dir="ltr">{formatBytes(state.downloaded)}{state.total ? ` / ${formatBytes(state.total)}` : ''}</span></div>}
     {state.phase === 'queued' && queuedTask && queuedTask.status !== 'completed' && (

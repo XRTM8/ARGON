@@ -69,7 +69,8 @@ export class UpdateManager {
   subscribe = (listener: () => void) => { this.subscribers.add(listener); return () => { this.subscribers.delete(listener); }; };
   private patch(value: Partial<UpdateState>) { this.state = { ...this.state, ...value }; this.subscribers.forEach(listener => listener()); }
   private accept(value: BackendState) {
-    this.patch({ automatic: value.mode === 'installed' && this.state.automatic, mode: value.mode, phase: value.phase, version: value.version || undefined, notes: value.notes || undefined, downloaded: value.downloaded, total: value.total || undefined, error: undefined });
+    const canAuto = value.mode === 'installed' || this.deps.android;
+    this.patch({ automatic: canAuto && this.state.automatic, mode: value.mode, phase: value.phase, version: value.version || undefined, notes: value.notes || undefined, downloaded: value.downloaded, total: value.total || undefined, error: undefined });
   }
   initialize() {
     return this.initialized ||= (async () => {
@@ -102,7 +103,7 @@ export class UpdateManager {
   private online = () => { if (this.state.automatic) void this.check(); };
   async setAutomatic(automatic: boolean) {
     await this.initialize();
-    if (this.state.mode !== 'installed') return;
+    if (this.state.mode !== 'installed' && !this.deps.android) return;
     try {
       const storage = this.deps.storage(); if (!storage) throw new Error('preferences_not_saved');
       storage.setItem(UPDATE_PREFERENCES_KEY, JSON.stringify({ automatic }));
@@ -131,7 +132,7 @@ export class UpdateManager {
           } else this.patch({ phase: 'current', version: undefined });
         }
         this.patch({ lastChecked: Date.now() });
-        if (this.state.automatic && this.state.mode === 'installed' && this.state.phase === 'available') await this.download();
+        if (this.state.automatic && (this.state.mode === 'installed' || this.deps.android) && this.state.phase === 'available') await this.download();
       } catch (error) { this.patch({ phase: 'error', error: String(error) }); }
       return this.state;
     })().finally(() => { this.checking = undefined; });

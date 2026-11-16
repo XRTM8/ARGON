@@ -126,4 +126,25 @@ describe('optional updater coordination', () => {
     expect(downloaded.taskId).toBe('apk-task-1');
     expect(queuePortable).toHaveBeenCalledWith(apk);
   });
+  it('allows enabling automatic updates on Android and auto-downloads available APK', async () => {
+    const storage = { getItem: (key: string) => memory.get(key) || null, setItem: (key: string, value: string) => { memory.set(key, value); } } as Storage;
+    const apk = { url: 'https://github.com/XRTM8/ARGON/releases/download/v2.3.0/ARGON_2.3.0_arm64.apk', sha256: 'd'.repeat(64) };
+    const queuePortable = vi.fn(() => 'apk-task-auto');
+    const manager = new UpdateManager({
+      native: true,
+      version: '2.2.0',
+      android: true,
+      backend: async () => status('idle', 'unsupported') as any,
+      storage: () => storage,
+      fetchRelease: async () => ({ version: '2.3.0', notes: '', pubDate: '', assets: { androidApk: apk } }),
+      queuePortable,
+      listen: async () => () => {},
+    });
+    await manager.setAutomatic(true);
+    expect(manager.getState().automatic).toBe(true);
+    expect(JSON.parse(memory.get(UPDATE_PREFERENCES_KEY)!).automatic).toBe(true);
+    expect(manager.getState().phase).toBe('queued');
+    expect(manager.getState().taskId).toBe('apk-task-auto');
+    expect(queuePortable).toHaveBeenCalledWith(apk);
+  });
 });
