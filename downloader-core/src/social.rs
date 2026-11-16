@@ -1372,7 +1372,6 @@ async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundl
         formats,
     })
 }
-}
 
 async fn extract_reddit(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
     let (resolved, _) = fetch_text(client, url, CHROME_UA, None).await?;
