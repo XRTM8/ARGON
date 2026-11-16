@@ -760,10 +760,26 @@ fn replace_bin_atomic(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 fn from_social_bundle(bundle: social::SocialMediaBundle, allow_video_only: bool) -> MediaMetadataInfo {
+    let has_muxed = bundle.formats.iter().any(|f| f.has_video && f.has_audio);
     let formats = bundle
         .formats
         .into_iter()
-        .filter(|f| allow_video_only || f.has_audio)
+        .filter(|f| {
+            if allow_video_only {
+                return true;
+            }
+            // Photos/images should never be discarded (ext = jpg, png, webp, or no video/audio)
+            if !f.has_video && !f.has_audio {
+                return true;
+            }
+            // Formats with audio (either audio-only or muxed audio+video)
+            if f.has_audio {
+                return true;
+            }
+            // If the platform did not provide any combined muxed stream (e.g. adaptive only),
+            // retain the video streams so Android users can still download the video
+            !has_muxed && f.has_video
+        })
         .map(|f| MediaFormatInfo {
             id: f.id,
             ext: f.ext,
@@ -790,7 +806,7 @@ fn from_social_bundle(bundle: social::SocialMediaBundle, allow_video_only: bool)
 #[cfg(not(target_os = "android"))]
 fn is_pure_rust_format_id(id: &str) -> bool {
     [
-        "yt-", "ig-", "tt-", "x-", "vx-", "fb-", "reddit-", "vimeo-", "og-",
+        "yt-", "ig-", "tt-", "x-", "vx-", "fb-", "reddit-", "pin-", "vimeo-", "og-",
     ]
     .iter()
     .any(|prefix| id.starts_with(prefix))
@@ -929,7 +945,7 @@ pub async fn resolve_media(
         let prefer_rust_first = format_id.is_none()
             && matches!(
                 platform,
-                "instagram" | "tiktok" | "twitter" | "facebook" | "reddit" | "vimeo" | "threads"
+                "instagram" | "tiktok" | "twitter" | "facebook" | "reddit" | "vimeo" | "threads" | "pinterest"
             );
 
         if prefer_rust_first {

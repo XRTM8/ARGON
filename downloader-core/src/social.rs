@@ -250,10 +250,24 @@ pub fn parse_youtube_innertube_json(data: &Value) -> Result<SocialMediaBundle, S
 
     let mut formats = Vec::new();
     let push_yt_fmt = |formats: &mut Vec<SocialFormat>, item: &Value, is_muxed: bool| {
-        let Some(url) = item["url"].as_str() else {
+        let url = if let Some(direct_url) = item["url"].as_str() {
+            direct_url.to_owned()
+        } else if let Some(cipher) = item["signatureCipher"].as_str().or_else(|| item["cipher"].as_str()) {
+            let mut found_url = None;
+            for part in cipher.split('&') {
+                if let Some(val) = part.strip_prefix("url=") {
+                    found_url = Some(crate::resolver::percent_decode(val));
+                    break;
+                }
+            }
+            match found_url {
+                Some(u) => u,
+                None => return,
+            }
+        } else {
             return;
         };
-        if !is_valid_http_url(url) {
+        if !is_valid_http_url(&url) {
             return;
         }
         let mime = item["mimeType"].as_str().unwrap_or("video/mp4");
@@ -303,7 +317,7 @@ pub fn parse_youtube_innertube_json(data: &Value) -> Result<SocialMediaBundle, S
             has_video,
             has_audio,
             label,
-            url: url.to_owned(),
+            url,
             headers: HashMap::new(),
         });
     };
@@ -336,27 +350,6 @@ async fn extract_youtube(client: &Client, url: &str) -> Result<SocialMediaBundle
     let api_url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
     let clients = [
-        (
-            VR_YT_UA,
-            json!({
-                "videoId": video_id,
-                "context": {
-                    "client": {
-                        "clientName": "ANDROID_VR",
-                        "clientVersion": "1.60.19",
-                        "deviceMake": "Oculus",
-                        "deviceModel": "Quest 3",
-                        "androidSdkVersion": 32,
-                        "osName": "Android",
-                        "osVersion": "12L",
-                        "hl": "en",
-                        "gl": "US"
-                    }
-                },
-                "contentCheckOk": true,
-                "racyCheckOk": true
-            }),
-        ),
         (
             ANDROID_YT_UA,
             json!({
@@ -396,13 +389,34 @@ async fn extract_youtube(client: &Client, url: &str) -> Result<SocialMediaBundle
                 "racyCheckOk": true
             }),
         ),
+        (
+            VR_YT_UA,
+            json!({
+                "videoId": video_id,
+                "context": {
+                    "client": {
+                        "clientName": "ANDROID_VR",
+                        "clientVersion": "1.60.19",
+                        "deviceMake": "Oculus",
+                        "deviceModel": "Quest 3",
+                        "androidSdkVersion": 32,
+                        "osName": "Android",
+                        "osVersion": "12L",
+                        "hl": "en",
+                        "gl": "US"
+                    }
+                },
+                "contentCheckOk": true,
+                "racyCheckOk": true
+            }),
+        ),
     ];
 
     let mut adaptive_fallback: Option<SocialMediaBundle> = None;
     let mut last_err = "تعذر استخراج فيديو YouTube".to_owned();
     for (ua, body) in clients {
         let Ok(resp) = tokio::time::timeout(
-            Duration::from_secs(16),
+            Duration::from_secs(10),
             client
                 .post(api_url)
                 .header("User-Agent", ua)
@@ -730,6 +744,85 @@ pub fn parse_tikwm_json(val: &Value) -> Option<SocialMediaBundle> {
     })
 }
 
+async fn extract_tiktok_tikmate(client: &Client, url: &str) -> Option<SocialMediaBundle> {
+    let resp = tokio::time::timeout(
+        Duration::from_secs(6),
+        client
+            .post("https://api.tikmate.app/api/lookup")
+            .header("User-Agent", CHROME_UA)
+            .form(&[("url", url)])
+            .send(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let val: Value = resp.json().await.ok()?;
+    if val["success"].as_bool() != Some(true) {
+        return None;
+    }
+    let id = val["id"].as_str().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    let title = val["desc"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("TikTok Video")
+        .to_owned();
+    let uploader = val["author_name"].as_str().map(str::to_owned);
+    let thumbnail = val["cover"].as_str().map(str::to_owned);
+
+    let mut formats = Vec::new();
+    let mut headers = HashMap::new();
+    headers.insert("User-Agent".into(), CHROME_UA.into());
+    headers.insert("Referer".into(), "https://tikmate.app/".into());
+
+    if let Some(hd_token) = val["hd_token"].as_str().filter(|s| !s.is_empty()) {
+        let hd_url = format!("https://tikmate.app/download/{hd_token}/{id}.mp4?hd=1");
+        formats.push(SocialFormat {
+            id: "tt-hd".into(),
+            ext: "mp4".into(),
+            resolution: "HD".into(),
+            fps: None,
+            filesize: None,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            has_audio: true,
+            label: "HD · MP4 (No watermark)".into(),
+            url: hd_url,
+            headers: headers.clone(),
+        });
+    }
+    if let Some(token) = val["token"].as_str().filter(|s| !s.is_empty()) {
+        let sd_url = format!("https://tikmate.app/download/{token}/{id}.mp4");
+        formats.push(SocialFormat {
+            id: "tt-sd".into(),
+            ext: "mp4".into(),
+            resolution: "SD".into(),
+            fps: None,
+            filesize: None,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            has_audio: true,
+            label: "SD · MP4 (No watermark)".into(),
+            url: sd_url,
+            headers,
+        });
+    }
+    (!formats.is_empty()).then_some(SocialMediaBundle {
+        title,
+        uploader,
+        thumbnail,
+        duration: None,
+        formats,
+    })
+}
+
 async fn extract_tiktok(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
     let mut canonical = url.to_owned();
     if canonical.contains("vt.tiktok.com")
@@ -743,6 +836,17 @@ async fn extract_tiktok(client: &Client, url: &str) -> Result<SocialMediaBundle,
         }
     }
 
+    // 1. Try TikMate primary extractor
+    if let Some(bundle) = extract_tiktok_tikmate(client, &canonical).await {
+        return Ok(bundle);
+    }
+    if canonical != url {
+        if let Some(bundle) = extract_tiktok_tikmate(client, url).await {
+            return Ok(bundle);
+        }
+    }
+
+    // 2. Try TikWM fallback with fast timeout
     let mut tikwm_candidates = vec![canonical.clone()];
     if let Some(id) = extract_tiktok_video_id(&canonical) {
         tikwm_candidates.push(format!("https://www.tiktok.com/@tiktok/video/{id}"));
@@ -756,7 +860,8 @@ async fn extract_tiktok(client: &Client, url: &str) -> Result<SocialMediaBundle,
             "https://www.tikwm.com/api/?url={}&hd=1",
             url_encode_component(&target)
         );
-        if let Ok((_, text)) = fetch_text(client, &api, CHROME_UA, None).await {
+        let fut = fetch_text(client, &api, CHROME_UA, None);
+        if let Ok(Ok((_, text))) = tokio::time::timeout(Duration::from_secs(4), fut).await {
             if let Ok(json_val) = serde_json::from_str::<Value>(&text) {
                 if let Some(bundle) = parse_tikwm_json(&json_val) {
                     return Ok(bundle);
@@ -765,49 +870,57 @@ async fn extract_tiktok(client: &Client, url: &str) -> Result<SocialMediaBundle,
         }
     }
 
-    let (final_url, html) = fetch_text(client, &canonical, CHROME_UA, Some("https://www.tiktok.com/")).await?;
-    let mut urls = extract_json_url_fields(&html, &["playAddr", "downloadAddr", "play_addr", "download_addr"]);
-    if let Some(og) = extract_meta_content(&html, "og:video") {
-        push_unique_url(&mut urls, og);
-    }
-    if urls.is_empty() {
-        return Err("تعذر استخراج فيديو TikTok (تأكد من صحة الرابط أو استخدم إضافة المتصفح)".into());
-    }
-    let mut headers = HashMap::new();
-    headers.insert("User-Agent".into(), CHROME_UA.into());
-    headers.insert("Referer".into(), final_url);
+    // 3. Fallback to direct web HTML and embed scraping
+    let embed_url = extract_tiktok_video_id(&canonical)
+        .map(|id| format!("https://www.tiktok.com/embed/v2/{id}"));
+    let targets = [Some(canonical.as_str()), embed_url.as_deref()];
+    for target_url in targets.into_iter().flatten() {
+        if let Ok((final_url, html)) = fetch_text(client, target_url, CHROME_UA, Some("https://www.tiktok.com/")).await {
+            let mut urls = extract_json_url_fields(&html, &["playAddr", "downloadAddr", "play_addr", "download_addr"]);
+            if let Some(og) = extract_meta_content(&html, "og:video") {
+                push_unique_url(&mut urls, og);
+            }
+            if !urls.is_empty() {
+                let mut headers = HashMap::new();
+                headers.insert("User-Agent".into(), CHROME_UA.into());
+                headers.insert("Referer".into(), final_url);
 
-    let title = extract_meta_content(&html, "og:title")
-        .or_else(|| extract_html_title(&html))
-        .unwrap_or_else(|| "TikTok Video".into());
-    Ok(SocialMediaBundle {
-        title,
-        uploader: None,
-        thumbnail: extract_meta_content(&html, "og:image"),
-        duration: None,
-        formats: urls
-            .into_iter()
-            .enumerate()
-            .map(|(i, stream_url)| SocialFormat {
-                id: format!("tt-web-{}", i + 1),
-                ext: "mp4".into(),
-                resolution: "MP4".into(),
-                fps: None,
-                filesize: None,
-                vcodec: "h264".into(),
-                acodec: "aac".into(),
-                has_video: true,
-                has_audio: true,
-                label: if i == 0 {
-                    "MP4".into()
-                } else {
-                    format!("MP4 #{}", i + 1)
-                },
-                url: stream_url,
-                headers: headers.clone(),
-            })
-            .collect(),
-    })
+                let title = extract_meta_content(&html, "og:title")
+                    .or_else(|| extract_html_title(&html))
+                    .unwrap_or_else(|| "TikTok Video".into());
+                return Ok(SocialMediaBundle {
+                    title,
+                    uploader: None,
+                    thumbnail: extract_meta_content(&html, "og:image"),
+                    duration: None,
+                    formats: urls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, stream_url)| SocialFormat {
+                            id: format!("tt-web-{}", i + 1),
+                            ext: "mp4".into(),
+                            resolution: "MP4".into(),
+                            fps: None,
+                            filesize: None,
+                            vcodec: "h264".into(),
+                            acodec: "aac".into(),
+                            has_video: true,
+                            has_audio: true,
+                            label: if i == 0 {
+                                "MP4".into()
+                            } else {
+                                format!("MP4 #{}", i + 1)
+                            },
+                            url: stream_url,
+                            headers: headers.clone(),
+                        })
+                        .collect(),
+                });
+            }
+        }
+    }
+
+    Err("تعذر استخراج فيديو TikTok (تأكد من صحة الرابط أو استخدم إضافة المتصفح)".into())
 }
 
 pub fn extract_tweet_id(raw_url: &str) -> Option<String> {
@@ -829,96 +942,54 @@ pub fn parse_fxtwitter_json(val: &Value) -> Option<SocialMediaBundle> {
     if tweet.is_null() {
         return None;
     }
-    let videos = tweet["media"]["videos"].as_array()?;
     let mut formats = Vec::new();
-    for (idx, vid) in videos.iter().enumerate() {
-        if let Some(variants) = vid["variants"].as_array() {
-            let mut mp4s: Vec<&Value> = variants
-                .iter()
-                .filter(|v| {
-                    v["content_type"].as_str() == Some("video/mp4")
-                        && v["url"].as_str().is_some_and(is_valid_http_url)
-                })
-                .collect();
-            mp4s.sort_by_key(|v| std::cmp::Reverse(v["bitrate"].as_u64().unwrap_or(0)));
-            for (v_idx, var) in mp4s.iter().enumerate() {
-                if let Some(u) = var["url"].as_str() {
-                    formats.push(SocialFormat {
-                        id: format!("x-{idx}-{v_idx}"),
-                        ext: "mp4".into(),
-                        resolution: if v_idx == 0 { "HD" } else { "SD" }.into(),
-                        fps: None,
-                        filesize: None,
-                        vcodec: "h264".into(),
-                        acodec: "aac".into(),
-                        has_video: true,
-                        has_audio: true,
-                        label: if v_idx == 0 {
-                            "HD · mp4".into()
-                        } else {
-                            format!("MP4 (Variant {})", v_idx + 1)
-                        },
-                        url: u.to_owned(),
-                        headers: HashMap::new(),
-                    });
+    let mut thumbnail = None;
+    let mut duration = None;
+
+    if let Some(videos) = tweet["media"]["videos"].as_array() {
+        if let Some(first_vid) = videos.first() {
+            thumbnail = first_vid["thumbnail_url"].as_str().map(str::to_owned);
+            duration = first_vid["duration"].as_f64();
+        }
+        for (idx, vid) in videos.iter().enumerate() {
+            if let Some(variants) = vid["variants"].as_array() {
+                let mut mp4s: Vec<&Value> = variants
+                    .iter()
+                    .filter(|v| {
+                        v["content_type"].as_str() == Some("video/mp4")
+                            && v["url"].as_str().is_some_and(is_valid_http_url)
+                    })
+                    .collect();
+                mp4s.sort_by_key(|v| std::cmp::Reverse(v["bitrate"].as_u64().unwrap_or(0)));
+                for (v_idx, var) in mp4s.iter().enumerate() {
+                    if let Some(u) = var["url"].as_str() {
+                        formats.push(SocialFormat {
+                            id: format!("x-{idx}-{v_idx}"),
+                            ext: "mp4".into(),
+                            resolution: if v_idx == 0 { "HD" } else { "SD" }.into(),
+                            fps: None,
+                            filesize: None,
+                            vcodec: "h264".into(),
+                            acodec: "aac".into(),
+                            has_video: true,
+                            has_audio: true,
+                            label: if v_idx == 0 {
+                                "HD · mp4".into()
+                            } else {
+                                format!("MP4 (Variant {})", v_idx + 1)
+                            },
+                            url: u.to_owned(),
+                            headers: HashMap::new(),
+                        });
+                    }
                 }
             }
-        }
-        if let Some(u) = vid["url"].as_str().filter(|u| is_valid_http_url(u)) {
-            if !formats.iter().any(|f| f.url == u) {
-                formats.push(SocialFormat {
-                    id: format!("x-direct-{idx}"),
-                    ext: "mp4".into(),
-                    resolution: "HD".into(),
-                    fps: None,
-                    filesize: None,
-                    vcodec: "h264".into(),
-                    acodec: "aac".into(),
-                    has_video: true,
-                    has_audio: true,
-                    label: "MP4".into(),
-                    url: u.to_owned(),
-                    headers: HashMap::new(),
-                });
-            }
-        }
-    }
-    (!formats.is_empty()).then(|| SocialMediaBundle {
-        title: tweet["text"]
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| s.chars().take(80).collect())
-            .unwrap_or_else(|| "X Video".into()),
-        uploader: tweet["author"]["name"].as_str().map(str::to_owned),
-        thumbnail: videos[0]["thumbnail_url"].as_str().map(str::to_owned),
-        duration: videos[0]["duration"].as_f64(),
-        formats,
-    })
-}
-
-async fn extract_twitter(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
-    let tweet_id = extract_tweet_id(url).ok_or("لم يُعثر على معرف المنشور في رابط X/Twitter")?;
-    let fx_url = format!("https://api.fxtwitter.com/i/status/{tweet_id}");
-    if let Ok((_, txt)) = fetch_text(client, &fx_url, "ARGON/2.3", None).await {
-        if let Ok(val) = serde_json::from_str::<Value>(&txt) {
-            if let Some(bundle) = parse_fxtwitter_json(&val) {
-                return Ok(bundle);
-            }
-        }
-    }
-
-    let vx_url = format!("https://api.vxtwitter.com/Twitter/status/{tweet_id}");
-    let (_, vx_txt) = fetch_text(client, &vx_url, "ARGON/2.3", None).await?;
-    let val: Value = serde_json::from_str(&vx_txt).map_err(|_| "استجابة غير صالحة من X/Twitter")?;
-    let mut formats = Vec::new();
-    if let Some(list) = val["media_extended"].as_array() {
-        for (i, item) in list.iter().enumerate() {
-            if matches!(item["type"].as_str(), Some("video" | "gif")) {
-                if let Some(u) = item["url"].as_str().filter(|u| is_valid_http_url(u)) {
+            if let Some(u) = vid["url"].as_str().filter(|u| is_valid_http_url(u)) {
+                if !formats.iter().any(|f| f.url == u) {
                     formats.push(SocialFormat {
-                        id: format!("vx-{i}"),
+                        id: format!("x-direct-{idx}"),
                         ext: "mp4".into(),
-                        resolution: "MP4".into(),
+                        resolution: "HD".into(),
                         fps: None,
                         filesize: None,
                         vcodec: "h264".into(),
@@ -933,50 +1004,77 @@ async fn extract_twitter(client: &Client, url: &str) -> Result<SocialMediaBundle
             }
         }
     }
-    if formats.is_empty() {
-        return Err("لا يحتوي هذا المنشور على فيديو".into());
+
+    if let Some(photos) = tweet["media"]["photos"].as_array() {
+        if thumbnail.is_none() {
+            thumbnail = photos.first().and_then(|p| p["url"].as_str()).map(str::to_owned);
+        }
+        for (idx, p) in photos.iter().enumerate() {
+            if let Some(u) = p["url"].as_str().filter(|u| is_valid_http_url(u)) {
+                formats.push(SocialFormat {
+                    id: format!("x-photo-{idx}"),
+                    ext: "jpg".into(),
+                    resolution: "Photo".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: if photos.len() == 1 { "Photo · jpg".into() } else { format!("Photo #{} · jpg", idx + 1) },
+                    url: u.to_owned(),
+                    headers: HashMap::new(),
+                });
+            }
+        }
     }
-    Ok(SocialMediaBundle {
-        title: val["text"]
+
+    if formats.is_empty() {
+        return None;
+    }
+
+    Some(SocialMediaBundle {
+        title: tweet["text"]
             .as_str()
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.chars().take(80).collect())
-            .unwrap_or_else(|| "X Video".into()),
-        uploader: val["user_name"].as_str().map(str::to_owned),
-        thumbnail: None,
-        duration: None,
+            .unwrap_or_else(|| "X Post".into()),
+        uploader: tweet["author"]["name"].as_str().map(str::to_owned),
+        thumbnail,
+        duration,
         formats,
     })
 }
 
-async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
-    let (_, html) = fetch_text(client, url, CHROME_UA, Some("https://www.facebook.com/")).await?;
-    let mut urls = extract_json_url_fields(
-        &html,
-        &[
-            "browser_native_hd_url",
-            "playable_url_quality_hd",
-            "hd_src",
-            "browser_native_sd_url",
-            "playable_url",
-            "sd_src",
-        ],
-    );
-    for meta in ["og:video:secure_url", "og:video"] {
+async fn extract_twitter_twitsave(client: &Client, tweet_id: &str) -> Option<SocialMediaBundle> {
+    let url = format!("https://twitsave.com/info?url=https://twitter.com/i/status/{tweet_id}");
+    let (_, html) = fetch_text(client, &url, CHROME_UA, None).await.ok()?;
+    let mut urls = extract_json_url_fields(&html, &["url", "download"]);
+    for meta in ["og:video", "og:video:secure_url"] {
         if let Some(u) = extract_meta_content(&html, meta) {
             push_unique_url(&mut urls, u);
         }
     }
-    if urls.is_empty() {
-        return Err("تعذر استخراج فيديو Facebook (قد يتطلب تسجيل الدخول)".into());
+    let lower = html.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(pos) = lower[offset..].find("https://video.twimg.com/") {
+        let start = offset + pos;
+        let tail = &html[start..];
+        let end = tail.find(['"', '\'', ' ', '<', '>']).unwrap_or(tail.len());
+        let candidate = unescape_media_url(&tail[..end]);
+        if is_valid_http_url(&candidate) {
+            push_unique_url(&mut urls, candidate);
+        }
+        offset = start + end.max(1);
     }
-    let mut headers = HashMap::new();
-    headers.insert("User-Agent".into(), CHROME_UA.into());
-    headers.insert("Referer".into(), "https://www.facebook.com/".into());
-    Ok(SocialMediaBundle {
-        title: extract_meta_content(&html, "og:title")
-            .or_else(|| extract_html_title(&html))
-            .unwrap_or_else(|| "Facebook Video".into()),
+    if urls.is_empty() {
+        return None;
+    }
+    let title = extract_meta_content(&html, "og:title")
+        .or_else(|| extract_html_title(&html))
+        .unwrap_or_else(|| "Twitter Video".into());
+    Some(SocialMediaBundle {
+        title,
         uploader: None,
         thumbnail: extract_meta_content(&html, "og:image"),
         duration: None,
@@ -984,7 +1082,7 @@ async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundl
             .into_iter()
             .enumerate()
             .map(|(i, u)| SocialFormat {
-                id: format!("fb-{}", i + 1),
+                id: format!("x-twitsave-{i}"),
                 ext: "mp4".into(),
                 resolution: if i == 0 { "HD" } else { "SD" }.into(),
                 fps: None,
@@ -993,11 +1091,215 @@ async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundl
                 acodec: "aac".into(),
                 has_video: true,
                 has_audio: true,
-                label: if i == 0 { "HD · mp4".into() } else { "SD · mp4".into() },
+                label: if i == 0 { "HD · mp4".into() } else { format!("MP4 #{}", i + 1) },
                 url: u,
-                headers: headers.clone(),
+                headers: HashMap::new(),
             })
             .collect(),
+    })
+}
+
+async fn extract_twitter(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    let tweet_id = extract_tweet_id(url).ok_or("لم يُعثر على معرف المنشور في رابط X/Twitter")?;
+
+    let fx_candidates = [
+        format!("https://api.fxtwitter.com/status/{tweet_id}"),
+        format!("https://api.fixupx.com/status/{tweet_id}"),
+        format!("https://api.fxtwitter.com/i/status/{tweet_id}"),
+    ];
+
+    for fx_url in fx_candidates {
+        if let Ok((_, txt)) = fetch_text(client, &fx_url, "ARGON/2.3", None).await {
+            if let Ok(val) = serde_json::from_str::<Value>(&txt) {
+                if let Some(bundle) = parse_fxtwitter_json(&val) {
+                    return Ok(bundle);
+                }
+            }
+        }
+    }
+
+    let vx_url = format!("https://api.vxtwitter.com/Twitter/status/{tweet_id}");
+    if let Ok((_, vx_txt)) = fetch_text(client, &vx_url, "ARGON/2.3", None).await {
+        if let Ok(val) = serde_json::from_str::<Value>(&vx_txt) {
+            let mut formats = Vec::new();
+            if let Some(list) = val["media_extended"].as_array() {
+                for (i, item) in list.iter().enumerate() {
+                    if matches!(item["type"].as_str(), Some("video" | "gif")) {
+                        if let Some(u) = item["url"].as_str().filter(|u| is_valid_http_url(u)) {
+                            formats.push(SocialFormat {
+                                id: format!("vx-{i}"),
+                                ext: "mp4".into(),
+                                resolution: "MP4".into(),
+                                fps: None,
+                                filesize: None,
+                                vcodec: "h264".into(),
+                                acodec: "aac".into(),
+                                has_video: true,
+                                has_audio: true,
+                                label: "MP4".into(),
+                                url: u.to_owned(),
+                                headers: HashMap::new(),
+                            });
+                        }
+                    } else if item["type"].as_str() == Some("image") {
+                        if let Some(u) = item["url"].as_str().filter(|u| is_valid_http_url(u)) {
+                            formats.push(SocialFormat {
+                                id: format!("vx-img-{i}"),
+                                ext: "jpg".into(),
+                                resolution: "Photo".into(),
+                                fps: None,
+                                filesize: None,
+                                vcodec: "none".into(),
+                                acodec: "none".into(),
+                                has_video: false,
+                                has_audio: false,
+                                label: format!("Photo #{}", i + 1),
+                                url: u.to_owned(),
+                                headers: HashMap::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            if !formats.is_empty() {
+                return Ok(SocialMediaBundle {
+                    title: val["text"]
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| s.chars().take(80).collect())
+                        .unwrap_or_else(|| "X Post".into()),
+                    uploader: val["user_name"].as_str().map(str::to_owned),
+                    thumbnail: None,
+                    duration: None,
+                    formats,
+                });
+            }
+        }
+    }
+
+    if let Some(bundle) = extract_twitter_twitsave(client, &tweet_id).await {
+        return Ok(bundle);
+    }
+
+    Err("لا يحتوي هذا المنشور على وسائط أو يتعذر الوصول إليه".into())
+}
+
+async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    let mut urls = Vec::new();
+    let mut title = None;
+    let mut thumbnail = None;
+
+    // 1. Try desktop HTML
+    if let Ok((_, html)) = fetch_text(client, url, CHROME_UA, Some("https://www.facebook.com/")).await {
+        urls = extract_json_url_fields(
+            &html,
+            &[
+                "browser_native_hd_url",
+                "playable_url_quality_hd",
+                "hd_src",
+                "browser_native_sd_url",
+                "playable_url",
+                "sd_src",
+                "video_url",
+            ],
+        );
+        for meta in ["og:video:secure_url", "og:video"] {
+            if let Some(u) = extract_meta_content(&html, meta) {
+                push_unique_url(&mut urls, u);
+            }
+        }
+        title = extract_meta_content(&html, "og:title").or_else(|| extract_html_title(&html));
+        thumbnail = extract_meta_content(&html, "og:image");
+    }
+
+    // 2. Try mobile HTML if desktop had no video URLs
+    if urls.is_empty() {
+        let mobile_url = url
+            .replace("www.facebook.com", "m.facebook.com")
+            .replace("web.facebook.com", "m.facebook.com");
+        if let Ok((_, m_html)) = fetch_text(client, &mobile_url, IPHONE_UA, Some("https://m.facebook.com/")).await {
+            let m_urls = extract_json_url_fields(
+                &m_html,
+                &[
+                    "browser_native_hd_url",
+                    "playable_url_quality_hd",
+                    "hd_src",
+                    "browser_native_sd_url",
+                    "playable_url",
+                    "sd_src",
+                    "video_url",
+                ],
+            );
+            for u in m_urls {
+                push_unique_url(&mut urls, u);
+            }
+            for meta in ["og:video:secure_url", "og:video"] {
+                if let Some(u) = extract_meta_content(&m_html, meta) {
+                    push_unique_url(&mut urls, u);
+                }
+            }
+            if title.is_none() {
+                title = extract_meta_content(&m_html, "og:title").or_else(|| extract_html_title(&m_html));
+            }
+            if thumbnail.is_none() {
+                thumbnail = extract_meta_content(&m_html, "og:image");
+            }
+        }
+    }
+
+    let mut formats = Vec::new();
+    let mut headers = HashMap::new();
+    headers.insert("User-Agent".into(), CHROME_UA.into());
+    headers.insert("Referer".into(), "https://www.facebook.com/".into());
+
+    for (i, u) in urls.into_iter().enumerate() {
+        formats.push(SocialFormat {
+            id: format!("fb-{}", i + 1),
+            ext: "mp4".into(),
+            resolution: if i == 0 { "HD" } else { "SD" }.into(),
+            fps: None,
+            filesize: None,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            has_audio: true,
+            label: if i == 0 { "HD · mp4".into() } else { "SD · mp4".into() },
+            url: u,
+            headers: headers.clone(),
+        });
+    }
+
+    if formats.is_empty() {
+        if let Some(ref img_url) = thumbnail {
+            if is_valid_http_url(img_url) {
+                formats.push(SocialFormat {
+                    id: "fb-img-1".into(),
+                    ext: "jpg".into(),
+                    resolution: "Photo".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: "Photo · jpg".into(),
+                    url: img_url.clone(),
+                    headers: headers.clone(),
+                });
+            }
+        }
+    }
+
+    if formats.is_empty() {
+        return Err("تعذر استخراج فيديو Facebook (قد يتطلب تسجيل الدخول أو حساب عام)".into());
+    }
+
+    Ok(SocialMediaBundle {
+        title: title.unwrap_or_else(|| "Facebook Video".into()),
+        uploader: None,
+        thumbnail,
+        duration: None,
+        formats,
     })
 }
 
@@ -1015,26 +1317,26 @@ async fn extract_reddit(client: &Client, url: &str) -> Result<SocialMediaBundle,
     let (_, raw) = fetch_text(client, &json_url, "ARGON/2.3 (Media Downloader)", None).await?;
     let val: Value = serde_json::from_str(&raw).map_err(|_| "تعذر قراءة بيانات Reddit")?;
     let post = &val[0]["data"]["children"][0]["data"];
+
+    let title = post["title"]
+        .as_str()
+        .unwrap_or("Reddit Post")
+        .chars()
+        .take(100)
+        .collect();
+    let uploader = post["author"].as_str().map(str::to_owned);
+    let mut formats = Vec::new();
+
+    // 1. Check for video
     let rv = if !post["secure_media"]["reddit_video"].is_null() {
         &post["secure_media"]["reddit_video"]
-    } else {
+    } else if !post["crosspost_parent_list"][0]["secure_media"]["reddit_video"].is_null() {
         &post["crosspost_parent_list"][0]["secure_media"]["reddit_video"]
+    } else {
+        &post["media"]["reddit_video"]
     };
-    let fallback = rv["fallback_url"]
-        .as_str()
-        .filter(|u| is_valid_http_url(u))
-        .ok_or("لا يحتوي منشور Reddit هذا على فيديو")?;
-    Ok(SocialMediaBundle {
-        title: post["title"]
-            .as_str()
-            .unwrap_or("Reddit Video")
-            .chars()
-            .take(100)
-            .collect(),
-        uploader: post["author"].as_str().map(str::to_owned),
-        thumbnail: None,
-        duration: rv["duration"].as_f64(),
-        formats: vec![SocialFormat {
+    if let Some(fallback) = rv["fallback_url"].as_str().filter(|u| is_valid_http_url(u)) {
+        formats.push(SocialFormat {
             id: "reddit-mp4".into(),
             ext: "mp4".into(),
             resolution: rv["height"]
@@ -1050,7 +1352,135 @@ async fn extract_reddit(client: &Client, url: &str) -> Result<SocialMediaBundle,
             label: "MP4".into(),
             url: fallback.to_owned(),
             headers: HashMap::new(),
-        }],
+        });
+    }
+
+    // 2. Check for gallery
+    if let Some(media_meta) = post["media_metadata"].as_object() {
+        for (idx, (_key, item)) in media_meta.iter().enumerate() {
+            if let Some(u) = item["s"]["u"].as_str().filter(|u| is_valid_http_url(u)) {
+                let clean_u = unescape_media_url(u);
+                formats.push(SocialFormat {
+                    id: format!("reddit-gallery-{idx}"),
+                    ext: "jpg".into(),
+                    resolution: "Photo".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: format!("Image #{}", idx + 1),
+                    url: clean_u,
+                    headers: HashMap::new(),
+                });
+            }
+        }
+    }
+
+    // 3. Check for single image
+    if formats.is_empty() {
+        if let Some(post_url) = post["url"].as_str().filter(|u| is_valid_http_url(u)) {
+            let lower = post_url.to_ascii_lowercase();
+            if lower.ends_with(".jpg") || lower.ends_with(".png") || lower.ends_with(".webp") || lower.ends_with(".gif") {
+                let ext = lower.split('.').last().unwrap_or("jpg").to_owned();
+                formats.push(SocialFormat {
+                    id: "reddit-image".into(),
+                    ext,
+                    resolution: "Photo".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: "Photo".into(),
+                    url: post_url.to_owned(),
+                    headers: HashMap::new(),
+                });
+            }
+        }
+    }
+
+    if formats.is_empty() {
+        return Err("لا يحتوي منشور Reddit هذا على وسائط قابلة للتنزيل".into());
+    }
+
+    let thumbnail = post["thumbnail"].as_str().filter(|u| is_valid_http_url(u)).map(str::to_owned);
+
+    Ok(SocialMediaBundle {
+        title,
+        uploader,
+        thumbnail,
+        duration: rv["duration"].as_f64(),
+        formats,
+    })
+}
+
+async fn extract_pinterest(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    let (_final_url, html) = fetch_text(client, url, CHROME_UA, Some("https://www.pinterest.com/")).await?;
+    let mut formats = Vec::new();
+
+    let mut video_urls = extract_json_url_fields(&html, &["url", "videoUrl"]);
+    for meta in ["og:video", "og:video:secure_url"] {
+        if let Some(u) = extract_meta_content(&html, meta) {
+            push_unique_url(&mut video_urls, u);
+        }
+    }
+    for (i, u) in video_urls.into_iter().filter(|u| u.contains(".mp4") || u.contains("v.pinimg.com")).enumerate() {
+        formats.push(SocialFormat {
+            id: format!("pin-video-{}", i + 1),
+            ext: "mp4".into(),
+            resolution: "MP4".into(),
+            fps: None,
+            filesize: None,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            has_audio: true,
+            label: if i == 0 { "Video · mp4".into() } else { format!("Video #{} · mp4", i + 1) },
+            url: u,
+            headers: HashMap::new(),
+        });
+    }
+
+    let mut image_urls = Vec::new();
+    for meta in ["og:image", "og:image:secure_url"] {
+        if let Some(u) = extract_meta_content(&html, meta) {
+            push_unique_url(&mut image_urls, u);
+        }
+    }
+    for (i, u) in image_urls.into_iter().enumerate() {
+        formats.push(SocialFormat {
+            id: format!("pin-img-{}", i + 1),
+            ext: "jpg".into(),
+            resolution: "Image".into(),
+            fps: None,
+            filesize: None,
+            vcodec: "none".into(),
+            acodec: "none".into(),
+            has_video: false,
+            has_audio: false,
+            label: if i == 0 { "Image · jpg".into() } else { format!("Image #{} · jpg", i + 1) },
+            url: u,
+            headers: HashMap::new(),
+        });
+    }
+
+    if formats.is_empty() {
+        return Err("لم يُعثر على وسائط قابلة للتنزيل من Pinterest".into());
+    }
+
+    let title = extract_meta_content(&html, "og:title")
+        .or_else(|| extract_html_title(&html))
+        .unwrap_or_else(|| "Pinterest Pin".into());
+
+    Ok(SocialMediaBundle {
+        title,
+        uploader: None,
+        thumbnail: extract_meta_content(&html, "og:image"),
+        duration: None,
+        formats,
     })
 }
 
@@ -1154,6 +1584,7 @@ pub async fn fetch_social_bundle(client: &Client, url: &str) -> Result<SocialMed
         "twitter" => extract_twitter(client, url).await,
         "facebook" => extract_facebook(client, url).await,
         "reddit" => extract_reddit(client, url).await,
+        "pinterest" => extract_pinterest(client, url).await,
         "vimeo" => extract_vimeo(client, url).await,
         "threads" | "soundcloud" | "other" => extract_generic_html(client, url).await,
         _ => extract_generic_html(client, url).await,
@@ -1322,6 +1753,40 @@ mod tests {
         assert_eq!(tt_img.formats[0].ext, "jpg");
         assert_eq!(tt_img.formats[0].label, "Image #1");
         assert_eq!(tt_img.formats[2].ext, "mp3");
+
+        let fx_photos = json!({
+            "tweet": {
+                "text": "Photo tweet",
+                "author": { "name": "Photographer" },
+                "media": {
+                    "photos": [
+                        { "url": "https://pbs.twimg.com/media/photo1.jpg" },
+                        { "url": "https://pbs.twimg.com/media/photo2.jpg" }
+                    ]
+                }
+            }
+        });
+        let x_photo = parse_fxtwitter_json(&fx_photos).unwrap();
+        assert_eq!(x_photo.formats.len(), 2);
+        assert_eq!(x_photo.formats[0].ext, "jpg");
+        assert_eq!(x_photo.formats[0].url, "https://pbs.twimg.com/media/photo1.jpg");
+
+        let yt_cipher_payload = json!({
+            "playabilityStatus": { "status": "OK" },
+            "videoDetails": {
+                "title": "Cipher Clip",
+                "author": "Cipher Creator",
+                "lengthSeconds": "60",
+                "thumbnail": { "thumbnails": [{ "url": "https://i.ytimg.com/vi/cipher/hq.jpg" }] }
+            },
+            "streamingData": {
+                "formats": [
+                    { "itag": 18, "signatureCipher": "s=abc&sp=sig&url=https%3A%2F%2Fr1.googlevideo.com%2Fcipher360.mp4", "mimeType": "video/mp4; codecs=\"avc1\"", "qualityLabel": "360p", "height": 360 }
+                ]
+            }
+        });
+        let yt_cipher = parse_youtube_innertube_json(&yt_cipher_payload).unwrap();
+        assert_eq!(yt_cipher.formats[0].url, "https://r1.googlevideo.com/cipher360.mp4");
 
         assert_eq!(
             extract_instagram_shortcode("https://www.instagram.com/reel/C8r_6oIuGZz/"),
