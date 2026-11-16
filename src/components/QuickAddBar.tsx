@@ -122,7 +122,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     }
     const timer = setTimeout(() => {
       void inspectMedia();
-    }, 450);
+    }, 200);
     return () => clearTimeout(timer);
   }, [singleUrl, isMediaPlatform]);
 
@@ -196,7 +196,9 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
             : chosenFormat.id,
           useYtdlpMux: streamManifest || !!(chosenFormat.hasVideo && !chosenFormat.hasAudio && mediaMeta?.hasFfmpeg)
         }
-      : undefined;
+      : (isMediaPlatform && platform !== 'direct' && platform !== 'other'
+          ? { platform }
+          : undefined);
 
     const mirrors =
       candidateList.urls.length === 1 && mirrorsText.trim()

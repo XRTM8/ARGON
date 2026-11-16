@@ -2,7 +2,11 @@ use crate::resolver::{detect_platform, sanitize_filename};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{OnceLock, RwLock},
+    time::{Duration, Instant},
+};
 
 const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 const IPHONE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
@@ -43,6 +47,34 @@ pub struct ResolvedSocialMedia {
     pub download_url: String,
     pub suggested_filename: String,
     pub headers: HashMap<String, String>,
+}
+
+static SOCIAL_BUNDLE_CACHE: OnceLock<RwLock<HashMap<String, (SocialMediaBundle, Instant)>>> =
+    OnceLock::new();
+
+fn get_social_cache() -> &'static RwLock<HashMap<String, (SocialMediaBundle, Instant)>> {
+    SOCIAL_BUNDLE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub fn get_cached_social_bundle(url: &str) -> Option<SocialMediaBundle> {
+    let key = url.trim().to_owned();
+    let cache = get_social_cache().read().ok()?;
+    if let Some((bundle, inserted_at)) = cache.get(&key) {
+        if inserted_at.elapsed() < Duration::from_secs(300) {
+            return Some(bundle.clone());
+        }
+    }
+    None
+}
+
+pub fn put_cached_social_bundle(url: &str, bundle: SocialMediaBundle) {
+    let key = url.trim().to_owned();
+    if let Ok(mut cache) = get_social_cache().write() {
+        if cache.len() > 200 {
+            cache.retain(|_, (_, inserted_at)| inserted_at.elapsed() < Duration::from_secs(300));
+        }
+        cache.insert(key, (bundle, Instant::now()));
+    }
 }
 
 pub fn url_encode_component(raw: &str) -> String {
@@ -1189,30 +1221,67 @@ async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundl
     let mut title = None;
     let mut thumbnail = None;
 
-    // 1. Try desktop HTML
-    if let Ok((_, html)) = fetch_text(client, url, CHROME_UA, Some("https://www.facebook.com/")).await {
-        urls = extract_json_url_fields(
-            &html,
+    // 1. Query Facebook's official video plugin embed endpoint.
+    // Zero login redirect wall for public videos, reels, and watch clips!
+    let plugin_url = format!(
+        "https://www.facebook.com/plugins/video.php?href={}&show_text=0",
+        url_encode_component(url)
+    );
+    if let Ok((_, p_html)) = fetch_text(client, &plugin_url, CHROME_UA, Some("https://www.facebook.com/")).await {
+        let p_urls = extract_json_url_fields(
+            &p_html,
             &[
+                "hd_src",
+                "sd_src",
+                "hd_src_no_ratelimit",
+                "sd_src_no_ratelimit",
                 "browser_native_hd_url",
                 "playable_url_quality_hd",
-                "hd_src",
                 "browser_native_sd_url",
                 "playable_url",
-                "sd_src",
                 "video_url",
             ],
         );
-        for meta in ["og:video:secure_url", "og:video"] {
-            if let Some(u) = extract_meta_content(&html, meta) {
-                push_unique_url(&mut urls, u);
-            }
+        for u in p_urls {
+            push_unique_url(&mut urls, u);
         }
-        title = extract_meta_content(&html, "og:title").or_else(|| extract_html_title(&html));
-        thumbnail = extract_meta_content(&html, "og:image");
+        title = extract_meta_content(&p_html, "og:title").or_else(|| extract_html_title(&p_html));
+        thumbnail = extract_meta_content(&p_html, "og:image");
     }
 
-    // 2. Try mobile HTML if desktop had no video URLs
+    // 2. Try desktop HTML if plugin didn't yield video URLs
+    if urls.is_empty() {
+        if let Ok((_, html)) = fetch_text(client, url, CHROME_UA, Some("https://www.facebook.com/")).await {
+            let d_urls = extract_json_url_fields(
+                &html,
+                &[
+                    "browser_native_hd_url",
+                    "playable_url_quality_hd",
+                    "hd_src",
+                    "browser_native_sd_url",
+                    "playable_url",
+                    "sd_src",
+                    "video_url",
+                ],
+            );
+            for u in d_urls {
+                push_unique_url(&mut urls, u);
+            }
+            for meta in ["og:video:secure_url", "og:video"] {
+                if let Some(u) = extract_meta_content(&html, meta) {
+                    push_unique_url(&mut urls, u);
+                }
+            }
+            if title.is_none() {
+                title = extract_meta_content(&html, "og:title").or_else(|| extract_html_title(&html));
+            }
+            if thumbnail.is_none() {
+                thumbnail = extract_meta_content(&html, "og:image");
+            }
+        }
+    }
+
+    // 3. Try mobile HTML if desktop had no video URLs
     if urls.is_empty() {
         let mobile_url = url
             .replace("www.facebook.com", "m.facebook.com")
@@ -1269,6 +1338,7 @@ async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundl
         });
     }
 
+    // 4. Fallback for photo posts
     if formats.is_empty() {
         if let Some(ref img_url) = thumbnail {
             if is_valid_http_url(img_url) {
@@ -1301,6 +1371,7 @@ async fn extract_facebook(client: &Client, url: &str) -> Result<SocialMediaBundl
         duration: None,
         formats,
     })
+}
 }
 
 async fn extract_reddit(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
@@ -1576,7 +1647,234 @@ async fn extract_generic_html(client: &Client, url: &str) -> Result<SocialMediaB
     })
 }
 
-pub async fn fetch_social_bundle(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+async fn extract_threads(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    let (final_url, html) = fetch_text(client, url, CHROME_UA, Some("https://www.threads.net/")).await?;
+    let mut urls = extract_json_url_fields(
+        &html,
+        &[
+            "video_url",
+            "playback_url",
+            "browser_native_hd_url",
+            "browser_native_sd_url",
+        ],
+    );
+    for meta in ["og:video:secure_url", "og:video", "twitter:player:stream"] {
+        if let Some(u) = extract_meta_content(&html, meta) {
+            push_unique_url(&mut urls, u);
+        }
+    }
+
+    let title = extract_meta_content(&html, "og:title")
+        .or_else(|| extract_html_title(&html))
+        .unwrap_or_else(|| "Threads Post".into());
+    let thumbnail = extract_meta_content(&html, "og:image");
+
+    let mut formats = Vec::new();
+    let mut headers = HashMap::new();
+    headers.insert("User-Agent".into(), CHROME_UA.into());
+    headers.insert("Referer".into(), "https://www.threads.net/".into());
+
+    for (i, u) in urls.into_iter().enumerate() {
+        formats.push(SocialFormat {
+            id: format!("threads-{}", i + 1),
+            ext: "mp4".into(),
+            resolution: if i == 0 { "HD" } else { "SD" }.into(),
+            fps: None,
+            filesize: None,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            has_audio: true,
+            label: if i == 0 { "HD · mp4".into() } else { "SD · mp4".into() },
+            url: u,
+            headers: headers.clone(),
+        });
+    }
+
+    if formats.is_empty() {
+        if let Some(ref img) = thumbnail {
+            if is_valid_http_url(img) && !img.contains("rsrc.php") {
+                formats.push(SocialFormat {
+                    id: "threads-img-1".into(),
+                    ext: "jpg".into(),
+                    resolution: "Photo".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: "Photo · jpg".into(),
+                    url: img.clone(),
+                    headers: headers.clone(),
+                });
+            }
+        }
+    }
+
+    if formats.is_empty() {
+        return extract_generic_html(client, &final_url).await;
+    }
+
+    Ok(SocialMediaBundle {
+        title,
+        uploader: None,
+        thumbnail,
+        duration: None,
+        formats,
+    })
+}
+
+async fn extract_streamable(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    let parsed = Url::parse(url.trim()).map_err(|e| e.to_string())?;
+    let shortcode = parsed
+        .path_segments()
+        .and_then(|mut s| s.next())
+        .filter(|s| !s.is_empty())
+        .ok_or("رابط Streamable غير صالح")?;
+
+    let api_url = format!("https://api.streamable.com/videos/{shortcode}");
+    let (_, body) = fetch_text(client, &api_url, CHROME_UA, Some("https://streamable.com/")).await?;
+    let data: Value = serde_json::from_str(&body).map_err(|e| format!("فشل تحليل استجابة Streamable: {e}"))?;
+
+    let title = data["title"].as_str().unwrap_or("Streamable Video").to_owned();
+    let thumbnail = data["thumbnail_url"].as_str().map(str::to_owned);
+
+    let mut formats = Vec::new();
+    let mut headers = HashMap::new();
+    headers.insert("User-Agent".into(), CHROME_UA.into());
+    headers.insert("Referer".into(), "https://streamable.com/".into());
+
+    if let Some(files) = data["files"].as_object() {
+        for (key, file_val) in files {
+            if let Some(raw_url) = file_val["url"].as_str() {
+                let mut clean_url = raw_url.trim().to_owned();
+                if clean_url.starts_with("//") {
+                    clean_url = format!("https:{clean_url}");
+                } else if clean_url.starts_with("https:https://") {
+                    clean_url = clean_url.replacen("https:https://", "https://", 1);
+                }
+                if is_valid_http_url(&clean_url) {
+                    let height = file_val["height"].as_u64();
+                    let resolution = height.map(|h| format!("{h}p")).unwrap_or_else(|| key.to_uppercase());
+                    let filesize = file_val["size"].as_u64();
+                    formats.push(SocialFormat {
+                        id: format!("streamable-{key}"),
+                        ext: "mp4".into(),
+                        resolution: resolution.clone(),
+                        fps: file_val["framerate"].as_f64().map(|f| f.round() as u32),
+                        filesize,
+                        vcodec: "h264".into(),
+                        acodec: "aac".into(),
+                        has_video: true,
+                        has_audio: true,
+                        label: format!("{resolution} · mp4"),
+                        url: clean_url,
+                        headers: headers.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    if formats.is_empty() {
+        return extract_generic_html(client, url).await;
+    }
+
+    formats.sort_by(|a, b| {
+        let h_a = a.resolution.trim_end_matches('p').parse::<u32>().unwrap_or(0);
+        let h_b = b.resolution.trim_end_matches('p').parse::<u32>().unwrap_or(0);
+        h_b.cmp(&h_a)
+    });
+
+    Ok(SocialMediaBundle {
+        title,
+        uploader: None,
+        thumbnail,
+        duration: None,
+        formats,
+    })
+}
+
+async fn extract_snapchat(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    let (final_url, html) = fetch_text(client, url, CHROME_UA, Some("https://www.snapchat.com/")).await?;
+    let mut urls = extract_json_url_fields(
+        &html,
+        &[
+            "mediaUrl",
+            "contentUrl",
+            "video_url",
+            "downloadUrl",
+        ],
+    );
+    for meta in ["og:video:secure_url", "og:video", "twitter:player:stream"] {
+        if let Some(u) = extract_meta_content(&html, meta) {
+            push_unique_url(&mut urls, u);
+        }
+    }
+
+    let title = extract_meta_content(&html, "og:title")
+        .or_else(|| extract_html_title(&html))
+        .unwrap_or_else(|| "Snapchat Spotlight".into());
+    let thumbnail = extract_meta_content(&html, "og:image");
+
+    let mut formats = Vec::new();
+    let mut headers = HashMap::new();
+    headers.insert("User-Agent".into(), CHROME_UA.into());
+    headers.insert("Referer".into(), "https://www.snapchat.com/".into());
+
+    for (i, u) in urls.into_iter().enumerate() {
+        formats.push(SocialFormat {
+            id: format!("snap-{}", i + 1),
+            ext: "mp4".into(),
+            resolution: "HD".into(),
+            fps: None,
+            filesize: None,
+            vcodec: "h264".into(),
+            acodec: "aac".into(),
+            has_video: true,
+            has_audio: true,
+            label: "HD · mp4".into(),
+            url: u,
+            headers: headers.clone(),
+        });
+    }
+
+    if formats.is_empty() {
+        if let Some(ref img) = thumbnail {
+            if is_valid_http_url(img) {
+                formats.push(SocialFormat {
+                    id: "snap-img-1".into(),
+                    ext: "jpg".into(),
+                    resolution: "Photo".into(),
+                    fps: None,
+                    filesize: None,
+                    vcodec: "none".into(),
+                    acodec: "none".into(),
+                    has_video: false,
+                    has_audio: false,
+                    label: "Photo · jpg".into(),
+                    url: img.clone(),
+                    headers: headers.clone(),
+                });
+            }
+        }
+    }
+
+    if formats.is_empty() {
+        return extract_generic_html(client, &final_url).await;
+    }
+
+    Ok(SocialMediaBundle {
+        title,
+        uploader: None,
+        thumbnail,
+        duration: None,
+        formats,
+    })
+}
+
+async fn fetch_social_bundle_uncached(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
     match detect_platform(url) {
         "youtube" => extract_youtube(client, url).await,
         "instagram" => extract_instagram(client, url).await,
@@ -1586,9 +1884,21 @@ pub async fn fetch_social_bundle(client: &Client, url: &str) -> Result<SocialMed
         "reddit" => extract_reddit(client, url).await,
         "pinterest" => extract_pinterest(client, url).await,
         "vimeo" => extract_vimeo(client, url).await,
-        "threads" | "soundcloud" | "other" => extract_generic_html(client, url).await,
+        "threads" => extract_threads(client, url).await,
+        "streamable" => extract_streamable(client, url).await,
+        "snapchat" => extract_snapchat(client, url).await,
+        "soundcloud" | "other" => extract_generic_html(client, url).await,
         _ => extract_generic_html(client, url).await,
     }
+}
+
+pub async fn fetch_social_bundle(client: &Client, url: &str) -> Result<SocialMediaBundle, String> {
+    if let Some(cached) = get_cached_social_bundle(url) {
+        return Ok(cached);
+    }
+    let bundle = fetch_social_bundle_uncached(client, url).await?;
+    put_cached_social_bundle(url, bundle.clone());
+    Ok(bundle)
 }
 
 pub fn pick_best_format<'a>(

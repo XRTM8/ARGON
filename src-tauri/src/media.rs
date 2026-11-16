@@ -806,7 +806,7 @@ fn from_social_bundle(bundle: social::SocialMediaBundle, allow_video_only: bool)
 #[cfg(not(target_os = "android"))]
 fn is_pure_rust_format_id(id: &str) -> bool {
     [
-        "yt-", "ig-", "tt-", "x-", "vx-", "fb-", "reddit-", "pin-", "vimeo-", "og-",
+        "yt-", "ig-", "tt-", "x-", "vx-", "fb-", "reddit-", "pin-", "vimeo-", "threads-", "streamable-", "snap-", "og-",
     ]
     .iter()
     .any(|prefix| id.starts_with(prefix))
@@ -831,6 +831,19 @@ pub async fn list_media_formats(app: AppHandle, url: String) -> Result<MediaMeta
     {
         let (_, _, ffmpeg) = resolve_tool_paths(&app)?;
         let has_ffmpeg = ffmpeg.is_some();
+        let platform = argon_downloader_core::resolver::detect_platform(&url);
+        let prefer_rust_social = matches!(
+            platform,
+            "instagram" | "tiktok" | "twitter" | "facebook" | "threads" | "pinterest" | "streamable" | "snapchat"
+        );
+        if prefer_rust_social {
+            if let Ok(bundle) = social::fetch_social_bundle(&client, &url).await {
+                if !bundle.formats.is_empty() {
+                    return Ok(from_social_bundle(bundle, has_ffmpeg));
+                }
+            }
+        }
+
         if let Ok(value) = run_ytdlp_json(&app, &url, None).await {
             let title = value["title"].as_str().unwrap_or("media").to_string();
             let uploader = value["uploader"].as_str().map(str::to_string);
@@ -945,7 +958,16 @@ pub async fn resolve_media(
         let prefer_rust_first = format_id.is_none()
             && matches!(
                 platform,
-                "instagram" | "tiktok" | "twitter" | "facebook" | "reddit" | "vimeo" | "threads" | "pinterest"
+                "instagram"
+                    | "tiktok"
+                    | "twitter"
+                    | "facebook"
+                    | "reddit"
+                    | "vimeo"
+                    | "threads"
+                    | "pinterest"
+                    | "streamable"
+                    | "snapchat"
             );
 
         if prefer_rust_first {
