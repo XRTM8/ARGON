@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowDownToLine,
   Clipboard,
   SlidersHorizontal,
   Loader2,
   Film,
+  Music,
+  Sparkles,
   CheckCircle2,
   AlertCircle,
   Magnet,
@@ -16,7 +18,7 @@ import { readClipboardText } from '../core/clipboard';
 import { detectPlatform, listMediaFormats } from '../core/mediaResolver';
 import { isMagnetUri, parseTorrentFile, type TorrentMetadata } from '../core/torrent';
 import { formatBytes } from '../core/segmentation';
-import type { MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
+import type { MediaFormatInfo, MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
 
 interface Props {
   lang: 'ar' | 'en';
@@ -49,7 +51,66 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   const [probingMedia, setProbingMedia] = useState(false);
   const [mediaMeta, setMediaMeta] = useState<MediaMetadataInfo | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState<string>('');
+  const [mediaTab, setMediaTab] = useState<'video' | 'audio'>('video');
   const [torrentMeta, setTorrentMeta] = useState<TorrentMetadata | null>(null);
+
+  const { videoFormats, audioFormats, bestVideoId, bestAudioId } = useMemo(() => {
+    if (!mediaMeta || !mediaMeta.formats.length) {
+      return { videoFormats: [] as MediaFormatInfo[], audioFormats: [] as MediaFormatInfo[], bestVideoId: '', bestAudioId: '' };
+    }
+
+    const videos = mediaMeta.formats.filter((f) => f.hasVideo);
+    const audios = mediaMeta.formats.filter((f) => !f.hasVideo && f.hasAudio);
+
+    const rankVideo = (f: MediaFormatInfo) => {
+      let score = 0;
+      const hMatch = f.resolution.match(/(\d+)p?/i);
+      const height = hMatch ? parseInt(hMatch[1], 10) : 0;
+      score += height * 100;
+      if (f.hasAudio) score += 500;
+      if (f.ext === 'mp4') score += 50;
+      if (f.fps && f.fps >= 60) score += 10;
+      if (f.filesize) score += Math.min(f.filesize / (1024 * 1024), 200);
+      return score;
+    };
+
+    const rankAudio = (f: MediaFormatInfo) => {
+      let score = 0;
+      const bMatch = (f.resolution + ' ' + f.label).match(/(\d+)\s*kbps/i);
+      const kbps = bMatch ? parseInt(bMatch[1], 10) : 0;
+      score += kbps * 100;
+      if (f.ext === 'm4a' || f.ext === 'mp3') score += 50;
+      if (f.filesize) score += Math.min(f.filesize / 1024, 500);
+      return score;
+    };
+
+    let bestV = '';
+    let maxVScore = -1;
+    for (const v of videos) {
+      const s = rankVideo(v);
+      if (s > maxVScore) {
+        maxVScore = s;
+        bestV = v.id;
+      }
+    }
+
+    let bestA = '';
+    let maxAScore = -1;
+    for (const a of audios) {
+      const s = rankAudio(a);
+      if (s > maxAScore) {
+        maxAScore = s;
+        bestA = a.id;
+      }
+    }
+
+    return {
+      videoFormats: videos,
+      audioFormats: audios,
+      bestVideoId: bestV,
+      bestAudioId: bestA
+    };
+  }, [mediaMeta]);
   const [isDragOver, setIsDragOver] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -133,7 +194,19 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
     try {
       const info = await listMediaFormats(singleUrl);
       setMediaMeta(info);
-      setSelectedFormatId(info.formats[0]?.id || '');
+      const hasV = info.formats.some((f) => f.hasVideo);
+      const hasA = info.formats.some((f) => !f.hasVideo && f.hasAudio);
+      if (hasV) {
+        setMediaTab('video');
+        const best = info.formats.find((f) => f.hasVideo && f.hasAudio) || info.formats.find((f) => f.hasVideo);
+        setSelectedFormatId(best?.id || info.formats[0]?.id || '');
+      } else if (hasA) {
+        setMediaTab('audio');
+        const best = info.formats.find((f) => !f.hasVideo && f.hasAudio);
+        setSelectedFormatId(best?.id || info.formats[0]?.id || '');
+      } else {
+        setSelectedFormatId(info.formats[0]?.id || '');
+      }
     } catch (err) {
       setError(String(err));
       setMediaMeta(null);
@@ -528,18 +601,82 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
                 <span className="queue-pill">FFmpeg HD</span>
               )}
             </div>
-            <div className="media-format-chips">
-              {mediaMeta.formats.slice(0, 12).map((fmt) => (
+            {videoFormats.length > 0 && audioFormats.length > 0 && (
+              <div className="media-category-tabs" role="tablist">
                 <button
-                  key={fmt.id}
                   type="button"
-                  className={`format-chip ${selectedFormatId === fmt.id ? 'is-active' : ''}`}
-                  onClick={() => setSelectedFormatId(fmt.id)}
+                  role="tab"
+                  aria-selected={mediaTab === 'video'}
+                  className={`media-tab-btn ${mediaTab === 'video' ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setMediaTab('video');
+                    if (bestVideoId && !videoFormats.some((f) => f.id === selectedFormatId)) {
+                      setSelectedFormatId(bestVideoId);
+                    }
+                  }}
                 >
-                  {fmt.label}
-                  {fmt.filesize ? ` (${formatBytes(fmt.filesize, 1)})` : ''}
+                  <Film size={13} />
+                  <span>{ar ? 'فيديو' : 'Video'}</span>
+                  <span className="media-tab-count">{videoFormats.length}</span>
                 </button>
-              ))}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mediaTab === 'audio'}
+                  className={`media-tab-btn ${mediaTab === 'audio' ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setMediaTab('audio');
+                    if (bestAudioId && !audioFormats.some((f) => f.id === selectedFormatId)) {
+                      setSelectedFormatId(bestAudioId);
+                    }
+                  }}
+                >
+                  <Music size={13} />
+                  <span>{ar ? 'صوت' : 'Audio'}</span>
+                  <span className="media-tab-count">{audioFormats.length}</span>
+                </button>
+              </div>
+            )}
+
+            <div className="media-format-grid">
+              {(mediaTab === 'video' ? (videoFormats.length ? videoFormats : audioFormats) : (audioFormats.length ? audioFormats : videoFormats))
+                .slice(0, 16)
+                .map((fmt) => {
+                  const isBest = (mediaTab === 'video' && fmt.id === bestVideoId) || (mediaTab === 'audio' && fmt.id === bestAudioId);
+                  const isSelected = selectedFormatId === fmt.id;
+                  const resText = fmt.hasVideo
+                    ? fmt.resolution
+                    : (fmt.resolution !== 'Audio' ? fmt.resolution : fmt.ext.toUpperCase());
+                  return (
+                    <button
+                      key={fmt.id}
+                      type="button"
+                      className={`format-card-pill ${isSelected ? 'is-active' : ''}`}
+                      onClick={() => setSelectedFormatId(fmt.id)}
+                    >
+                      <div className="format-card-left">
+                        <span className="format-res-badge">{resText}</span>
+                        <span className="format-ext-badge">{fmt.ext.toUpperCase()}</span>
+                        {isBest && (
+                          <span className="format-best-badge">
+                            <Sparkles size={11} />
+                            <span>{ar ? 'الأفضل' : 'Best'}</span>
+                          </span>
+                        )}
+                        {fmt.hasVideo && !fmt.hasAudio && !mediaMeta.hasFfmpeg && (
+                          <span className="format-video-only-badge">
+                            {ar ? 'فيديو فقط' : 'video only'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="format-card-right">
+                        {fmt.filesize ? (
+                          <span className="format-filesize">{formatBytes(fmt.filesize, 1)}</span>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
             </div>
           </div>
         )}

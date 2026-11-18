@@ -519,7 +519,7 @@ pub async fn download_segment(
         } else {
             Method::GET
         };
-        let mut request = client.request(http_method, parsed.clone()).headers(headers.clone());
+        let mut request = client.request(http_method.clone(), parsed.clone()).headers(headers.clone());
         if !spec.use_range {
             if let Some(body) = spec.post_body {
                 request = request.body(body.to_owned());
@@ -537,6 +537,9 @@ pub async fn download_segment(
             downloaded = 0;
             if let Err(e) = writer.truncate().await {
                 break Err(e);
+            }
+            if http_method == Method::GET && spec.expected_total.is_some() {
+                request = request.header(header::RANGE, "bytes=0-");
             }
         }
 
@@ -632,9 +635,18 @@ pub async fn download_segment(
             }
         } else {
             if response.status() == StatusCode::PARTIAL_CONTENT {
-                break Err("Unexpected partial response for full download".into());
-            }
-            if let Some(length) = response.content_length() {
+                let range = response
+                    .headers()
+                    .get(header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_content_range);
+                if let Some((start, _, total)) = range {
+                    if start != 0 {
+                        break Err("Unexpected partial offset for full download".into());
+                    }
+                    known_total = total;
+                }
+            } else if let Some(length) = response.content_length() {
                 if spec.expected_total.is_some_and(|n| n != length) {
                     break Err("Remote file size changed; retry the download".into());
                 }

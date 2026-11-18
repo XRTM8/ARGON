@@ -24,7 +24,7 @@ use tokio::sync::Mutex;
 
 #[derive(Default)]
 pub struct DownloaderRuntime {
-    pub service: Mutex<Option<Arc<DownloaderService>>>,
+    pub service: Arc<Mutex<Option<Arc<DownloaderService>>>>,
 }
 
 pub struct TaskManager {
@@ -46,8 +46,8 @@ impl Default for TaskManager {
 }
 
 pub async fn ensure_downloader(app: &AppHandle) -> Result<Arc<DownloaderService>, String> {
-    let runtime = app.state::<DownloaderRuntime>();
-    let mut guard = runtime.service.lock().await;
+    let service_lock = app.state::<DownloaderRuntime>().service.clone();
+    let mut guard = service_lock.lock().await;
     if let Some(ref existing) = *guard {
         return Ok(existing.clone());
     }
@@ -76,9 +76,11 @@ pub async fn ensure_downloader(app: &AppHandle) -> Result<Arc<DownloaderService>
                 let _ = app_emit.emit("download-event", &event);
                 let app_handle = app_emit.clone();
                 tauri::async_runtime::spawn(async move {
-                    let action = match ensure_downloader(&app_handle).await {
-                        Ok(mgr) => mgr.settings().await.completion_action,
-                        Err(_) => "shutdown".to_string(),
+                    let service_lock = app_handle.state::<DownloaderRuntime>().service.clone();
+                    let mgr_opt = service_lock.lock().await.clone();
+                    let action = match mgr_opt {
+                        Some(mgr) => mgr.settings().await.completion_action,
+                        None => "shutdown".to_string(),
                     };
                     let _ = trigger_os_completion_action(&action, false);
                 });
@@ -232,6 +234,7 @@ async fn dl_add_batch(
                 media_info: None,
                 queue_id: queue_id.clone(),
                 mirrors: None,
+                queue_priority: None,
             })
             .await?;
         created.push(task);
@@ -382,8 +385,8 @@ async fn probe_url(
 
 #[tauri::command]
 async fn poll_telemetry_binary(app: AppHandle) -> Result<tauri::ipc::Response, String> {
-    let runtime = app.state::<DownloaderRuntime>();
-    let guard = runtime.service.lock().await;
+    let service_lock = app.state::<DownloaderRuntime>().service.clone();
+    let guard = service_lock.lock().await;
     let bytes = guard
         .as_ref()
         .map(|svc| svc.snapshot_telemetry_binary())

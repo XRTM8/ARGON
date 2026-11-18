@@ -1445,14 +1445,17 @@ impl DownloaderService {
             && probe.accept_ranges
             && probe_len > 0
             && resource_url.is_some()
-            && probe.etag.as_deref().and_then(strong_etag).is_some();
+            && (probe.etag.as_deref().and_then(strong_etag).is_some()
+                || probe.last_modified.is_some()
+                || is_media_target);
         let resume = use_range
             && task.file_prepared
             && task.accept_ranges
             && task.downloaded_bytes > 0
             && task.total_bytes == probe_len
             && task.range_resource_key == resource_key
-            && task.etag == probe.etag;
+            && (task.etag == probe.etag
+                || (task.etag.is_none() && probe.etag.is_none() && task.last_modified == probe.last_modified));
         if !resume {
             if task.downloaded_bytes > 0 {
                 task.resume_notice = Some("resource-unverified".into());
@@ -3172,7 +3175,7 @@ mod tests {
 
         svc.set_updating(true);
 
-        let t1 = svc.add_task(AddTaskRequest {
+        let _t1 = svc.add_task(AddTaskRequest {
             url: format!("{}/file1.bin", server.base_url),
             filename: Some("file1.bin".to_string()),
             segment_count: None,

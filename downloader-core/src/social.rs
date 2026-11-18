@@ -317,11 +317,21 @@ pub fn parse_youtube_innertube_json(data: &Value) -> Result<SocialMediaBundle, S
         let has_audio = is_muxed || base_mime.starts_with("audio/");
         let height = item["height"].as_u64();
         let fps = item["fps"].as_u64().map(|v| v as u32);
-        let resolution = item["qualityLabel"]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| height.map(|h| format!("{h}p")))
-            .unwrap_or_else(|| if has_video { "Video".into() } else { "Audio".into() });
+        let bitrate_kbps = item["averageBitrate"]
+            .as_u64()
+            .or_else(|| item["bitrate"].as_u64())
+            .map(|b| (b + 500) / 1000);
+        let resolution = if has_video {
+            item["qualityLabel"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| height.map(|h| format!("{h}p")))
+                .unwrap_or_else(|| "Video".into())
+        } else if let Some(kbps) = bitrate_kbps {
+            format!("{kbps} kbps")
+        } else {
+            "Audio".into()
+        };
         let filesize = item["contentLength"]
             .as_str()
             .and_then(|s| s.parse::<u64>().ok());
@@ -334,6 +344,8 @@ pub fn parse_youtube_innertube_json(data: &Value) -> Result<SocialMediaBundle, S
             format!("{resolution} · {ext}")
         } else if has_video {
             format!("{resolution} · {ext} (video only)")
+        } else if let Some(kbps) = bitrate_kbps {
+            format!("Audio · {ext} · {kbps} kbps")
         } else {
             format!("Audio · {ext}")
         };
@@ -383,6 +395,28 @@ async fn extract_youtube(client: &Client, url: &str) -> Result<SocialMediaBundle
 
     let clients = [
         (
+            VR_YT_UA,
+            json!({
+                "videoId": video_id,
+                "context": {
+                    "client": {
+                        "clientName": "ANDROID_VR",
+                        "clientVersion": "1.60.19",
+                        "deviceMake": "Oculus",
+                        "deviceModel": "Quest 3",
+                        "androidSdkVersion": 32,
+                        "osName": "Android",
+                        "osVersion": "12L",
+                        "userAgent": VR_YT_UA,
+                        "hl": "en",
+                        "gl": "US"
+                    }
+                },
+                "contentCheckOk": true,
+                "racyCheckOk": true
+            }),
+        ),
+        (
             ANDROID_YT_UA,
             json!({
                 "videoId": video_id,
@@ -413,27 +447,6 @@ async fn extract_youtube(client: &Client, url: &str) -> Result<SocialMediaBundle
                         "deviceModel": "iPhone16,2",
                         "osName": "iPhone",
                         "osVersion": "18.3.2.22D82",
-                        "hl": "en",
-                        "gl": "US"
-                    }
-                },
-                "contentCheckOk": true,
-                "racyCheckOk": true
-            }),
-        ),
-        (
-            VR_YT_UA,
-            json!({
-                "videoId": video_id,
-                "context": {
-                    "client": {
-                        "clientName": "ANDROID_VR",
-                        "clientVersion": "1.60.19",
-                        "deviceMake": "Oculus",
-                        "deviceModel": "Quest 3",
-                        "androidSdkVersion": 32,
-                        "osName": "Android",
-                        "osVersion": "12L",
                         "hl": "en",
                         "gl": "US"
                     }
@@ -1911,15 +1924,23 @@ pub fn pick_best_format<'a>(
         }
     }
     if audio_only {
-        if let Some(audio) = bundle.formats.iter().find(|f| !f.has_video && f.has_audio) {
-            return Some(audio);
+        let audios: Vec<&SocialFormat> = bundle.formats.iter().filter(|f| !f.has_video && f.has_audio).collect();
+        if let Some(best_audio) = audios.iter().max_by_key(|f| f.filesize.unwrap_or(0)) {
+            return Some(*best_audio);
+        }
+        if let Some(audio) = audios.first() {
+            return Some(*audio);
         }
     }
-    bundle
-        .formats
-        .iter()
-        .find(|f| f.has_video && f.has_audio)
-        .or_else(|| bundle.formats.first())
+    let muxed: Vec<&SocialFormat> = bundle.formats.iter().filter(|f| f.has_video && f.has_audio).collect();
+    if let Some(best_muxed) = muxed.iter().max_by_key(|f| f.filesize.unwrap_or(0)) {
+        return Some(*best_muxed);
+    }
+    let videos: Vec<&SocialFormat> = bundle.formats.iter().filter(|f| f.has_video).collect();
+    if let Some(best_video) = videos.iter().max_by_key(|f| f.filesize.unwrap_or(0)) {
+        return Some(*best_video);
+    }
+    bundle.formats.first()
 }
 
 pub async fn resolve_social_media(
