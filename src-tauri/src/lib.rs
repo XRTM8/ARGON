@@ -1062,6 +1062,7 @@ fn trigger_os_completion_action(action: &str, cancel: bool) -> Result<(), String
     Ok(())
 }
 
+#[allow(dead_code)]
 fn trigger_os_shutdown(cancel: bool) -> Result<(), String> {
     trigger_os_completion_action("shutdown", cancel)
 }

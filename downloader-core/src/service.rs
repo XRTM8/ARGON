@@ -271,6 +271,10 @@ impl DownloaderService {
         Ok(canonical)
     }
 
+    pub async fn settings(&self) -> DownloaderSettings {
+        self.state.read().await.settings.clone()
+    }
+
     pub async fn update_settings(
         self: &Arc<Self>,
         patch: DownloaderSettingsPatch,
@@ -3166,7 +3170,7 @@ mod tests {
             ..Default::default()
         }).await.unwrap();
 
-        svc.pause_all().await.unwrap();
+        svc.set_updating(true);
 
         let t1 = svc.add_task(AddTaskRequest {
             url: format!("{}/file1.bin", server.base_url),
@@ -3196,12 +3200,7 @@ mod tests {
             queue_priority: Some(10),
         }).await.unwrap();
 
-        {
-            let mut state = svc.state.write().await;
-            state.tasks.get_mut(&t1.id).unwrap().status = TaskStatus::Queued;
-            state.tasks.get_mut(&t2.id).unwrap().status = TaskStatus::Queued;
-        }
-
+        svc.set_updating(false);
         svc.process_queue().await;
 
         let snap = svc.snapshot().await;
