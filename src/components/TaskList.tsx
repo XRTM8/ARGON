@@ -96,8 +96,22 @@ export const TaskList = memo(function TaskList({
         if (!aCompleted && !bCompleted) {
           if (a.status === 'downloading' && b.status !== 'downloading') return -1;
           if (b.status === 'downloading' && a.status !== 'downloading') return 1;
+          if (a.status === 'queued' && b.status === 'queued') {
+            const pA = a.queuePriority ?? 0;
+            const pB = b.queuePriority ?? 0;
+            if (pA !== pB) return pB - pA;
+            return a.createdAt - b.createdAt;
+          }
         }
       }
+
+      if (a.status === 'queued' && b.status === 'queued') {
+        const pA = a.queuePriority ?? 0;
+        const pB = b.queuePriority ?? 0;
+        if (pA !== pB) return pB - pA;
+        return a.createdAt - b.createdAt;
+      }
+
       return b.createdAt - a.createdAt;
     });
 

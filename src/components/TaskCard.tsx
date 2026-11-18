@@ -15,7 +15,9 @@ import {
   File,
   ShieldCheck,
   Share2,
-  Magnet
+  Magnet,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import type { DownloadTask, QueueId } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
@@ -169,6 +171,19 @@ export function TaskCard({
             )}
             {task.mediaInfo?.quality && <span className="queue-pill">{task.mediaInfo.quality}</span>}
             {queueLabel && <span className="queue-pill">{queueLabel}</span>}
+            {task.status === 'queued' && (task.queuePriority ?? 0) !== 0 && (
+              <span
+                className="queue-pill"
+                style={{
+                  borderColor: (task.queuePriority ?? 0) > 0 ? 'rgba(59, 130, 246, 0.4)' : 'rgba(156, 163, 175, 0.4)',
+                  color: (task.queuePriority ?? 0) > 0 ? '#60A5FA' : '#9CA3AF',
+                }}
+                title={ar ? `أولوية الطابور: ${task.queuePriority}` : `Queue priority: ${task.queuePriority}`}
+              >
+                {(task.queuePriority ?? 0) > 0 ? '↑ ' : '↓ '}
+                {ar ? 'أولوية' : 'Priority'} {task.queuePriority! > 0 ? `+${task.queuePriority}` : task.queuePriority}
+              </span>
+            )}
           </div>
         </div>
 
@@ -226,6 +241,26 @@ export function TaskCard({
             >
               <Play size={16} />
             </button>
+          )}
+          {task.status === 'queued' && (
+            <>
+              <button
+                className="icon-button"
+                onClick={() => downloadManager.bumpTaskQueue(task.id, true)}
+                aria-label={ar ? 'تقديم للأعلى في الطابور' : 'Move to top of queue'}
+                title={ar ? 'تقديم للأعلى في الطابور' : 'Move to top of queue'}
+              >
+                <ArrowUp size={15} />
+              </button>
+              <button
+                className="icon-button"
+                onClick={() => downloadManager.bumpTaskQueue(task.id, false)}
+                aria-label={ar ? 'تأخير في الطابور' : 'Move to bottom of queue'}
+                title={ar ? 'تأخير في الطابور' : 'Move to bottom of queue'}
+              >
+                <ArrowDown size={15} />
+              </button>
+            </>
           )}
           {task.status === 'queued' && onStartImmediately && (
             <button

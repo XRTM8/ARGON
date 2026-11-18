@@ -74,7 +74,14 @@ pub async fn ensure_downloader(app: &AppHandle) -> Result<Arc<DownloaderService>
             }
             DownloadEvent::AllIdleShutdownPending => {
                 let _ = app_emit.emit("download-event", &event);
-                let _ = trigger_os_shutdown(false);
+                let app_handle = app_emit.clone();
+                tauri::async_runtime::spawn(async move {
+                    let action = match ensure_downloader(&app_handle).await {
+                        Ok(mgr) => mgr.settings().await.completion_action,
+                        Err(_) => "shutdown".to_string(),
+                    };
+                    let _ = trigger_os_completion_action(&action, false);
+                });
             }
             DownloadEvent::TaskCompleted { save_path, .. } => {
                 #[cfg(target_os = "android")]
@@ -290,6 +297,30 @@ async fn dl_set_task_queue(app: AppHandle, id: String, queue_id: QueueId) -> Res
     ensure_downloader(&app)
         .await?
         .set_task_queue(&id, queue_id)
+        .await
+}
+
+#[tauri::command]
+async fn dl_set_task_priority(
+    app: AppHandle,
+    id: String,
+    priority: i32,
+) -> Result<(), String> {
+    ensure_downloader(&app)
+        .await?
+        .set_task_priority(&id, priority)
+        .await
+}
+
+#[tauri::command]
+async fn dl_bump_task_queue(
+    app: AppHandle,
+    id: String,
+    top: bool,
+) -> Result<(), String> {
+    ensure_downloader(&app)
+        .await?
+        .bump_task_queue(&id, top)
         .await
 }
 
@@ -1002,26 +1033,57 @@ fn start_browser_bridge(app_handle: AppHandle) {
     });
 }
 
-fn trigger_os_shutdown(cancel: bool) -> Result<(), String> {
+fn trigger_os_completion_action(action: &str, cancel: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::process::Command;
         if cancel {
             let _ = Command::new("shutdown").args(["/a"]).status();
         } else {
-            let _ = Command::new("shutdown")
-                .args(["/s", "/t", "60", "/c", "ARGON: Scheduled shutdown in 60s"])
-                .status();
+            match action {
+                "sleep" => {
+                    let _ = Command::new("rundll32.exe")
+                        .args(["powrprof.dll,SetSuspendState", "0,1,0"])
+                        .status();
+                }
+                "hibernate" => {
+                    let _ = Command::new("shutdown").args(["/h"]).status();
+                }
+                _ => {
+                    let _ = Command::new("shutdown")
+                        .args(["/s", "/t", "60", "/c", "ARGON: Scheduled shutdown in 60s"])
+                        .status();
+                }
+            }
         }
     }
     #[cfg(not(windows))]
-    let _ = cancel;
+    let _ = (action, cancel);
     Ok(())
 }
 
+fn trigger_os_shutdown(cancel: bool) -> Result<(), String> {
+    trigger_os_completion_action("shutdown", cancel)
+}
+
 #[tauri::command]
-async fn system_shutdown(cancel: bool) -> Result<(), String> {
-    trigger_os_shutdown(cancel)
+async fn system_shutdown(
+    app: AppHandle,
+    action: Option<String>,
+    cancel: bool,
+) -> Result<(), String> {
+    if cancel {
+        return trigger_os_completion_action("shutdown", true);
+    }
+    let act = if let Some(a) = action {
+        a
+    } else {
+        match ensure_downloader(&app).await {
+            Ok(mgr) => mgr.settings().await.completion_action,
+            Err(_) => "shutdown".to_string(),
+        }
+    };
+    trigger_os_completion_action(&act, cancel)
 }
 
 #[tauri::command]
@@ -1135,6 +1197,8 @@ pub fn run() {
             dl_remove_task,
             dl_clear_completed,
             dl_set_task_queue,
+            dl_set_task_priority,
+            dl_bump_task_queue,
             dl_set_task_speed_limit,
             dl_verify_hash,
             dl_update_settings,

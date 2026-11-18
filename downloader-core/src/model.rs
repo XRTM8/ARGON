@@ -165,6 +165,8 @@ pub struct DownloadTask {
     pub active_mirror_index: usize,
     #[serde(default)]
     pub retry_count: u32,
+    #[serde(default)]
+    pub queue_priority: i32,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -204,6 +206,12 @@ pub struct DownloaderSettings {
     pub start_with_windows: bool,
     pub debrid_enabled: bool,
     pub debrid_api_key: Option<String>,
+    #[serde(default = "default_completion_action")]
+    pub completion_action: String,
+}
+
+fn default_completion_action() -> String {
+    "shutdown".to_string()
 }
 
 impl Default for DownloaderSettings {
@@ -231,6 +239,7 @@ impl Default for DownloaderSettings {
             start_with_windows: true,
             debrid_enabled: false,
             debrid_api_key: None,
+            completion_action: "shutdown".to_string(),
         }
     }
 }
@@ -260,6 +269,7 @@ pub struct DownloaderSettingsPatch {
     pub start_with_windows: Option<bool>,
     pub debrid_enabled: Option<bool>,
     pub debrid_api_key: Option<String>,
+    pub completion_action: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -275,6 +285,8 @@ pub struct AddTaskRequest {
     pub media_info: Option<MediaMetadata>,
     pub queue_id: Option<QueueId>,
     pub mirrors: Option<Vec<String>>,
+    #[serde(default)]
+    pub queue_priority: Option<i32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

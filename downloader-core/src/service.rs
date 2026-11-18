@@ -377,6 +377,9 @@ impl DownloaderService {
             if let Some(v) = patch.debrid_api_key {
                 state.settings.debrid_api_key = Some(v);
             }
+            if let Some(v) = patch.completion_action {
+                state.settings.completion_action = v;
+            }
             state.settings.clone()
         };
 
@@ -414,6 +417,7 @@ impl DownloaderService {
             media_info,
             queue_id,
             mirrors: None,
+            queue_priority: None,
         };
         let task = {
             let _persist = self.persist_lock.lock().await;
@@ -652,6 +656,7 @@ impl DownloaderService {
             mirrors: req.mirrors.unwrap_or_default(),
             active_mirror_index: 0,
             retry_count: 0,
+            queue_priority: req.queue_priority.unwrap_or(0),
         };
         state.tasks.insert(id, task.clone());
         Ok(task)
@@ -903,6 +908,53 @@ impl DownloaderService {
         Ok(())
     }
 
+    pub async fn set_task_priority(self: &Arc<Self>, id: &str, priority: i32) -> Result<(), String> {
+        {
+            let mut state = self.state.write().await;
+            if let Some(t) = state.tasks.get_mut(id) {
+                t.queue_priority = priority;
+            }
+        }
+        self.save_tasks().await?;
+        (self.emit)(DownloadEvent::StateChanged);
+        self.process_queue().await;
+        Ok(())
+    }
+
+    pub async fn bump_task_queue(self: &Arc<Self>, id: &str, top: bool) -> Result<(), String> {
+        {
+            let mut state = self.state.write().await;
+            if state.tasks.contains_key(id) {
+                let target_prio = if top {
+                    let max_p = state
+                        .tasks
+                        .values()
+                        .filter(|t| t.status == TaskStatus::Queued)
+                        .map(|t| t.queue_priority)
+                        .max()
+                        .unwrap_or(0);
+                    max_p + 10
+                } else {
+                    let min_p = state
+                        .tasks
+                        .values()
+                        .filter(|t| t.status == TaskStatus::Queued)
+                        .map(|t| t.queue_priority)
+                        .min()
+                        .unwrap_or(0);
+                    min_p - 10
+                };
+                if let Some(t) = state.tasks.get_mut(id) {
+                    t.queue_priority = target_prio;
+                }
+            }
+        }
+        self.save_tasks().await?;
+        (self.emit)(DownloadEvent::StateChanged);
+        self.process_queue().await;
+        Ok(())
+    }
+
     pub async fn set_task_speed_limit(&self, id: &str, bytes_per_sec: u64) -> Result<(), String> {
         {
             let mut state = self.state.write().await;
@@ -979,7 +1031,11 @@ impl DownloaderService {
                 .filter(|t| t.status == TaskStatus::Queued)
                 .cloned()
                 .collect();
-            queued.sort_by_key(|t| t.created_at);
+            queued.sort_by(|a, b| {
+                b.queue_priority
+                    .cmp(&a.queue_priority)
+                    .then_with(|| a.created_at.cmp(&b.created_at))
+            });
 
             let mut picked = Vec::new();
             for candidate in queued {
@@ -2261,6 +2317,7 @@ mod tests {
             media_info: None,
             queue_id: None,
             mirrors: None,
+            queue_priority: None,
         }).await.unwrap();
 
         let state = svc.state.write().await;
@@ -2501,6 +2558,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: Some(vec![format!("{}/live", srv.base_url)]),
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -2541,6 +2599,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -2591,6 +2650,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -2661,6 +2721,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -2676,6 +2737,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -2718,6 +2780,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -2871,6 +2934,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -3012,6 +3076,7 @@ mod tests {
                 media_info: None,
                 queue_id: None,
                 mirrors: None,
+                queue_priority: None,
             })
             .await
             .unwrap();
@@ -3072,6 +3137,7 @@ mod tests {
             mirrors: Vec::new(),
             active_mirror_index: 0,
             retry_count: 0,
+            queue_priority: 0,
         };
 
         let migrated = svc.migrate_legacy_tasks(vec![legacy_active.clone()]).await.unwrap();
@@ -3086,6 +3152,63 @@ mod tests {
         assert_eq!(snap.tasks[0].status, TaskStatus::Paused);
         assert_eq!(snap.tasks[0].speed_bytes_per_sec, 0.0);
         assert_eq!(snap.tasks[0].eta_seconds, 0);
+        svc.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn queue_priority_picks_higher_priority_task_before_older_tasks() {
+        let root = TempDir::new();
+        let server = spawn_server(|_| http_resp("200 OK", "Content-Length: 4\r\n", b"done")).await;
+        let svc = new_service(&root).await;
+
+        svc.update_settings(DownloaderSettingsPatch {
+            max_concurrent_downloads: Some(1),
+            ..Default::default()
+        }).await.unwrap();
+
+        svc.pause_all().await.unwrap();
+
+        let t1 = svc.add_task(AddTaskRequest {
+            url: format!("{}/file1.bin", server.base_url),
+            filename: Some("file1.bin".to_string()),
+            segment_count: None,
+            expected_sha256: None,
+            headers: None,
+            post_body: None,
+            method: None,
+            media_info: None,
+            queue_id: Some(QueueId::Main),
+            mirrors: None,
+            queue_priority: Some(0),
+        }).await.unwrap();
+
+        let t2 = svc.add_task(AddTaskRequest {
+            url: format!("{}/file2.bin", server.base_url),
+            filename: Some("file2.bin".to_string()),
+            segment_count: None,
+            expected_sha256: None,
+            headers: None,
+            post_body: None,
+            method: None,
+            media_info: None,
+            queue_id: Some(QueueId::Main),
+            mirrors: None,
+            queue_priority: Some(10),
+        }).await.unwrap();
+
+        {
+            let mut state = svc.state.write().await;
+            state.tasks.get_mut(&t1.id).unwrap().status = TaskStatus::Queued;
+            state.tasks.get_mut(&t2.id).unwrap().status = TaskStatus::Queued;
+        }
+
+        svc.process_queue().await;
+
+        let snap = svc.snapshot().await;
+        let running = snap.tasks.iter().find(|t| t.status == TaskStatus::Downloading);
+        assert!(running.is_some(), "One task should be downloading");
+        assert_eq!(running.unwrap().id, t2.id, "Higher priority task should be picked first");
+
         svc.shutdown().await;
     }
 }

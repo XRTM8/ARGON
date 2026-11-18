@@ -42,6 +42,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
   const [nightStart, setNightStart] = useState(s.nightSchedulerStartHour ?? 2);
   const [nightEnd, setNightEnd] = useState(s.nightSchedulerEndHour ?? 8);
   const [autoShutdown, setAutoShutdown] = useState(s.autoShutdownOnComplete ?? false);
+  const [completionAction, setCompletionAction] = useState(s.completionAction ?? 'shutdown');
   const [debridEnabled, setDebridEnabled] = useState(s.debridEnabled ?? false);
   const [debridApiKey, setDebridApiKey] = useState(s.debridApiKey ?? '');
   const [mediaTools, setMediaTools] = useState<MediaToolsStatus | null>(null);
@@ -726,24 +727,63 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
           )}
 
           {!android && (
-            <div className="settings-row">
-              <div className="settings-label">
-                <strong>{ar ? 'إيقاف تشغيل الكمبيوتر بعد الانتهاء' : 'Shut Down PC When Complete'}</strong>
+            <>
+              <div className="settings-row">
+                <div className="settings-label">
+                  <strong>{ar ? 'إجراء بعد اكتمال التنزيلات' : 'Action When Complete'}</strong>
+                  <p>{ar ? 'تنفيذ إجراء على الجهاز عند الانتهاء من جميع التنزيلات في الطابور' : 'Execute a system action once all downloads in queue complete'}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoShutdown}
+                  className="argon-switch"
+                  onClick={() => {
+                    const next = !autoShutdown;
+                    setAutoShutdown(next);
+                    void downloadManager.updateSettings({ autoShutdownOnComplete: next });
+                  }}
+                >
+                  <span className="argon-switch-thumb" />
+                </button>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoShutdown}
-                className="argon-switch"
-                onClick={() => {
-                  const next = !autoShutdown;
-                  setAutoShutdown(next);
-                  void downloadManager.updateSettings({ autoShutdownOnComplete: next });
-                }}
-              >
-                <span className="argon-switch-thumb" />
-              </button>
-            </div>
+
+              {autoShutdown && (
+                <div className="settings-row" style={{ paddingTop: 0 }}>
+                  <div className="settings-label">
+                    <span style={{ fontSize: '0.85rem', color: '#94A3B8' }}>{ar ? 'نوع الإجراء المطلوب' : 'Target Action'}</span>
+                  </div>
+                  <div className="segmented-control" style={{ display: 'inline-flex', gap: 6 }}>
+                    {(['shutdown', 'sleep', 'hibernate'] as const).map((act) => (
+                      <button
+                        key={act}
+                        type="button"
+                        className={`segmented-button ${completionAction === act ? 'active' : ''}`}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '0.8rem',
+                          background: completionAction === act ? '#1E293B' : 'transparent',
+                          color: completionAction === act ? '#F8FAFC' : '#94A3B8',
+                          border: `1px solid ${completionAction === act ? '#3B82F6' : '#334155'}`,
+                          borderRadius: 6,
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => {
+                          setCompletionAction(act);
+                          void downloadManager.updateSettings({ completionAction: act });
+                        }}
+                      >
+                        {act === 'shutdown'
+                          ? (ar ? 'إيقاف تشغيل' : 'Shut down')
+                          : act === 'sleep'
+                            ? (ar ? 'سكون (Sleep)' : 'Sleep')
+                            : (ar ? 'إسبات (Hibernate)' : 'Hibernate')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </section>
       )}

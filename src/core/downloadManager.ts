@@ -63,6 +63,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   minimizeToTray: true,
   startWithWindows: true,
   debridEnabled: false,
+  completionAction: 'shutdown',
   debridApiKey: ''
 };
 
@@ -342,11 +343,11 @@ export class DownloadManager {
     }, 120) as unknown as number;
   }
 
-  public async triggerShutdown(cancel = false): Promise<boolean> {
+  public async triggerShutdown(cancel = false, action?: string): Promise<boolean> {
     if (!isTauri()) return false;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('system_shutdown', { cancel });
+      await invoke('system_shutdown', { cancel, action: action ?? null });
       return true;
     } catch {
       return false;
@@ -687,6 +688,27 @@ export class DownloadManager {
 
   public setTaskQueue(id: string, queueId: QueueId) {
     this.fireNativeCommand('dl_set_task_queue', { id, queueId });
+  }
+
+  public setTaskPriority(id: string, priority: number) {
+    this.fireNativeCommand('dl_set_task_priority', { id, priority });
+    const found = this.tasks.get(id);
+    if (found) {
+      found.queuePriority = priority;
+      this.notify(true);
+    }
+  }
+
+  public bumpTaskQueue(id: string, top: boolean) {
+    this.fireNativeCommand('dl_bump_task_queue', { id, top });
+    const found = this.tasks.get(id);
+    if (found) {
+      const queuedTasks = Array.from(this.tasks.values()).filter((t) => t.status === 'queued');
+      const prios = queuedTasks.map((t) => t.queuePriority ?? 0);
+      const target = top ? Math.max(0, ...prios) + 10 : Math.min(0, ...prios) - 10;
+      found.queuePriority = target;
+      this.notify(true);
+    }
   }
 
   public async setTaskSpeedLimit(id: string, bytesPerSec: number) {

@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ARGON",
   "mainBinaryName": "ARGON",
-  "version": "2.7.7",
+  "version": "2.8.0",
   "identifier": "com.otium.downloader",
   "build": {
     "frontendDist": "../dist",

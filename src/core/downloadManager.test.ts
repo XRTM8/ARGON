@@ -180,6 +180,20 @@ describe('DownloadManager Rust facade lifecycle', () => {
       if (found) found.queueId = args.queueId as DownloadTask['queueId'];
       return null;
     }
+    if (name === 'dl_set_task_priority') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) found.queuePriority = Number(args.priority);
+      return null;
+    }
+    if (name === 'dl_bump_task_queue') {
+      const found = tasks.find((t) => t.id === args.id);
+      if (found) {
+        const top = Boolean(args.top);
+        const prios = tasks.filter((t) => t.status === 'queued').map((t) => t.queuePriority ?? 0);
+        found.queuePriority = top ? Math.max(0, ...prios) + 10 : Math.min(0, ...prios) - 10;
+      }
+      return null;
+    }
     if (name === 'dl_set_task_speed_limit') {
       const found = tasks.find((t) => t.id === args.id);
       if (found) found.speedLimitBytesPerSec = Number(args.bytesPerSec);
@@ -366,6 +380,13 @@ describe('DownloadManager Rust facade lifecycle', () => {
 
     manager.setTaskQueue(id, 'media');
     await vi.waitFor(() => expect(calls('dl_set_task_queue')[0][1]).toEqual({ id, queueId: 'media' }));
+
+    manager.setTaskPriority(id, 25);
+    await vi.waitFor(() => expect(calls('dl_set_task_priority')[0][1]).toEqual({ id, priority: 25 }));
+    expect(manager.getTasks()[0].queuePriority).toBe(25);
+
+    manager.bumpTaskQueue(id, true);
+    await vi.waitFor(() => expect(calls('dl_bump_task_queue')[0][1]).toEqual({ id, top: true }));
 
     const digest = await manager.verifyHash(id);
     expect(digest).toBe('a'.repeat(64));

@@ -129,6 +129,7 @@ export interface DownloadTask {
   mirrors?: string[];
   activeMirrorIndex?: number;
   retryCount?: number;
+  queuePriority?: number;
 }
 
 export interface DownloadStats {
@@ -163,6 +164,7 @@ export interface AppSettings {
   startWithWindows?: boolean;
   debridEnabled?: boolean;
   debridApiKey?: string;
+  completionAction?: 'shutdown' | 'sleep' | 'hibernate';
 }
 
 export interface DownloaderSnapshot {
