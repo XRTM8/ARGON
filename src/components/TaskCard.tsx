@@ -92,7 +92,10 @@ export function TaskCard({
     return () => telemetryStore.unregisterTaskDom(task.id);
   }, [active, task.id]);
   const status = {
-    queued: ar ? 'في الانتظار' : 'Queued',
+    queued:
+      task.queueId === 'night'
+        ? ar ? 'بانتظار الجدول الليلي' : 'Awaiting night window'
+        : ar ? 'في الانتظار' : 'Queued',
     paused: ar ? 'متوقف مؤقتاً' : 'Paused',
     completed: ar ? 'مكتمل' : 'Completed',
     error: ar ? 'يحتاج انتباهك' : 'Needs attention',

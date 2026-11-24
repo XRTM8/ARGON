@@ -69,6 +69,15 @@ impl Channel {
         initiator: bool,
     ) -> Result<Self, String> {
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
+        let sock_ref = socket2::SockRef::from(&stream);
+        let mut keepalive = socket2::TcpKeepalive::new();
+        keepalive = keepalive.with_time(Duration::from_secs(5));
+        keepalive = keepalive.with_interval(Duration::from_secs(2));
+        #[cfg(not(any(target_os = "openbsd", target_os = "netbsd")))]
+        {
+            keepalive = keepalive.with_retries(3);
+        }
+        let _ = sock_ref.set_tcp_keepalive(&keepalive);
         let builder = snow::Builder::new(NOISE.parse().map_err(|e| format!("{e}"))?)
             .local_private_key(&identity.private)
             .map_err(|e| e.to_string())?

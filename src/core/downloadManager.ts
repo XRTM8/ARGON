@@ -424,7 +424,11 @@ export class DownloadManager {
 
     let localError: string | undefined;
     if (meta || isMagnet) {
-      localError = 'روابط Magnet والتورنت تحتاج محرك P2P غير متاح في هذا الإصدار؛ استخدم رابط HTTP/HTTPS مباشر.';
+      if (!this.settings.debridEnabled || !this.settings.debridApiKey?.trim()) {
+        localError = 'تنزيل روابط التورنت وMagnet يتطلب تفعيل خدمة Real-Debrid في الإعدادات، أو استخدام رابط HTTP/HTTPS مباشر.';
+      } else if (!isTauri()) {
+        localError = 'التنزيل يتطلب تطبيق ARGON لسطح المكتب؛ هذه نافذة معاينة فقط.';
+      }
     } else if (!/^https?:\/\/.+/i.test(resolved.resolvedUrl)) {
       localError = 'يُدعم فقط روابط HTTP و HTTPS الصالحة.';
     } else if (!isTauri()) {
@@ -535,8 +539,11 @@ export class DownloadManager {
     mirrors?: string[],
     torrentMeta?: TorrentMetadata
   ): Promise<string> {
+    const isMagnet = isMagnetUri(url.trim());
     const resolved = resolveUniversalLink(url.trim());
-    if (!isTauri() || isMagnetUri(url) || !/^https?:\/\/.+/i.test(resolved.resolvedUrl)) {
+    const isHttp = /^https?:\/\/.+/i.test(resolved.resolvedUrl);
+    const allowMagnet = isMagnet && this.settings.debridEnabled && !!this.settings.debridApiKey?.trim();
+    if (!isTauri() || (!isHttp && !allowMagnet)) {
       return this.addTask(url, customFilename, segmentCount, expectedSha256, customHeaders, torrentMeta, mediaInfo, false, queueId, mirrors);
     }
     await this.ready;

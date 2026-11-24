@@ -49,9 +49,12 @@ describe('segmentation utility', () => {
 
   it('formats byte sizes with correct units', () => {
     expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(0.5)).toBe('0.5 B');
+    expect(formatBytes(12)).toBe('12 B');
     expect(formatBytes(1024)).toBe('1 KB');
     expect(formatBytes(1024 * 1024 * 5.5)).toBe('5.5 MB');
     expect(formatBytes(1024 * 1024 * 1024 * 2)).toBe('2 GB');
+    expect(formatBytes(-10)).toBe('—');
   });
 
   it('formats speeds and ETAs', () => {

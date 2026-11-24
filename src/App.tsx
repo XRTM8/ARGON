@@ -109,20 +109,22 @@ export function App() {
   };
 
   useEffect(() => {
-    const computeSig = (list: DownloadTask[]) =>
-      list
-        .map((t) => {
-          const phase =
-            t.status !== 'downloading'
-              ? ''
-              : t.downloadedBytes === 0
-                ? '0'
-                : t.totalBytes > 0 && t.downloadedBytes >= t.totalBytes
-                  ? '2'
-                  : '1';
-          return `${t.id}:${t.status}:${phase}:${t.probed ? t.chunks.length : 0}:${t.filename}:${t.errorMessage || ''}:${t.resumeNotice || ''}:${!!t.mediaFinalizing}`;
-        })
-        .join('|');
+    const computeSig = (list: DownloadTask[]) => {
+      let out = '';
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        const phase =
+          t.status !== 'downloading'
+            ? '0'
+            : t.downloadedBytes === 0
+              ? '1'
+              : t.totalBytes > 0 && t.downloadedBytes >= t.totalBytes
+                ? '3'
+                : '2';
+        out += `${t.id}:${t.status}:${phase}:${t.probed ? t.chunks.length : 0}:${t.filename}:${t.errorMessage || ''}:${t.resumeNotice || ''}:${t.mediaFinalizing ? 1 : 0};`;
+      }
+      return out;
+    };
 
     const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 

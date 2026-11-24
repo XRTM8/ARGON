@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useState, useEffect, useRef } from 'react';
 import { Search, X, ArrowDownToLine, CheckCircle2, Pause, Play, Trash2, SlidersHorizontal, Copy, Check, CheckSquare } from 'lucide-react';
 import type { DownloadTask } from '../types/downloader';
 import { TaskCard } from './TaskCard';
@@ -114,6 +114,33 @@ export const TaskList = memo(function TaskList({
 
       return b.createdAt - a.createdAt;
     });
+
+  const [visibleLimit, setVisibleLimit] = useState(50);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setVisibleLimit(50);
+  }, [query, status, category, queue, sort, mode]);
+
+  useEffect(() => {
+    if (visibleLimit >= filtered.length) return;
+    const el = sentinelRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleLimit((prev) => prev + 50);
+        }
+      },
+      { rootMargin: '300px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [visibleLimit, filtered.length]);
+
+  const visibleTasks = filtered.slice(0, visibleLimit);
 
   const selection = filtered.filter((task) => selected.has(task.id));
   const allSelected = filtered.length > 0 && selection.length === filtered.length;
@@ -318,12 +345,12 @@ export const TaskList = memo(function TaskList({
               <span />
             </div>
           )}
-          {filtered.map((task, index) => {
+          {visibleTasks.map((task, index) => {
             const showCompletedDivider =
               mode === 'all' &&
               task.status === 'completed' &&
               index > 0 &&
-              filtered[index - 1].status !== 'completed';
+              visibleTasks[index - 1].status !== 'completed';
 
             return (
               <div key={task.id} style={{ display: 'contents' }}>
@@ -350,6 +377,19 @@ export const TaskList = memo(function TaskList({
               </div>
             );
           })}
+          {visibleLimit < filtered.length && (
+            <div ref={sentinelRef} style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
+              <button
+                type="button"
+                className="action-button"
+                onClick={() => setVisibleLimit((prev) => prev + 50)}
+              >
+                {ar
+                  ? `عرض المزيد (${filtered.length - visibleLimit} متبقية)`
+                  : `Show more (${filtered.length - visibleLimit} remaining)`}
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="download-empty">

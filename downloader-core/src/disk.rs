@@ -35,6 +35,58 @@ fn write_all_at(file: &std::fs::File, mut offset: u64, mut data: &[u8]) -> io::R
     Ok(())
 }
 
+fn preallocate_file(file: &std::fs::File, len: u64) -> io::Result<()> {
+    if len == 0 {
+        return file.set_len(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileAllocationInfo, SetFileInformationByHandle, FILE_ALLOCATION_INFO,
+        };
+
+        // 1. Set logical file size
+        file.set_len(len)?;
+
+        // 2. Commit physical NTFS cluster allocation (FileAllocationInfo)
+        let handle = file.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let mut alloc_info = FILE_ALLOCATION_INFO {
+            AllocationSize: len as i64,
+        };
+        unsafe {
+            let _ = SetFileInformationByHandle(
+                handle,
+                FileAllocationInfo,
+                &mut alloc_info as *mut _ as *const _,
+                std::mem::size_of::<FILE_ALLOCATION_INFO>() as u32,
+            );
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            let ret = unsafe { libc::posix_fallocate(fd, 0, len as libc::off_t) };
+            if ret != 0 {
+                file.set_len(len)?;
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            file.set_len(len)
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        file.set_len(len)
+    }
+}
+
 enum WriteCmd {
     Truncate { reply: oneshot::Sender<Result<(), String>> },
     Preallocate { len: u64, reply: oneshot::Sender<Result<(), String>> },
@@ -56,7 +108,7 @@ impl CoalescedDiskWriter {
             .write(true)
             .open(path)
             .map_err(|e| format!("Cannot open destination: {e}"))?;
-        let (tx, mut rx) = mpsc::channel::<WriteCmd>(32);
+        let (tx, mut rx) = mpsc::channel::<WriteCmd>(128);
         let pool = Arc::new(Mutex::new(Vec::<Vec<u8>>::with_capacity(MAX_POOLED_BUFFERS)));
         let pool_worker = pool.clone();
         let error = Arc::new(Mutex::new(None));
@@ -83,7 +135,7 @@ impl CoalescedDiskWriter {
                             let _ = reply.send(res);
                         }
                         WriteCmd::Preallocate { len, reply } => {
-                            let res = match file.set_len(len) {
+                            let res = match preallocate_file(&file, len) {
                                 Ok(()) => Ok(()),
                                 Err(e) => {
                                     let msg = format!("Cannot preallocate destination: {e}");

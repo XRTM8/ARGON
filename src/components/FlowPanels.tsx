@@ -25,7 +25,8 @@ import {
   Unplug,
   HardDrive,
   QrCode,
-  Camera
+  Camera,
+  RotateCcw
 } from 'lucide-react';
 import { useFlow } from '../core/useFlow';
 import { nativeRuntime } from '../core/flowClient';
@@ -140,7 +141,7 @@ export function flowStatus(status: string, lang: Lang) {
     receiving: ['جارٍ الاستقبال', 'Receiving'],
     verifying: ['التحقق من البصمة', 'Verifying integrity'],
     completed: ['مكتمل', 'Complete'],
-    error: ['فشل النقل', 'Failed'],
+    error: ['توقف / تعذر النقل', 'Interrupted / Failed'],
     cancelled: ['ملغى', 'Cancelled']
   };
   return names[status]?.[lang === 'ar' ? 0 : 1] || status;
@@ -231,7 +232,9 @@ function TransferRow({
 
         {t.error && (
           <p className="transfer-error" dir="auto">
-            {t.error}
+            {ar && (t.error.toLowerCase().includes('stall') || t.error.toLowerCase().includes('time') || t.error.toLowerCase().includes('respond') || t.error.toLowerCase().includes('eof'))
+              ? 'توقف النقل بسبب انقطاع الاتصال أو خمول الجهاز الآخر. تم حفظ الجزء المستلم بأمان ويمكن استئنافه.'
+              : t.error}
           </p>
         )}
       </div>
@@ -256,6 +259,15 @@ function TransferRow({
             aria-label={android() ? (ar ? 'فتح الملف' : 'Open file') : ar ? 'فتح مجلد الملف' : 'Open file folder'}
           >
             <FolderOpen size={15} />
+          </button>
+        ) : (t.status === 'error' || t.status === 'cancelled') && t.direction === 'send' && t.path ? (
+          <button
+            className="icon-button"
+            onClick={() => run(client.retryTransfer(t.id))}
+            aria-label={ar ? 'إعادة المحاولة / استئناف' : 'Retry / Resume'}
+            title={ar ? 'استئناف النقل من حيث توقف' : 'Resume transfer from where it stopped'}
+          >
+            <RotateCcw size={15} />
           </button>
         ) : null}
 

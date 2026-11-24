@@ -324,6 +324,18 @@ describe('DownloadManager Rust facade lifecycle', () => {
     expect(calls('dl_add_task')).toHaveLength(0);
   });
 
+  it('allows magnet links to invoke backend transfer when Real-Debrid is enabled and configured', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+    await manager.updateSettings({ debridEnabled: true, debridApiKey: 'rd_test_token_123' });
+
+    const magnetUrl = 'magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709&dn=Ubuntu+ISO';
+    const id = await manager.addTaskAsync(magnetUrl);
+    const t = manager.getTasks().find((item) => item.id === id);
+    expect(t?.status).not.toBe('error');
+    expect(calls('dl_add_task')).toHaveLength(1);
+  });
+
   it('creates tasks via dl_add_task with mirrors, custom headers, and checksum, and reconciles optimistic tasks', async () => {
     manager = new DownloadManager();
     await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));

@@ -163,6 +163,35 @@ pub async fn flow_send_download(
 }
 
 #[tauri::command]
+pub async fn flow_retry_transfer(
+    app: AppHandle,
+    state: tauri::State<'_, FlowRuntime>,
+    transfer_id: String,
+) -> Result<Vec<String>, String> {
+    let engine = service(&app, &state).await?;
+    let (peer_id, path) = {
+        let snapshot = engine.snapshot().await;
+        let t = snapshot
+            .transfers
+            .into_iter()
+            .find(|t| t.id == transfer_id)
+            .ok_or_else(|| "Transfer not found".to_string())?;
+        if t.direction != "send" {
+            return Err("Only sent transfers can be retried from this device".into());
+        }
+        let raw_path = t.path.ok_or_else(|| "File path is no longer available".to_string())?;
+        (t.peer_id, PathBuf::from(raw_path))
+    };
+    if !path.exists() {
+        return Err("Source file no longer exists".into());
+    }
+    let files = engine.select_files(vec![path]).await?;
+    engine
+        .send_files(&peer_id, files.into_iter().map(|file| file.id).collect())
+        .await
+}
+
+#[tauri::command]
 pub async fn flow_send_text(
     app: AppHandle,
     state: tauri::State<'_, FlowRuntime>,

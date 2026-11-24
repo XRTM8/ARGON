@@ -32,6 +32,7 @@ pub struct TaskManager {
     pub updating: AtomicBool,
     pub bridge_listening: AtomicBool,
     pub minimize_to_tray: AtomicBool,
+    pub bridge_token: String,
 }
 
 impl Default for TaskManager {
@@ -41,6 +42,7 @@ impl Default for TaskManager {
             updating: AtomicBool::new(false),
             bridge_listening: AtomicBool::new(false),
             minimize_to_tray: AtomicBool::new(true),
+            bridge_token: argon_downloader_core::model::new_id("bridge"),
         }
     }
 }
@@ -445,7 +447,8 @@ async fn browser_bridge_status(
         "ready": true,
         "frontendMounted": state.frontend_ready.load(Ordering::Relaxed),
         "hasFfmpeg": media::has_ffmpeg_installed(&app),
-        "port": 41523
+        "port": 41523,
+        "token": state.bridge_token
     }))
 }
 
@@ -777,13 +780,32 @@ fn start_browser_bridge(app_handle: AppHandle) {
                     .lines()
                     .find(|line| line.to_ascii_lowercase().starts_with("origin:"))
                     .map(|line| line[7..].trim().to_string());
-                let client_header = request_head
+                let _client_header = request_head
                     .lines()
                     .find(|line| line.to_ascii_lowercase().starts_with("x-otium-client:"))
                     .and_then(|line| {
                         line.split_once(':')
                             .map(|(_, value)| value.trim().to_owned())
                     });
+                let auth_token = request_head
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .and_then(|line| line.split_once(':').map(|(_, v)| v.trim().to_owned()))
+                    .or_else(|| {
+                        request_head
+                            .lines()
+                            .find(|line| line.to_ascii_lowercase().starts_with("x-argon-token:"))
+                            .and_then(|line| line.split_once(':').map(|(_, v)| v.trim().to_owned()))
+                    })
+                    .map(|token| {
+                        if let Some(stripped) = token.strip_prefix("Bearer ") {
+                            stripped.trim().to_owned()
+                        } else {
+                            token.trim().to_owned()
+                        }
+                    });
+                let expected_token = app.state::<Arc<TaskManager>>().bridge_token.clone();
+                let token_valid = auth_token.as_ref().is_some_and(|tok| tok == &expected_token);
 
                 if let Some(ref orig) = origin_header {
                     let lower = orig.to_ascii_lowercase();
@@ -816,7 +838,7 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         }
                     };
                     let response = format!(
-                        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Otium-Client\r\nAccess-Control-Max-Age: 86400\r\nContent-Length: 0\r\n\r\n",
+                        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Otium-Client, X-Argon-Token\r\nAccess-Control-Max-Age: 86400\r\nContent-Length: 0\r\n\r\n",
                         allowed_origin
                     );
                     let _ = socket.write_all(response.as_bytes()).await;
@@ -872,7 +894,8 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         "status": "ok",
                         "app": "ARGON",
                         "version": env!("CARGO_PKG_VERSION"),
-                        "capabilities": caps
+                        "capabilities": caps,
+                        "token": expected_token,
                     })
                     .to_string();
                     let response = format!(
@@ -897,11 +920,8 @@ fn start_browser_bridge(app_handle: AppHandle) {
                                 || o.starts_with("safari-web-extension://")
                         })
                         .unwrap_or(false);
-                    let is_extension_client =
-                        client_header.as_deref() == Some("browser-extension");
-
-                    if !is_extension_origin && !is_extension_client {
-                        let body = r#"{"error":"unauthorized_client","message":"Missing valid X-Otium-Client header or extension origin"}"#;
+                    if !is_extension_origin && !token_valid {
+                        let body = r#"{"error":"unauthorized_client","message":"Unauthorized client: Extension origin or valid Authorization Bearer token required"}"#;
                         let response = format!(
                             "HTTP/1.1 401 Unauthorized\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                             cors_origin_str,
@@ -1181,6 +1201,7 @@ pub fn run() {
             flow::flow_cancel_transfer,
             flow::flow_send_files,
             flow::flow_send_download,
+            flow::flow_retry_transfer,
             flow::flow_send_text,
             flow::flow_choose_files,
             flow::flow_choose_receive_directory,

@@ -1,5 +1,6 @@
 import { httpUrl, mediaDescriptor } from './core.js';
 const BASE = 'http://127.0.0.1:41523';
+let bridgeToken = '';
 
 async function request(path, payload, timeout = 6000) {
   const controller = new AbortController();
@@ -10,6 +11,7 @@ async function request(path, payload, timeout = 6000) {
       signal: controller.signal,
       headers: {
         'X-Otium-Client': 'browser-extension',
+        ...(bridgeToken ? { 'Authorization': `Bearer ${bridgeToken}` } : {}),
         ...(payload ? { 'Content-Type': 'application/json' } : {})
       },
       ...(payload ? { body: JSON.stringify(payload) } : {})
@@ -27,6 +29,7 @@ export async function connection(allowWake = true) {
     const data = await request('/ping', null, 1800);
     if (data.app !== 'ARGON' || data.status !== 'ok') throw new Error('invalid_bridge');
     if (!data.capabilities?.includes('persisted-handoff')) throw new Error('update_required');
+    if (data.token) bridgeToken = String(data.token);
     return data;
   } catch (err) {
     if (allowWake && typeof chrome !== 'undefined' && chrome.runtime?.sendNativeMessage) {

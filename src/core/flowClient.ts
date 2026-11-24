@@ -47,9 +47,19 @@ export class FlowClient {
       });
       if(generation!==this.generation) {unlisten();return;}
       this.unlisten=unlisten;await this.refresh();
-      if(generation!==this.generation) return;
-      this.polling=setInterval(()=>{void this.refresh();},1500);
     } catch(error) {if(generation===this.generation)this.set({error:String(error)});}
+  }
+  private updatePolling(hasActive: boolean) {
+    if (hasActive) {
+      if (!this.polling) {
+        this.polling = setInterval(() => { void this.refresh(); }, 1500);
+      }
+    } else {
+      if (this.polling) {
+        clearInterval(this.polling);
+        this.polling = null;
+      }
+    }
   }
   private scheduleRefresh() {
     if(this.trailing) return;
@@ -64,9 +74,35 @@ export class FlowClient {
         const selected=this.state.selectedPeerId;
         const peer=snapshot.peers.find(p=>p.id===selected)||snapshot.peers.find(p=>p.trusted)||snapshot.peers[0];
         this.set({snapshot,selectedPeerId:peer?.id||'',...(snapshot.lastError&&snapshot.lastError!==this.dismissedError?{error:snapshot.lastError}:{})});
+        this.syncAndroidService(snapshot);
+        const hasActive = snapshot.transfers.some(t => !['completed', 'error', 'cancelled'].includes(t.status));
+        this.updatePolling(hasActive);
       }
     }catch(error){if(generation===this.generation)this.set({error:String(error)});}
     finally {this.refreshing=false;}
+  }
+  private syncAndroidService(snapshot: FlowSnapshot) {
+    if (!nativeRuntime() || typeof navigator === 'undefined' || !/android/i.test(navigator.userAgent)) return;
+    const active = snapshot.transfers.filter(t => !['completed', 'error', 'cancelled'].includes(t.status));
+    const activeCount = active.length;
+    if (activeCount > 0) {
+      const first = active[0];
+      const percent = first.total > 0 ? Math.min(100, Math.round((first.bytes / first.total) * 100)) : 0;
+      const isArabic = typeof document !== 'undefined' && (document.documentElement.lang === 'ar' || document.documentElement.dir === 'rtl');
+      const title = isArabic ? 'ARGON — المشاركة المحلية' : 'ARGON — Local Sharing';
+      const text = `${first.name} (${percent}%)`;
+      void import('@tauri-apps/api/core')
+        .then(({ invoke }) =>
+          invoke('sync_android_transfer_notification', {
+            activeCount,
+            title,
+            text,
+            progress: percent,
+            indeterminate: first.status === 'hashing' || first.status === 'verifying'
+          })
+        )
+        .catch(() => {});
+    }
   }
   public async execute<T=void>(command:string,args?:Record<string,unknown>):Promise<T> {
     if(!nativeRuntime()){const error='المشاركة تتطلب تطبيق ARGON المثبّت.';this.set({error});throw new Error(error);}
@@ -95,6 +131,9 @@ export class FlowClient {
     const ids = await this.execute<string[]>('flow_send_download', { taskId, peerId });
     this.selectPeer(peerId);
     return ids;
+  }
+  public async retryTransfer(transferId: string) {
+    return await this.execute<string[]>('flow_retry_transfer', { transferId });
   }
 }
 export const flowClient=new FlowClient();

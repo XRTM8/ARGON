@@ -41,6 +41,7 @@ struct Selection {
 struct ActiveTransfer {
     peer: String,
     cancelled: Arc<AtomicBool>,
+    notify: Arc<tokio::sync::Notify>,
 }
 struct Run {
     stop: watch::Sender<bool>,
@@ -281,6 +282,7 @@ impl FlowService {
                 let mut state = self.state.write().await;
                 for active in state.active.values() {
                     active.cancelled.store(true, Ordering::Relaxed);
+                    active.notify.notify_waiters();
                 }
                 for (_, pair) in state.pairings.drain() {
                     let _ = pair.answer.send(false);
@@ -493,6 +495,7 @@ impl FlowService {
         }
         for active in state.active.values().filter(|active| active.peer == id) {
             active.cancelled.store(true, Ordering::Relaxed);
+            active.notify.notify_waiters();
         }
         identity::save_json(&self.config.storage.join("trusted-v2.json"), &state.trusted)?;
         drop(state);
@@ -506,6 +509,7 @@ impl FlowService {
             .get(id)
             .ok_or("Transfer has already finished")?;
         active.cancelled.store(true, Ordering::Relaxed);
+        active.notify.notify_waiters();
         Ok(())
     }
     pub async fn send_files(
@@ -541,6 +545,7 @@ impl FlowService {
         for (file, path) in files {
             let id = uid();
             let cancel = Arc::new(AtomicBool::new(false));
+            let notify = Arc::new(tokio::sync::Notify::new());
             self.register_transfer(
                 Transfer {
                     id: id.clone(),
@@ -559,6 +564,7 @@ impl FlowService {
                     sha256: None,
                 },
                 cancel.clone(),
+                notify.clone(),
             )
             .await?;
             let service = self.clone();
@@ -578,7 +584,7 @@ impl FlowService {
                         .send_file(&peer, &transfer_id, &path, cancel.clone())
                         .await
                 };
-                let result = tokio::select! { _=stop.changed()=>Err("Sharing stopped".into()), result=work=>result, _=cancelled(&cancel)=>Err("Transfer cancelled".into()) };
+                let result = tokio::select! { _=stop.changed()=>Err("Sharing stopped".into()), result=work=>result, _=cancelled(&cancel, &notify)=>Err("Transfer cancelled".into()) };
                 service.finish(&transfer_id, result).await;
             });
             let mut outgoing = self.outgoing.lock().await;
@@ -605,6 +611,7 @@ impl FlowService {
             .ok_or("Pair the device before sending text")?;
         let id = uid();
         let cancel = Arc::new(AtomicBool::new(false));
+        let notify = Arc::new(tokio::sync::Notify::new());
         let hash = hex(&Sha256::digest(text.as_bytes()));
         self.register_transfer(
             Transfer {
@@ -624,6 +631,7 @@ impl FlowService {
                 sha256: Some(hash.clone()),
             },
             cancel.clone(),
+            notify.clone(),
         )
         .await?;
         let service = self.clone();
@@ -646,7 +654,7 @@ impl FlowService {
                     _ => Err("Clipboard delivery was not confirmed".into()),
                 }
             };
-            let result = tokio::select! { _=stop.changed()=>Err("Sharing stopped".into()), result=work=>result, _=cancelled(&cancel)=>Err("Transfer cancelled".into()) };
+            let result = tokio::select! { _=stop.changed()=>Err("Sharing stopped".into()), result=work=>result, _=cancelled(&cancel, &notify)=>Err("Transfer cancelled".into()) };
             service.finish(&transfer_id, result).await;
         });
         let mut outgoing = self.outgoing.lock().await;
@@ -656,7 +664,12 @@ impl FlowService {
         Ok(id)
     }
 
-    async fn register_transfer(&self, transfer: Transfer, cancel: Arc<AtomicBool>) -> Result<()> {
+    async fn register_transfer(
+        &self,
+        transfer: Transfer,
+        cancel: Arc<AtomicBool>,
+        notify: Arc<tokio::sync::Notify>,
+    ) -> Result<()> {
         let mut state = self.state.write().await;
         if state.active.len() >= 32 || state.active.contains_key(&transfer.id) {
             return Err("Transfer limit reached or duplicate transfer ID".into());
@@ -666,6 +679,7 @@ impl FlowService {
             ActiveTransfer {
                 peer: transfer.peer_id.clone(),
                 cancelled: cancel,
+                notify,
             },
         );
         state.transfers.insert(0, transfer);
@@ -971,6 +985,7 @@ impl FlowService {
                 sha256: Some(hash.clone()),
             },
             Arc::new(AtomicBool::new(false)),
+            Arc::new(tokio::sync::Notify::new()),
         )
         .await?;
         {
@@ -1118,6 +1133,7 @@ impl FlowService {
         let key = format!("{}-{partial_id}", peer.id);
         let _partial_guard = PartialGuard::acquire(self.partials.clone(), key)?;
         let cancel = Arc::new(AtomicBool::new(false));
+        let notify = Arc::new(tokio::sync::Notify::new());
         self.register_transfer(
             Transfer {
                 id: id.clone(),
@@ -1136,6 +1152,7 @@ impl FlowService {
                 sha256: Some(hash.clone()),
             },
             cancel.clone(),
+            notify.clone(),
         )
         .await?;
         let work = async {
@@ -1254,7 +1271,7 @@ impl FlowService {
                 .await?;
             Ok::<(), String>(())
         };
-        let result = tokio::select! { result=work=>result, _=cancelled(&cancel)=>Err("Transfer cancelled".into()) };
+        let result = tokio::select! { result=work=>result, _=cancelled(&cancel, &notify)=>Err("Transfer cancelled".into()) };
         if let Err(error) = &result {
             let _ = channel
                 .send(&Message::Error {
@@ -1292,7 +1309,26 @@ impl FlowService {
                 _=stop.changed()=>break,
                 _=tick.tick()=> {
                     let message=Beacon { protocol:PROTOCOL.into(),id:self.identity.id.clone(),name:safe_name(&self.config.name),port:self.port.load(Ordering::Relaxed) };
-                    if let Ok(bytes)=serde_json::to_vec(&message) { let _=socket.send_to(&bytes,(Ipv4Addr::BROADCAST,DISCOVERY_PORT)).await; }
+                    if let Ok(bytes)=serde_json::to_vec(&message) {
+                        let mut targets = vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT)];
+                        for addr_str in local_addresses(DISCOVERY_PORT) {
+                            if let Ok(sock) = addr_str.parse::<SocketAddr>() {
+                                if let IpAddr::V4(ipv4) = sock.ip() {
+                                    if !ipv4.is_loopback() && !ipv4.is_unspecified() {
+                                        let octets = ipv4.octets();
+                                        let subnet_bcast = Ipv4Addr::new(octets[0], octets[1], octets[2], 255);
+                                        let target = SocketAddr::new(IpAddr::V4(subnet_bcast), DISCOVERY_PORT);
+                                        if !targets.contains(&target) {
+                                            targets.push(target);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for target in targets {
+                            let _ = socket.send_to(&bytes, target).await;
+                        }
+                    }
                 }
                 received=socket.recv_from(&mut buffer)=> {
                     let Ok((size,source))=received else { continue; };
@@ -1310,21 +1346,29 @@ impl FlowService {
     }
 }
 
-async fn cancelled(flag: &Arc<AtomicBool>) {
-    while !flag.load(Ordering::Relaxed) {
-        tokio::time::sleep(Duration::from_millis(40)).await;
+async fn cancelled(flag: &Arc<AtomicBool>, notify: &Arc<tokio::sync::Notify>) {
+    if flag.load(Ordering::Relaxed) {
+        return;
     }
+    notify.notified().await;
 }
 fn local_ip(ip: IpAddr) -> bool {
     matches!(ip,IpAddr::V4(ip) if ip.is_private() || ip.is_loopback() || ip.is_link_local())
 }
 fn local_addresses(port: u16) -> Vec<String> {
     let mut result = vec![format!("127.0.0.1:{port}")];
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("192.0.2.1:9").is_ok() {
-            if let Ok(address) = socket.local_addr() {
-                if !address.ip().is_loopback() && !address.ip().is_unspecified() {
-                    result.insert(0, SocketAddr::new(address.ip(), port).to_string());
+    let probe_targets = ["192.0.2.1:9", "1.1.1.1:80", "8.8.8.8:80"];
+    for target in probe_targets {
+        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if socket.connect(target).is_ok() {
+                if let Ok(address) = socket.local_addr() {
+                    let ip = address.ip();
+                    if !ip.is_loopback() && !ip.is_unspecified() {
+                        let formatted = SocketAddr::new(ip, port).to_string();
+                        if !result.contains(&formatted) {
+                            result.insert(0, formatted);
+                        }
+                    }
                 }
             }
         }

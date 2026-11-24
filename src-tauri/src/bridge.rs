@@ -33,7 +33,7 @@ pub async fn read_request(stream: &mut (impl AsyncRead + Unpin)) -> Result<Strin
                         .map_err(|_| "Invalid Content-Length")?,
                     None => 0,
                 };
-                if length > 65536 {
+                if length > 2 * 1024 * 1024 {
                     return Err("Request body too large".into());
                 }
                 let total = header_end + 4 + length;
@@ -84,7 +84,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_incomplete_or_oversized_bodies() {
         for raw in [
-            "POST /add HTTP/1.1\r\nContent-Length: 999999\r\n\r\n",
+            "POST /add HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n",
             "POST /add HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc",
         ] {
             let mut bytes = raw.as_bytes();

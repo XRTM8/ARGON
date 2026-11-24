@@ -525,11 +525,33 @@ impl DownloaderService {
     ) -> Result<DownloadTask, String> {
         let original_url = req.url.trim().to_owned();
         let resolved = resolve_universal_link(&original_url);
-        let url_valid = reqwest::Url::parse(&resolved.resolved_url)
-            .ok()
-            .is_some_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
+        let is_magnet = crate::torrent::is_magnet_uri(&original_url);
+        let url_valid = if is_magnet {
+            true
+        } else {
+            reqwest::Url::parse(&resolved.resolved_url)
+                .ok()
+                .is_some_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+        };
 
-        let mut error_message = if !url_valid {
+        let mut error_message = if is_magnet {
+            if !state.settings.debrid_enabled
+                || state
+                    .settings
+                    .debrid_api_key
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+            {
+                Some(
+                    "تنزيل روابط التورنت وMagnet يتطلب تفعيل خدمة Real-Debrid في الإعدادات، أو استخدام رابط HTTP/HTTPS مباشر."
+                        .to_owned(),
+                )
+            } else {
+                None
+            }
+        } else if !url_valid {
             Some("رابط غير صالح؛ أدخل رابط HTTP أو HTTPS كاملًا.".to_owned())
         } else {
             None
@@ -587,7 +609,15 @@ impl DownloaderService {
                     .filter(|s| !s.trim().is_empty())
             })
             .map(str::to_owned)
-            .unwrap_or_else(|| extract_filename_from_url(&resolved.resolved_url));
+            .unwrap_or_else(|| {
+                if is_magnet {
+                    crate::torrent::parse_magnet_uri(&original_url)
+                        .map(|m| m.name)
+                        .unwrap_or_else(|_| "magnet_download".to_owned())
+                } else {
+                    extract_filename_from_url(&resolved.resolved_url)
+                }
+            });
         let filename = deduplicate_filename(&sanitize_filename(&raw_name), &existing_names);
         let stream_manifest = is_stream_manifest(&original_url);
 
@@ -635,7 +665,9 @@ impl DownloaderService {
             headers,
             post_body: req.post_body,
             method: req.method,
-            category: if stream_manifest || !["direct", "other"].contains(&platform) {
+            category: if is_magnet {
+                TaskCategory::Torrents
+            } else if stream_manifest || !["direct", "other"].contains(&platform) {
                 TaskCategory::Media
             } else {
                 detect_category(&filename)
@@ -1981,6 +2013,16 @@ impl DownloaderService {
             let mut needs_queue = false;
             let mut active_changed = false;
             let mut pause_outside_window = Vec::new();
+
+            let should_update = {
+                let state = self.state.read().await;
+                state.tasks.values().any(|t| t.status == TaskStatus::Downloading || t.status == TaskStatus::Queued)
+                    || state.speed_history.last().copied().unwrap_or(0.0) > 0.0
+            };
+            if !should_update {
+                continue;
+            }
+
             {
                 let mut state = self.state.write().await;
                 let now_inst = Instant::now();
