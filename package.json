@@ -1,7 +1,7 @@
 {
   "name": "argon-downloader",
   "private": true,
-  "version": "2.8.2",
+  "version": "2.8.3",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "description": "ARGON — Sovereign, High-Performance Multi-Segment Download Accelerator",
