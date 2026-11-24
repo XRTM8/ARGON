@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULTS, excludedHost, mediaDescriptor, shouldCapture, parseUrls, platformVideo, scanPageLinks } from '../../browser-extension/core.js';
+import { DEFAULTS, excludedHost, isMagnetUrl, mediaDescriptor, shouldCapture, parseUrls, platformVideo, scanPageLinks } from '../../browser-extension/core.js';
 
 const download = { id: 1, url: 'https://files.example.com/file.zip', state: 'in_progress', danger: 'safe', totalBytes: 5000 };
 const enabled = { ...DEFAULTS, autoIntercept: true };
@@ -39,5 +39,11 @@ describe('browser capture eligibility', () => {
   it('keeps signed URLs byte-for-byte and rejects unsupported batch entries', () => {
     const url = 'https://example.com/file?sig=a%2Fb&x=1';
     expect(parseUrls(`${url}\n${url}\nmagnet:?xt=x\nhttps://example.com/master.m3u8`)).toEqual({ urls: [url], invalid: ['magnet:?xt=x', 'https://example.com/master.m3u8'] });
+  });
+  it('validates magnet uris accurately', () => {
+    expect(isMagnetUrl('magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709&dn=test')).toBe(true);
+    expect(isMagnetUrl('magnet:?xt=urn:btih:abc')).toBe(true);
+    expect(isMagnetUrl('https://example.com/file')).toBe(false);
+    expect(isMagnetUrl('')).toBe(false);
   });
 });

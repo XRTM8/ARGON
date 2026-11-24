@@ -30,6 +30,10 @@ export function httpUrl(value) {
   catch { return null; }
 }
 
+export function isMagnetUrl(value) {
+  return typeof value === 'string' && /^magnet:\?[\s\S]*xt=urn:btih:/i.test(value.trim());
+}
+
 export function excludedHost(value, hosts = []) {
   const host = httpUrl(value)?.hostname.toLowerCase();
   return !!host && hosts.some((raw) => {

@@ -1,4 +1,4 @@
-import { DEFAULTS, httpUrl, excludedHost, platformVideo, scanPageLinks } from './core.js';
+import { DEFAULTS, httpUrl, isMagnetUrl, excludedHost, platformVideo, scanPageLinks } from './core.js';
 import { buildAuthHeaders, connection, sendDownload } from './bridge-client.js';
 const $ = id => document.getElementById(id);
 let settings = await chrome.storage.local.get(DEFAULTS), language = settings.language === 'en' ? 'en' : 'ar';
@@ -60,7 +60,7 @@ $('cookiesToggle').addEventListener('change',async()=>{
 });
 $('minSize').value=String(settings.minSizeBytes);$('minSize').addEventListener('change',async()=>{settings.minSizeBytes=Number($('minSize').value);await chrome.storage.local.set({minSizeBytes:settings.minSizeBytes});});
 $('excludeSite').addEventListener('click',async()=>{const host=httpUrl(tab?.url)?.hostname;if(!host)return;settings.excludedHosts=excludedHost(tab.url,settings.excludedHosts)?settings.excludedHosts.filter(rule=>!excludedHost(tab.url,[rule])):[...settings.excludedHosts,host];await chrome.storage.local.set({excludedHosts:settings.excludedHosts});labels();});
-$('manualForm').addEventListener('submit',event=>{event.preventDefault();const url=$('manualUrl').value.trim();if(httpUrl(url))void send({url});});
+$('manualForm').addEventListener('submit',event=>{event.preventDefault();const url=$('manualUrl').value.trim();if(httpUrl(url)||isMagnetUrl(url))void send({url});});
 try{[tab]=await chrome.tabs.query({active:true,currentWindow:true});}catch{/* No web tab is available. */}
 labels();void check();void scan();
 if(tab?.id!==undefined){

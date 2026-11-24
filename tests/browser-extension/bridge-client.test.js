@@ -82,4 +82,17 @@ describe('browser-extension bridge-client', () => {
       postBody: 'token=123'
     });
   });
+
+  it('allows magnet URIs in sendDownload without requiring httpUrl', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'accepted', id: 'dl_magnet' })
+    });
+
+    const magnet = 'magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709&dn=test';
+    const result = await sendDownload(magnet);
+    expect(result.status).toBe('accepted');
+    const [, options] = globalThis.fetch.mock.calls[0];
+    expect(JSON.parse(options.body).url).toBe(magnet);
+  });
 });

@@ -1,4 +1,4 @@
-import { httpUrl, mediaDescriptor } from './core.js';
+import { httpUrl, isMagnetUrl, mediaDescriptor } from './core.js';
 const BASE = 'http://127.0.0.1:41523';
 let bridgeToken = '';
 
@@ -86,8 +86,9 @@ export async function sendDownload(
   allowPlaylists = false,
   { requestId, streamKind } = {}
 ) {
+  const isMagnet = isMagnetUrl(url);
   const desc = mediaDescriptor(url);
-  if (!httpUrl(url) || ((desc?.playlist || streamKind) && !allowPlaylists)) {
+  if ((!httpUrl(url) && !isMagnet) || ((desc?.playlist || streamKind) && !allowPlaylists)) {
     throw new Error('unsupported_url');
   }
   const merged = { ...(httpUrl(referer) ? { Referer: referer } : {}), ...(extraHeaders || {}) };

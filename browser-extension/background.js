@@ -1,4 +1,4 @@
-import { DEFAULTS, httpUrl, shouldCapture, mediaDescriptor, platformVideo, excludedHost } from './core.js';
+import { DEFAULTS, httpUrl, isMagnetUrl, shouldCapture, mediaDescriptor, platformVideo, excludedHost } from './core.js';
 import { browserHandoff, buildAuthHeaders, connection, sendDownload } from './bridge-client.js';
 
 // Session storage survives MV3 worker suspension, but is cleared with the browser session.
@@ -92,12 +92,12 @@ async function notify(message) {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   const url = info.menuItemId === 'argon-link' ? info.linkUrl : info.menuItemId === 'argon-media' ? info.srcUrl : info.selectionText?.trim();
-  if (!httpUrl(url)) { void notify(['اختر رابط HTTP أو HTTPS مباشر.', 'Choose a direct HTTP or HTTPS URL.']); return; }
+  if (!httpUrl(url) && !isMagnetUrl(url)) { void notify(['اختر رابط تنزيل مباشر أو رابط Magnet صالح.', 'Choose a direct HTTP/HTTPS URL or valid Magnet link.']); return; }
   void (async () => {
     const settings = await chrome.storage.local.get(DEFAULTS);
     const ping = await connection();
     const allowPlaylists = !!ping.capabilities?.includes('ffmpeg-hls');
-    const headers = await buildAuthHeaders(url, info.frameUrl || tab?.url, settings, !!tab?.incognito);
+    const headers = isMagnetUrl(url) ? undefined : await buildAuthHeaders(url, info.frameUrl || tab?.url, settings, !!tab?.incognito);
     await sendDownload(url, undefined, info.frameUrl || tab?.url, headers, undefined, undefined, allowPlaylists);
   })().then(
     () => notify(['تمت إضافة الرابط إلى ARGON.', 'Link added to ARGON.']),
