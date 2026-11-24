@@ -7,6 +7,7 @@ use std::{
 
 pub const PROTOCOL: &str = "argon-flow/2";
 pub const DISCOVERY_PORT: u16 = 54126;
+pub const MULTICAST_ADDR: std::net::Ipv4Addr = std::net::Ipv4Addr::new(239, 255, 54, 126);
 pub const TRANSFER_PORT: u16 = 54127;
 pub const MAX_FILE: u64 = 50 * 1024 * 1024 * 1024;
 pub const MAX_TEXT: usize = 16 * 1024;

@@ -1310,7 +1310,10 @@ impl FlowService {
                 _=tick.tick()=> {
                     let message=Beacon { protocol:PROTOCOL.into(),id:self.identity.id.clone(),name:safe_name(&self.config.name),port:self.port.load(Ordering::Relaxed) };
                     if let Ok(bytes)=serde_json::to_vec(&message) {
-                        let mut targets = vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT)];
+                        let mut targets = vec![
+                            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT),
+                            SocketAddr::new(IpAddr::V4(crate::model::MULTICAST_ADDR), DISCOVERY_PORT),
+                        ];
                         for addr_str in local_addresses(DISCOVERY_PORT) {
                             if let Ok(sock) = addr_str.parse::<SocketAddr>() {
                                 if let IpAddr::V4(ipv4) = sock.ip() {
@@ -1388,6 +1391,7 @@ fn bind_discovery() -> Result<UdpSocket> {
     socket
         .bind(&SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), DISCOVERY_PORT).into())
         .map_err(|e| format!("Cannot start device discovery: {e}"))?;
+    let _ = socket.join_multicast_v4(&crate::model::MULTICAST_ADDR, &Ipv4Addr::UNSPECIFIED);
     UdpSocket::from_std(socket.into()).map_err(|e| e.to_string())
 }
 fn load_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {

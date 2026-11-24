@@ -10,6 +10,7 @@ import {
   ExternalLink,
   RotateCcw,
   Send,
+  Eye,
   X,
   AlertCircle,
   File,
@@ -132,6 +133,8 @@ export function TaskCard({
     if (/\.(exe|bat|cmd|msi|ps1|vbs|reg|scr|com|pif|jar)$/i.test(task.filename)) setExecWarning(true);
     else void action(() => downloadManager.openFile(task.savePath));
   };
+  const isMedia = task.category === 'media' || /\.(mp4|mkv|webm|avi|mov|mp3|m4a|flac|wav|ogg)$/i.test(task.filename);
+  const canPreview = !completed && isMedia && !!task.savePath && task.downloadedBytes >= 2 * 1024 * 1024;
 
   return (
     <article
@@ -273,6 +276,16 @@ export function TaskCard({
               title={ar ? 'بدء الآن' : 'Start now'}
             >
               <Play size={16} />
+            </button>
+          )}
+          {canPreview && (
+            <button
+              className="icon-button"
+              onClick={() => void action(() => downloadManager.openFile(task.savePath))}
+              aria-label={ar ? 'معاينة الوسائط أثناء التنزيل' : 'Preview media in-progress'}
+              title={ar ? 'معاينة الوسائط أثناء التنزيل' : 'Preview media in-progress'}
+            >
+              <Eye size={16} />
             </button>
           )}
           {completed && (
@@ -475,6 +488,15 @@ export function TaskCard({
           )}
 
           <div className="detail-actions">
+            {canPreview && (
+              <button
+                className="action-button"
+                onClick={() => void action(() => downloadManager.openFile(task.savePath))}
+              >
+                <Eye size={14} />
+                {ar ? 'معاينة أثناء التنزيل' : 'Preview in-progress'}
+              </button>
+            )}
             {completed && task.savePath && !android && (
               <button className="action-button" onClick={() => void action(() => downloadManager.openFolder(task.savePath))}>
                 <FolderOpen size={14} />
