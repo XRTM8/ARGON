@@ -16,6 +16,18 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 class MainActivity : TauriActivity() {
+  companion object {
+    @Volatile private var currentInstance: MainActivity? = null
+
+    fun dispatchBroadcastAction(action: String) {
+      currentInstance?.let { activity ->
+        val webView = activity.attachedWebView ?: return
+        val js = "window.dispatchEvent(new CustomEvent('argon-notification-action', { detail: '${action}' }));"
+        webView.post { webView.evaluateJavascript(js, null) }
+      }
+    }
+  }
+
   @Volatile private var insetTopPx: Float = 0f
   @Volatile private var insetBottomPx: Float = 0f
   @Volatile private var insetLeftPx: Float = 0f
@@ -25,12 +37,18 @@ class MainActivity : TauriActivity() {
   private var attachedWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    currentInstance = this
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
       navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
     )
     super.onCreate(savedInstanceState)
     captureIntentUrl(intent)
+  }
+
+  override fun onDestroy() {
+    if (currentInstance == this) currentInstance = null
+    super.onDestroy()
   }
 
   override fun onNewIntent(intent: Intent) {
@@ -72,7 +90,14 @@ class MainActivity : TauriActivity() {
       Intent.ACTION_VIEW -> intent.dataString
       else -> null
     }?.trim()
-    if (!text.isNullOrEmpty() && (text.startsWith("http://", ignoreCase = true) || text.startsWith("https://", ignoreCase = true) || text.contains("http://") || text.contains("https://"))) {
+    if (!text.isNullOrEmpty() && (
+      text.startsWith("http://", ignoreCase = true) ||
+      text.startsWith("https://", ignoreCase = true) ||
+      text.startsWith("magnet:", ignoreCase = true) ||
+      text.contains("http://") ||
+      text.contains("https://") ||
+      text.contains("magnet:?xt=")
+    )) {
       pendingSharedText = text
     }
   }

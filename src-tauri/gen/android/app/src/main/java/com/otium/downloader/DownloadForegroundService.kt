@@ -27,10 +27,20 @@ class DownloadForegroundService : Service() {
     const val NOTIFICATION_ID = 41523
     const val ACTION_UPDATE = "com.otium.downloader.ACTION_TRANSFER_UPDATE"
     const val ACTION_STOP = "com.otium.downloader.ACTION_TRANSFER_STOP"
+    const val ACTION_PAUSE_ALL = "com.otium.downloader.ACTION_PAUSE_ALL"
     const val EXTRA_TITLE = "title"
     const val EXTRA_TEXT = "text"
     const val EXTRA_PROGRESS = "progress"
     const val EXTRA_INDETERMINATE = "indeterminate"
+
+    fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+      return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+      } else {
+        true
+      }
+    }
 
     fun syncState(
       context: Context,
@@ -66,6 +76,12 @@ class DownloadForegroundService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
+      releaseLocks()
+      stopSelf()
+      return START_NOT_STICKY
+    }
+    if (intent?.action == ACTION_PAUSE_ALL) {
+      MainActivity.dispatchBroadcastAction("pause_all")
       releaseLocks()
       stopSelf()
       return START_NOT_STICKY
@@ -169,6 +185,11 @@ class DownloadForegroundService : Service() {
     }
     val contentIntent = PendingIntent.getActivity(this, 0, openIntent, pendingFlags)
 
+    val pauseIntent = Intent(this, DownloadForegroundService::class.java).apply {
+      action = ACTION_PAUSE_ALL
+    }
+    val pausePendingIntent = PendingIntent.getService(this, 1, pauseIntent, pendingFlags)
+
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
@@ -178,6 +199,7 @@ class DownloadForegroundService : Service() {
       .setOnlyAlertOnce(true)
       .setProgress(100, progress, indeterminate)
       .setPriority(NotificationCompat.PRIORITY_LOW)
+      .addAction(android.R.drawable.ic_media_pause, "Pause All", pausePendingIntent)
       .build()
   }
 }

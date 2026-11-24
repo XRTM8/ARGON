@@ -144,6 +144,12 @@ export class DownloadManager {
         soundEngine.playCompleteChime();
         haptics.success();
         this.showNotification('اكتمل التنزيل', `تم حفظ الملف: ${payload.data?.filename || ''}`);
+        if (isAndroidRuntime() && payload.data?.taskId) {
+          const task = this.tasks.get(payload.data.taskId);
+          if (task?.savePath) {
+            void invoke('scan_media_file', { filePath: task.savePath }).catch(() => {});
+          }
+        }
       } else if (payload.type === 'taskFailed') {
         soundEngine.playErrorTone();
         haptics.error();
@@ -155,15 +161,28 @@ export class DownloadManager {
 
     const unlistenClipboard = await listen<string>('argon-clipboard-url', (event) => {
       const url = event.payload;
-      if (url && typeof window !== 'undefined') {
+      if (url && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
         window.dispatchEvent(new CustomEvent('argon-share-url', { detail: url }));
       }
     });
+
+    const handleNotificationAction = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail === 'pause_all') {
+        this.pauseAll();
+      }
+    };
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('argon-notification-action', handleNotificationAction);
+    }
 
     this.tauriUnlisten = () => {
       unlistenState();
       unlistenEvent();
       unlistenClipboard();
+      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('argon-notification-action', handleNotificationAction);
+      }
     };
     if (this.destroyed) {
       this.tauriUnlisten();

@@ -582,6 +582,46 @@ async fn sync_android_transfer_notification(
 }
 
 #[tauri::command]
+async fn scan_media_file(app: AppHandle, file_path: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let target = resolve_destination_path(&app, &file_path);
+        let target_str = target.to_string_lossy().to_string();
+        flow_mobile::call::<serde_json::Value>(
+            app,
+            "scanMediaFile",
+            serde_json::json!({
+                "path": target_str
+            }),
+        )
+        .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, file_path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn request_battery_exemption(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        flow_mobile::call::<serde_json::Value>(
+            app,
+            "requestIgnoreBatteryOptimizations",
+            serde_json::json!({}),
+        )
+        .await?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_file_item(app: AppHandle, file_path: String) -> Result<(), String> {
     let target = resolve_destination_path(&app, &file_path);
     if !target.exists() {
@@ -1248,6 +1288,8 @@ pub fn run() {
             open_destination_folder,
             open_file_item,
             share_file_item,
+            scan_media_file,
+            request_battery_exemption,
             sync_android_transfer_notification,
             delete_file_item,
             open_browser_extension_dir,

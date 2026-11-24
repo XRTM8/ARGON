@@ -323,6 +323,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 </div>
               </>
             )}
+
+            {android && (
+              <div className="settings-row">
+                <div className="settings-label">
+                  <strong style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <Shield size={14} className="accent-text" />
+                    {ar ? 'استثناء توفير طاقة البطارية' : 'Battery Optimization Exemption'}
+                  </strong>
+                  <span>{ar ? 'حماية تنزيلات الخلفية من القتل المفاجئ عند إطفاء الشاشة' : 'Prevent the OS from terminating background downloads when screen is off'}</span>
+                </div>
+                <button
+                  type="button"
+                  className="action-button primary"
+                  onClick={async () => {
+                    try {
+                      const { invoke } = await import('@tauri-apps/api/core');
+                      await invoke('request_battery_exemption');
+                    } catch {
+                      // Handled
+                    }
+                  }}
+                >
+                  {ar ? 'استثناء التطبيق' : 'Exempt ARGON'}
+                </button>
+              </div>
+            )}
           </section>
         </>
       )}

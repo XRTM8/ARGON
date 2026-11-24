@@ -291,6 +291,50 @@ class FlowFilesPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun scanMediaFile(invoke: Invoke) {
+        try {
+            val path = invoke.getArgs().optString("path", "")
+            if (path.isNotBlank()) {
+                MediaScannerConnection.scanFile(
+                    activity,
+                    arrayOf(path),
+                    null
+                ) { _, _ -> }
+            }
+            invoke.resolve()
+        } catch (error: Exception) {
+            invoke.reject(error.message)
+        }
+    }
+
+    @Command
+    fun checkBatteryOptimizations(invoke: Invoke) {
+        try {
+            val ignoring = DownloadForegroundService.isIgnoringBatteryOptimizations(activity)
+            invoke.resolveObject(mapOf("ignoring" to ignoring))
+        } catch (error: Exception) {
+            invoke.reject(error.message)
+        }
+    }
+
+    @Command
+    fun requestIgnoreBatteryOptimizations(invoke: Invoke) {
+        activity.runOnUiThread {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:${activity.packageName}")
+                    }
+                    activity.startActivity(intent)
+                }
+                invoke.resolve()
+            } catch (error: Exception) {
+                invoke.reject(error.message)
+            }
+        }
+    }
+
+    @Command
     fun readClipboard(invoke: Invoke) {
         activity.runOnUiThread {
             try {
