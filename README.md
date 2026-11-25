@@ -1,84 +1,80 @@
 # ARGON
 
-**BY Otium** · Downloads, encrypted local sharing and clipboard delivery in one Arabic/English workspace.
+## العربية
 
-## ARGON 2
+تطبيق لتنزيل الملفات ومشاركتها بين الأجهزة على الشبكة المحلية. واجهته React وTypeScript ضمن Tauri، وأجزاء التنزيل والنقل مكتوبة بـ Rust. يضم أيضًا إضافة للمتصفح ونسخة معاينة لأندرويد.
 
-The Arabic/English interface uses graphite surfaces, a restrained sage accent and aligned file rows. Downloads, Sharing, Clipboard, Activity, Browser Extension and Settings share one navigation panel, with a bottom navigation bar on phones. Downloads support reviewed batch intake, search/status/type filters, sorting, multi-selection and replacing expired links. See the [UI/UX review and comparison criteria](docs/UI-UX-REVIEW.md).
+### الموجود في المستودع
 
-- Native file selection and encrypted device-to-device transfers, with a six-digit pairing code confirmed on both screens.
-- Explicit acceptance for every received file or text; no unattended clipboard synchronization.
-- SHA-256 verification for every file, verified partial-file resume after restarting, collision-safe saves and receiver acknowledgements.
-- A completed download can be selected for local sharing. Received links can be added to the downloader explicitly.
-- Link cleaning is previewed on request. Signed/authenticated URLs are preserved.
+- تنزيل ملفات HTTP وHTTPS مع طابور للتنزيلات، حدود للسرعة، تنزيل متوازٍ عند دعم الخادم لطلبات النطاق، واستئناف الأجزاء بعد التحقق من بيانات الملف.
+- دعم روابط ذات رؤوس طلب مخصصة أو مصادقة أساسية، وفحص اختياري لبصمة SHA-256. لا تُستبدل الملفات الموجودة عند تكرار الاسم.
+- استخراج روابط وسائط عبر أدوات مضمنة في نسخة Windows؛ تعتمد صيغ HLS وDASH ودمج المسارات على توفر الأدوات ومصدر الوسائط. نسخة أندرويد مخصصة للتنزيل المباشر.
+- إضافة Chrome/Edge لتمرير التنزيلات واكتشاف الوسائط إلى التطبيق المحلي. تعليمات الإعداد في [browser-extension/README.md](browser-extension/README.md).
+- مشاركة ملفات ونصوص بين نسختين من ARGON 2 عبر الشبكة المحلية بعد إقران الجهازين وتأكيد رمز من ستة أرقام. قبول كل ملف أو نص وارد إجراء مستقل. النقل مشفر ويتحقق من حجم الملف وبصمته قبل إتمامه.
+- معاينة لتنظيف الروابط عند الطلب، وصفحات للتنزيلات والمشاركة والحافظة والنشاط والإعدادات.
 
-Both devices need **ARGON 2**. The new `argon-flow/2` protocol does not communicate with the older Flow application. See [protocol, usage and validation details](docs/FLOW-V2.md) and the original [integration study](research/ARGON-FLOW-STUDY.md).
+### الحدود والبناء
 
-## Downloads
+يستخدم النقل المحلي بروتوكول `argon-flow/2`، وهو غير متوافق مع تطبيق Flow الأقدم. المشاركة تبدأ معطلة في كل تشغيل. في أندرويد يجب إبقاء التطبيق مفتوحًا أثناء النقل؛ تنفيذ النقل في الخلفية غير موجود حاليًا. معاينة Vite في المتصفح لا تنفذ تنزيلات فعلية. تفاصيل البروتوكول والاختبارات في [docs/FLOW-V2.md](docs/FLOW-V2.md).
 
-- HTTP/HTTPS files, redirects, custom request headers and URLs with Basic authentication.
-- Parallel ranges verified using a real GET probe. Servers that ignore ranges fall back to a single stream after all other writers have stopped.
-- Resume verified partial files when the effective URL, length and strong ETag match. Older unverified partial files restart safely. A single stream is used for servers without a strong validator.
-- Unknown-length streams and empty/one-byte files.
-- Collision-safe file creation; existing unrelated files are not overwritten.
-- Files become complete only after transfer results, disk length and an optional SHA-256 check succeed.
-- A shared global speed limit and bounded concurrent download queue.
-- Chrome/Edge browser extension, included in installers and portable ZIPs.
-- Native social-video URL extraction through bundled yt-dlp and Node.js on Windows. With FFmpeg available, the desktop app can download unprotected HLS/DASH streams and merge separate audio and video tracks. Available quality depends on the source.
-
-Browser-only Vite previews do **not** download or simulate progress. Run the native app for downloads.
-
-Private, expired or restricted links may require authentication or a fresh direct URL. Magnet/torrent metadata parsing is present. Android supports direct files and uses the desktop app for downloading HLS/DASH streams.
-
-## Build and run on Windows
-
-Prerequisites: Node.js, a current stable Rust toolchain, Visual Studio C++ Build Tools and WebView2.
+لبناء نسخة Windows تحتاج Node.js وRust وأدوات Visual Studio C++ وWebView2:
 
 ```powershell
 npm ci
 npm run tauri:dev
 ```
 
-`tauri:dev` and `tauri:build` prepare the Windows media resources automatically. The first preparation downloads yt-dlp from its official release and verifies SHA-256 before use. The build's Node.js runtime and third-party licenses travel with the app. Subsequent builds reuse the verified extractor. To refresh it, remove `src-tauri/tools/extractor.json` and run `npm run prepare:tools`.
+للفحوص والبناء:
 
 ```powershell
 npm test
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path flow-core/Cargo.toml -- --test-threads=1
-npm run version:check
 npm run tauri:build -- --bundles nsis
 ```
 
-An optional live HTTPS smoke test is available:
+`src-tauri/` يحتوي التطبيق الأصلي، و`downloader-core/` محرك التنزيل، و`flow-core/` النقل المحلي، و`browser-extension/` الإضافة. تفاصيل التحديثات في [docs/UPDATES.md](docs/UPDATES.md).
+
+الترخيص: [GPL-3.0-or-later](LICENSE). للأدوات المضمنة تراخيصها الخاصة.
+
+## English
+
+ARGON is a file downloader and local device-to-device sharing application. It uses React and TypeScript in Tauri, Rust for downloads and transfers, and includes a browser extension and an Android preview.
+
+### Repository contents
+
+- HTTP/HTTPS downloads with a queue, speed limits, parallel ranges when supported by the server, and verified partial-file resume.
+- Custom request headers, Basic authentication, optional SHA-256 verification, and collision-safe output names.
+- Media URL extraction using bundled tools on Windows. HLS/DASH downloads and track merging depend on the available tools and source. Android supports direct-file downloads.
+- A Chrome/Edge extension for handing downloads and detected media to the local app. See [browser-extension/README.md](browser-extension/README.md).
+- Encrypted local file and text sharing between two ARGON 2 devices after pairing and comparing a six-digit code. Each incoming item requires separate acceptance. File size and SHA-256 are verified before completion.
+- Optional link-cleaning previews and views for downloads, sharing, clipboard, activity, and settings.
+
+### Limits and build
+
+Local sharing uses `argon-flow/2` and is incompatible with the older Flow app. Sharing starts disabled on each launch. Android transfers require the app to remain open; background transfer execution is not implemented. The browser-only Vite preview does not perform real downloads. Protocol and validation details are in [docs/FLOW-V2.md](docs/FLOW-V2.md).
+
+Windows development requires Node.js, Rust, Visual Studio C++ Build Tools, and WebView2:
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml public_https_download -- --ignored
+npm ci
+npm run tauri:dev
 ```
 
-The installer is generated under `src-tauri/target/release/bundle/nsis/`. A portable distribution must include `ARGON.exe`, `tools/` and `browser-extension/` together. Do not distribute only the executable if video extraction and extension installation are needed. Linux/macOS development requires yt-dlp and a supported JavaScript runtime on PATH.
-
-## Browser extension
-
-Open Chrome/Edge's extension manager, enable Developer mode, choose **Load unpacked**, and select `browser-extension/`. The **Browser extension** section in ARGON includes setup instructions, connection diagnostics and a test file. The extension offers Arabic/English controls, transient media discovery, selected page-file downloads and opt-in automatic capture with website exclusions and minimum sizes. It uses the native bridge on `127.0.0.1:41523`. Automatic capture records a saved task before transferring responsibility to ARGON. Update the native app and extension together to use staged recovery. See [extension usage, permissions and validation](browser-extension/README.md).
-
-## Android preview
-
-With the Android SDK/NDK, Java 17 and the Rust Android target installed:
+Tests and Windows installer build:
 
 ```powershell
-npm run tauri:android:build -- --target aarch64 --ci
+npm test
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path flow-core/Cargo.toml -- --test-threads=1
+npm run tauri:build -- --bundles nsis
 ```
 
-The build produces an unsigned release APK. Sign it with your existing release certificate for an upgrade, or a development certificate for testing. The local `arm64-preview.apk` artifact is development-signed and has not been validated on a physical phone. Android receives files into app storage, opens accepted files through FileProvider, and selects outgoing files through the system document picker. Keep the app open during transfers; background transfer execution is not implemented.
+`src-tauri/` holds the native application, `downloader-core/` the download engine, `flow-core/` local sharing, and `browser-extension/` the extension. See [docs/UPDATES.md](docs/UPDATES.md) for update behavior.
 
-## Settings and updates
+License: [GPL-3.0-or-later](LICENSE). Bundled tools retain their own licenses.
 
-Settings offer optional automatic update checking and downloading, **off by default**. For the Windows x64 installer, checks run at startup and every six hours when enabled. Packages must pass the embedded public-key signature check and carry the same signed version announced by the release feed. Installation requires an explicit click after downloads and sharing finish; it upgrades the existing per-user installation and restarts ARGON. A single-instance guard prevents a second running app. Failed checks remain errors, rather than claiming the app is current.
 
-Portable copies never invoke the NSIS updater: Settings offers the matching ZIP, verified by its published SHA-256. Close the old copy and extract the new ZIP into a separate folder. Install **2.2.0 once manually** if upgrading from 2.1.0, then enable automatic updates in Settings if desired. See [update behavior and release validation](docs/UPDATES.md).
+---
 
-The application identifier, storage keys and browser bridge header retain their legacy Otium values for compatibility with existing data and integrations. Historical winget manifests describe the original releases.
-
-## License
-
-GPL-3.0-or-later. Bundled media components retain their upstream licenses, included in `tools/`.
+للتواصل / Contact: [@MA.XRT](https://www.instagram.com/ma.xrt/)
