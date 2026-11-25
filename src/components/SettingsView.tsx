@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, Bell, Volume2, Sliders, Cpu, Shield, Film, Download, RefreshCw, Key, X, ExternalLink } from 'lucide-react';
+import { FolderOpen, Bell, Volume2, Sliders, Cpu, Shield, Film, Download, RefreshCw, Key, ExternalLink } from 'lucide-react';
 import { downloadManager } from '../core/downloadManager';
 import { UpdatesPanel } from './UpdatesPanel';
 import { SharingSettings } from './FlowPanels';
+import { CookieModal } from './CookieModal';
 import { isAndroidRuntime } from '../core/safeArea';
-import type { MediaToolsStatus } from '../types/downloader';
+import type { AppSettings, MediaToolsStatus } from '../types/downloader';
 
 export type SettingsTab = 'general' | 'engine' | 'updates';
 
@@ -16,80 +17,28 @@ interface SettingsViewProps {
 export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }) => {
   const ar = lang === 'ar';
   const android = isAndroidRuntime();
-  const s = downloadManager.getSettings();
 
+  const [s, setS] = useState<AppSettings>(() => downloadManager.getSettings());
   const [tab, setTab] = useState<SettingsTab>(requestedTab?.tab ?? 'general');
-  useEffect(() => {
-    if (requestedTab) setTab(requestedTab.tab);
-  }, [requestedTab]);
-  const [maxConcurrent, setMaxConcurrent] = useState(s.maxConcurrentDownloads);
-  const [maxPerHost, setMaxPerHost] = useState(s.maxConnectionsPerHost ?? 4);
-  const [defaultSegments, setDefaultSegments] = useState(s.defaultSegmentCount ?? 8);
-  const [speedLimit, setSpeedLimit] = useState(s.globalSpeedLimitBytes);
-  const [notifications, setNotifications] = useState(s.enableNotifications);
-  const [sound, setSound] = useState(s.enableSound ?? true);
-  const [soundVolume, setSoundVolume] = useState(s.soundVolume ?? 0.5);
-  const [directory, setDirectory] = useState(s.defaultDirectory);
+  const [directoryDraft, setDirectoryDraft] = useState(s.defaultDirectory);
   const [directoryMessage, setDirectoryMessage] = useState<string | null>(null);
-  const [theme, setTheme] = useState<'dark' | 'light'>(s.theme ?? 'dark');
-  const [workStealing, setWorkStealing] = useState(s.dynamicWorkStealing ?? true);
-  const [autoVerify, setAutoVerify] = useState(s.autoVerifyIntegrity ?? false);
-  const [autoRetry, setAutoRetry] = useState(s.autoRetryEnabled ?? true);
-  const [minimizeToTray, setMinimizeToTray] = useState(s.minimizeToTray ?? true);
-  const [startWithWindows, setStartWithWindows] = useState(s.startWithWindows ?? false);
-  const [clipboardMonitor, setClipboardMonitor] = useState(s.clipboardMonitorEnabled ?? false);
-  const [nightScheduler, setNightScheduler] = useState(s.nightSchedulerEnabled ?? false);
-  const [nightStart, setNightStart] = useState(s.nightSchedulerStartHour ?? 2);
-  const [nightEnd, setNightEnd] = useState(s.nightSchedulerEndHour ?? 8);
-  const [autoShutdown, setAutoShutdown] = useState(s.autoShutdownOnComplete ?? false);
-  const [completionAction, setCompletionAction] = useState(s.completionAction ?? 'shutdown');
-  const [debridEnabled, setDebridEnabled] = useState(s.debridEnabled ?? false);
-  const [debridApiKey, setDebridApiKey] = useState(s.debridApiKey ?? '');
+  const [debridKeyDraft, setDebridKeyDraft] = useState(s.debridApiKey ?? '');
   const [mediaTools, setMediaTools] = useState<MediaToolsStatus | null>(null);
   const [toolBusy, setToolBusy] = useState<'ffmpeg' | 'yt-dlp' | null>(null);
   const [toolProgress, setToolProgress] = useState<{ downloaded: number; total?: number } | null>(null);
   const [toolMessage, setToolMessage] = useState<string | null>(null);
   const [showCookieModal, setShowCookieModal] = useState(false);
-  const [cookieText, setCookieText] = useState('');
-  const [cookieLoading, setCookieLoading] = useState(false);
-  const [cookieStatus, setCookieStatus] = useState<string | null>(null);
 
-  const handleOpenCookieModal = async () => {
-    setShowCookieModal(true);
-    setCookieLoading(true);
-    setCookieStatus(null);
-    try {
-      const existing = await downloadManager.loadCookiesText();
-      setCookieText(existing);
-    } catch (err) {
-      setCookieStatus(String(err));
-    } finally {
-      setCookieLoading(false);
-    }
-  };
+  useEffect(() => {
+    if (requestedTab) setTab(requestedTab.tab);
+  }, [requestedTab]);
 
-  const handleSaveCookies = async () => {
-    setCookieLoading(true);
-    setCookieStatus(null);
-    try {
-      let clean = cookieText.trim();
-      if (clean && !clean.includes('\t') && !clean.startsWith('#')) {
-        if (clean.includes('sessionid=')) {
-          const match = clean.match(/sessionid=([^;\s]+)/);
-          if (match) clean = match[1];
-        }
-        if (/^[a-zA-Z0-9%_-]{15,}$/.test(clean)) {
-          clean = `# Netscape HTTP Cookie File\n# Converted by ARGON\n.instagram.com\tTRUE\t/\tTRUE\t2147483647\tsessionid\t${clean}\n`;
-        }
-      }
-      await downloadManager.saveCookiesText(clean);
-      setCookieStatus(ar ? `تم حفظ ملف الكوكيز بنجاح (${clean.length} بايت).` : `Cookies saved successfully (${clean.length} bytes).`);
-    } catch (err) {
-      setCookieStatus(String(err));
-    } finally {
-      setCookieLoading(false);
-    }
-  };
+  useEffect(() => {
+    return downloadManager.subscribe(() => {
+      const latest = downloadManager.getSettings();
+      setS(latest);
+    });
+  }, []);
 
   useEffect(() => {
     if (android || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -106,6 +55,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
       unlisten?.();
     };
   }, [android]);
+
+  const maxConcurrent = s.maxConcurrentDownloads;
+  const maxPerHost = s.maxConnectionsPerHost ?? 4;
+  const defaultSegments = s.defaultSegmentCount ?? 8;
+  const speedLimit = s.globalSpeedLimitBytes;
+  const notifications = s.enableNotifications;
+  const sound = s.enableSound ?? true;
+  const soundVolume = s.soundVolume ?? 0.5;
+  const theme = s.theme ?? 'dark';
+  const workStealing = s.dynamicWorkStealing ?? true;
+  const autoVerify = s.autoVerifyIntegrity ?? false;
+  const autoRetry = s.autoRetryEnabled ?? true;
+  const minimizeToTray = s.minimizeToTray ?? true;
+  const startWithWindows = s.startWithWindows ?? false;
+  const clipboardMonitor = s.clipboardMonitorEnabled ?? false;
+  const nightScheduler = s.nightSchedulerEnabled ?? false;
+  const nightStart = s.nightSchedulerStartHour ?? 2;
+  const nightEnd = s.nightSchedulerEndHour ?? 8;
+  const autoShutdown = s.autoShutdownOnComplete ?? false;
+  const completionAction = s.completionAction ?? 'shutdown';
+  const debridEnabled = s.debridEnabled ?? false;
+
+  const patch = (next: Partial<AppSettings>) => {
+    setS((prev) => ({ ...prev, ...next }));
+    return downloadManager.updateSettings(next);
+  };
 
   return (
     <div className="settings-shell">
@@ -155,9 +130,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   <input
                     aria-label={ar ? 'مسار مجلد الحفظ' : 'Download directory'}
                     dir="ltr"
-                    value={directory}
+                    value={directoryDraft}
                     placeholder={s.defaultDirectory || 'Downloads'}
-                    onChange={(e) => setDirectory(e.target.value)}
+                    onChange={(e) => setDirectoryDraft(e.target.value)}
                     className="argon-input"
                     style={{ flex: 1, minWidth: 200, fontFamily: 'monospace' }}
                   />
@@ -165,7 +140,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                     className="action-button primary"
                     onClick={async () => {
                       try {
-                        await downloadManager.updateSettings({ defaultDirectory: directory });
+                        await patch({ defaultDirectory: directoryDraft });
                         setDirectoryMessage(ar ? 'تم حفظ المجلد والتحقق من صلاحية الكتابة.' : 'Directory saved.');
                       } catch (error) {
                         setDirectoryMessage(String(error));
@@ -187,24 +162,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 <span>{ar ? 'وضع داكن عميق أو وضع نهاري فاتح' : 'Deep Slate Dark or Crisp Porcelain Light'}</span>
               </div>
               <div className="intake-mode-tabs">
-                <button
-                  type="button"
-                  aria-pressed={theme === 'dark'}
-                  onClick={() => {
-                    setTheme('dark');
-                    void downloadManager.updateSettings({ theme: 'dark' });
-                  }}
-                >
+                <button type="button" aria-pressed={theme === 'dark'} onClick={() => void patch({ theme: 'dark' })}>
                   {ar ? 'داكن' : 'Dark'}
                 </button>
-                <button
-                  type="button"
-                  aria-pressed={theme === 'light'}
-                  onClick={() => {
-                    setTheme('light');
-                    void downloadManager.updateSettings({ theme: 'light' });
-                  }}
-                >
+                <button type="button" aria-pressed={theme === 'light'} onClick={() => void patch({ theme: 'light' })}>
                   {ar ? 'فاتح' : 'Light'}
                 </button>
               </div>
@@ -223,11 +184,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 role="switch"
                 aria-checked={notifications}
                 className="argon-switch"
-                onClick={() => {
-                  const next = !notifications;
-                  setNotifications(next);
-                  void downloadManager.updateSettings({ enableNotifications: next });
-                }}
+                onClick={() => void patch({ enableNotifications: !notifications })}
               >
                 <span className="argon-switch-thumb" />
               </button>
@@ -246,11 +203,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 role="switch"
                 aria-checked={sound}
                 className="argon-switch"
-                onClick={() => {
-                  const next = !sound;
-                  setSound(next);
-                  void downloadManager.updateSettings({ enableSound: next });
-                }}
+                onClick={() => void patch({ enableSound: !sound })}
               >
                 <span className="argon-switch-thumb" />
               </button>
@@ -267,11 +220,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   max="1"
                   step="0.05"
                   value={soundVolume}
-                  onChange={(e) => {
-                    const vol = parseFloat(e.target.value);
-                    setSoundVolume(vol);
-                    void downloadManager.updateSettings({ soundVolume: vol });
-                  }}
+                  onChange={(e) => void patch({ soundVolume: parseFloat(e.target.value) })}
                   style={{ flex: 1, accentColor: 'var(--argon-accent)' }}
                 />
               </div>
@@ -289,11 +238,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                     role="switch"
                     aria-checked={minimizeToTray}
                     className="argon-switch"
-                    onClick={() => {
-                      const next = !minimizeToTray;
-                      setMinimizeToTray(next);
-                      void downloadManager.updateSettings({ minimizeToTray: next });
-                    }}
+                    onClick={() => void patch({ minimizeToTray: !minimizeToTray })}
                   >
                     <span className="argon-switch-thumb" />
                   </button>
@@ -311,9 +256,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                     className="argon-switch"
                     onClick={() => {
                       const next = !startWithWindows;
-                      setStartWithWindows(next);
-                      void downloadManager.updateSettings({ startWithWindows: next }).catch((err) => {
-                        setStartWithWindows(!next);
+                      void patch({ startWithWindows: next }).catch((err) => {
                         setDirectoryMessage(String(err));
                       });
                     }}
@@ -366,10 +309,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   key={count}
                   type="button"
                   className={`segment-pill-btn ${maxConcurrent === count ? 'is-active' : ''}`}
-                  onClick={() => {
-                    setMaxConcurrent(count);
-                    void downloadManager.updateSettings({ maxConcurrentDownloads: count });
-                  }}
+                  onClick={() => void patch({ maxConcurrentDownloads: count })}
                 >
                   {count}
                 </button>
@@ -388,10 +328,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   key={seg}
                   type="button"
                   className={`segment-pill-btn ${defaultSegments === seg ? 'is-active' : ''}`}
-                  onClick={() => {
-                    setDefaultSegments(seg);
-                    void downloadManager.updateSettings({ defaultSegmentCount: seg });
-                  }}
+                  onClick={() => void patch({ defaultSegmentCount: seg })}
                 >
                   {seg}
                 </button>
@@ -415,10 +352,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   key={opt.val}
                   type="button"
                   className={`segment-pill-btn ${speedLimit === opt.val ? 'is-active' : ''}`}
-                  onClick={() => {
-                    setSpeedLimit(opt.val);
-                    void downloadManager.updateSettings({ globalSpeedLimitBytes: opt.val });
-                  }}
+                  onClick={() => void patch({ globalSpeedLimitBytes: opt.val })}
                 >
                   {opt.label}
                 </button>
@@ -429,22 +363,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
           <div className="settings-row">
             <div className="settings-label">
               <strong>{ar ? 'التقسيم الديناميكي الذكي (Work-Stealing)' : 'Dynamic Segment Splitting'}</strong>
-              <span>
-                {ar
-                  ? 'إعادة توزيع الأجزاء المتبقية تلقائياً عند انتهاء المسارات الأسرع (تقنية IDM)'
-                  : 'Automatically split remaining slow ranges among idle fast connections'}
-              </span>
+              <span>{ar ? 'إعادة توزيع الأجزاء المتبقية تلقائياً عند انتهاء المسارات الأسرع' : 'Automatically split remaining slow ranges among idle fast connections'}</span>
             </div>
             <button
               type="button"
               role="switch"
               aria-checked={workStealing}
               className="argon-switch"
-              onClick={() => {
-                const next = !workStealing;
-                setWorkStealing(next);
-                void downloadManager.updateSettings({ dynamicWorkStealing: next });
-              }}
+              onClick={() => void patch({ dynamicWorkStealing: !workStealing })}
             >
               <span className="argon-switch-thumb" />
             </button>
@@ -460,11 +386,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               role="switch"
               aria-checked={autoVerify}
               className="argon-switch"
-              onClick={() => {
-                const next = !autoVerify;
-                setAutoVerify(next);
-                void downloadManager.updateSettings({ autoVerifyIntegrity: next });
-              }}
+              onClick={() => void patch({ autoVerifyIntegrity: !autoVerify })}
             >
               <span className="argon-switch-thumb" />
             </button>
@@ -481,10 +403,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   key={count}
                   type="button"
                   className={`segment-pill-btn ${maxPerHost === count ? 'is-active' : ''}`}
-                  onClick={() => {
-                    setMaxPerHost(count);
-                    void downloadManager.updateSettings({ maxConnectionsPerHost: count });
-                  }}
+                  onClick={() => void patch({ maxConnectionsPerHost: count })}
                 >
                   {count}
                 </button>
@@ -502,11 +421,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               role="switch"
               aria-checked={autoRetry}
               className="argon-switch"
-              onClick={() => {
-                const next = !autoRetry;
-                setAutoRetry(next);
-                void downloadManager.updateSettings({ autoRetryEnabled: next });
-              }}
+              onClick={() => void patch({ autoRetryEnabled: !autoRetry })}
             >
               <span className="argon-switch-thumb" />
             </button>
@@ -522,18 +437,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               role="switch"
               aria-checked={clipboardMonitor}
               className="argon-switch"
-              onClick={() => {
-                const next = !clipboardMonitor;
-                setClipboardMonitor(next);
-                void downloadManager.updateSettings({ clipboardMonitorEnabled: next });
-              }}
+              onClick={() => void patch({ clipboardMonitorEnabled: !clipboardMonitor })}
             >
               <span className="argon-switch-thumb" />
             </button>
           </div>
 
           {!android && (
-            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--argon-line)', display: 'grid', gap: 10 }}>
+            <div className="settings-media-block">
               <div className="settings-row">
                 <div className="settings-label">
                   <strong style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -543,7 +454,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   <span>
                     {mediaTools
                       ? `yt-dlp: ${mediaTools.hasYtdlp ? '✓' : '✗'} · Node: ${mediaTools.hasNode ? '✓' : '✗'} · FFmpeg: ${mediaTools.hasFfmpeg ? '✓' : '✗'}`
-                      : ar ? 'تفعيل دمج الصوت والصورة للجودات العالية وقوائم البث' : 'Enable audio/video muxing for high resolutions and HLS/DASH playlists'}
+                      : ar
+                        ? 'تفعيل دمج الصوت والصورة للجودات العالية وقوائم البث'
+                        : 'Enable audio/video muxing for high resolutions and HLS/DASH playlists'}
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -609,27 +522,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 />
               )}
               {toolMessage && <p style={{ margin: 0, fontSize: 12, color: 'var(--argon-accent)' }}>{toolMessage}</p>}
-              <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--argon-card-bg)', border: '1px solid var(--argon-border)', borderRadius: 8, fontSize: 12.5, lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="settings-cookies-box">
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <Key size={15} style={{ flexShrink: 0, marginTop: 2, color: 'var(--argon-accent)' }} />
+                  <Key size={15} style={{ flexShrink: 0, marginTop: 2 }} className="accent-text" />
                   <div>
                     <strong style={{ display: 'block', marginBottom: 2 }}>
-                      {ar ? 'كوكيز الحسابات الخاصة والمقيدة (Instagram & TikTok)' : 'Account Cookies (Instagram & TikTok)'}
+                      {ar ? 'كوكيز الحسابات المقيدة (cookies.txt)' : 'Account Cookies (cookies.txt)'}
                     </strong>
-                    <span style={{ opacity: 0.85 }}>
+                    <span className="settings-subcopy">
                       {ar
-                        ? 'لتنزيل القصص والريلز وحسابات إنستغرام الخاصة التي تتابعها، يمكنك حفظ ملف cookies.txt أو رمز sessionid هنا لتخطي فحص الحساب الخاص بأمان.'
-                        : 'To download private Instagram stories, restricted reels, or locked TikTok videos, save your cookies.txt or sessionid here.'}
+                        ? 'للتنزيل من الحسابات أو المنشورات التي تتطلب تسجيل دخول عبر yt-dlp.'
+                        : 'Save Netscape cookies.txt or an Instagram sessionid for authenticated yt-dlp media extraction.'}
                     </span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="action-button primary"
-                    onClick={() => void handleOpenCookieModal()}
-                    style={{ fontSize: 12, padding: '5px 12px' }}
-                  >
+                  <button type="button" className="action-button primary" onClick={() => setShowCookieModal(true)}>
                     <Key size={13} />
                     <span>{ar ? 'إدارة كوكيز cookies.txt' : 'Manage cookies.txt'}</span>
                   </button>
@@ -637,10 +545,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                     type="button"
                     className="action-button"
                     onClick={() => void downloadManager.openMediaSniffer('https://www.instagram.com')}
-                    style={{ fontSize: 12, padding: '5px 12px' }}
                   >
                     <ExternalLink size={13} />
-                    <span>{ar ? 'فتح متصفح الاقتناص المدمج' : 'Open Media Sniffer Browser'}</span>
+                    <span>{ar ? 'فتح Instagram في المتصفح' : 'Open Instagram in Browser'}</span>
                   </button>
                 </div>
               </div>
@@ -649,11 +556,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
 
           <div className="settings-row">
             <div className="settings-label">
-              <strong>{ar ? 'تكامل Real-Debrid لفك الروابط المقيدة والتورنت' : 'Real-Debrid Unrestriction'}</strong>
+              <strong>{ar ? 'تكامل Real-Debrid للتورنت والروابط المقيدة' : 'Real-Debrid Cloud Unrestriction'}</strong>
               <span>
                 {ar
-                  ? 'تحويل روابط Rapidgator و 1fichier و Mega والتورنت إلى روابط مباشرة فائقة السرعة'
-                  : 'Convert locked filehosts and torrents into direct high-speed downloads'}
+                  ? 'فك روابط التورنت (Magnet / .torrent) ومواقع الاستضافة عبر Real-Debrid (لا يوجد عميل P2P محلي)'
+                  : 'Resolve Magnet/.torrent files and locked filehosts via Real-Debrid (no local P2P BitTorrent client)'}
               </span>
             </div>
             <button
@@ -661,11 +568,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               role="switch"
               aria-checked={debridEnabled}
               className="argon-switch"
-              onClick={() => {
-                const next = !debridEnabled;
-                setDebridEnabled(next);
-                void downloadManager.updateSettings({ debridEnabled: next });
-              }}
+              onClick={() => void patch({ debridEnabled: !debridEnabled })}
             >
               <span className="argon-switch-thumb" />
             </button>
@@ -680,12 +583,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               <input
                 type="password"
                 className="argon-input"
-                style={{ width: 'min(300px, 100%)', padding: '6px 10px', fontSize: '0.85rem' }}
+                style={{ width: 'min(300px, 100%)', fontSize: '0.85rem' }}
                 placeholder={ar ? 'أدخل مفتاح API هنا...' : 'Enter API token...'}
-                value={debridApiKey}
+                value={debridKeyDraft}
                 onChange={(e) => {
-                  setDebridApiKey(e.target.value);
-                  void downloadManager.updateSettings({ debridApiKey: e.target.value.trim() });
+                  setDebridKeyDraft(e.target.value);
+                  void patch({ debridApiKey: e.target.value.trim() });
                 }}
               />
             </div>
@@ -701,11 +604,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               role="switch"
               aria-checked={nightScheduler}
               className="argon-switch"
-              onClick={() => {
-                const next = !nightScheduler;
-                setNightScheduler(next);
-                void downloadManager.updateSettings({ nightSchedulerEnabled: next });
-              }}
+              onClick={() => void patch({ nightSchedulerEnabled: !nightScheduler })}
             >
               <span className="argon-switch-thumb" />
             </button>
@@ -720,11 +619,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 <select
                   className="argon-select"
                   value={nightStart}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setNightStart(v);
-                    void downloadManager.updateSettings({ nightSchedulerStartHour: v });
-                  }}
+                  onChange={(e) => void patch({ nightSchedulerStartHour: Number(e.target.value) })}
                 >
                   {Array.from({ length: 24 }, (_, h) => (
                     <option key={h} value={h}>
@@ -736,11 +631,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                 <select
                   className="argon-select"
                   value={nightEnd}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setNightEnd(v);
-                    void downloadManager.updateSettings({ nightSchedulerEndHour: v });
-                  }}
+                  onChange={(e) => void patch({ nightSchedulerEndHour: Number(e.target.value) })}
                 >
                   {Array.from({ length: 24 }, (_, h) => (
                     <option key={h} value={h}>
@@ -757,18 +648,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               <div className="settings-row">
                 <div className="settings-label">
                   <strong>{ar ? 'إجراء بعد اكتمال التنزيلات' : 'Action When Complete'}</strong>
-                  <p>{ar ? 'تنفيذ إجراء على الجهاز عند الانتهاء من جميع التنزيلات في الطابور' : 'Execute a system action once all downloads in queue complete'}</p>
+                  <span>{ar ? 'تنفيذ إجراء على الجهاز عند الانتهاء من جميع التنزيلات في الطابور' : 'Execute a system action once all downloads in queue complete'}</span>
                 </div>
                 <button
                   type="button"
                   role="switch"
                   aria-checked={autoShutdown}
                   className="argon-switch"
-                  onClick={() => {
-                    const next = !autoShutdown;
-                    setAutoShutdown(next);
-                    void downloadManager.updateSettings({ autoShutdownOnComplete: next });
-                  }}
+                  onClick={() => void patch({ autoShutdownOnComplete: !autoShutdown })}
                 >
                   <span className="argon-switch-thumb" />
                 </button>
@@ -777,33 +664,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
               {autoShutdown && (
                 <div className="settings-row" style={{ paddingTop: 0 }}>
                   <div className="settings-label">
-                    <span style={{ fontSize: '0.85rem', color: '#94A3B8' }}>{ar ? 'نوع الإجراء المطلوب' : 'Target Action'}</span>
+                    <span className="settings-subcopy">{ar ? 'نوع الإجراء المطلوب' : 'Target Action'}</span>
                   </div>
-                  <div className="segmented-control" style={{ display: 'inline-flex', gap: 6 }}>
+                  <div className="intake-mode-tabs">
                     {(['shutdown', 'sleep', 'hibernate'] as const).map((act) => (
                       <button
                         key={act}
                         type="button"
-                        className={`segmented-button ${completionAction === act ? 'active' : ''}`}
-                        style={{
-                          padding: '4px 10px',
-                          fontSize: '0.8rem',
-                          background: completionAction === act ? '#1E293B' : 'transparent',
-                          color: completionAction === act ? '#F8FAFC' : '#94A3B8',
-                          border: `1px solid ${completionAction === act ? '#3B82F6' : '#334155'}`,
-                          borderRadius: 6,
-                          cursor: 'pointer'
-                        }}
-                        onClick={() => {
-                          setCompletionAction(act);
-                          void downloadManager.updateSettings({ completionAction: act });
-                        }}
+                        aria-pressed={completionAction === act}
+                        onClick={() => void patch({ completionAction: act })}
                       >
                         {act === 'shutdown'
-                          ? (ar ? 'إيقاف تشغيل' : 'Shut down')
+                          ? ar ? 'إيقاف تشغيل' : 'Shut down'
                           : act === 'sleep'
-                            ? (ar ? 'سكون (Sleep)' : 'Sleep')
-                            : (ar ? 'إسبات (Hibernate)' : 'Hibernate')}
+                            ? ar ? 'سكون (Sleep)' : 'Sleep'
+                            : ar ? 'إسبات (Hibernate)' : 'Hibernate'}
                       </button>
                     ))}
                   </div>
@@ -821,134 +696,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
         </div>
       )}
 
-      {showCookieModal && (
-        <div
-          className="dialog-backdrop"
-          onClick={() => setShowCookieModal(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: 16
-          }}
-        >
-          <div
-            className="glass-panel"
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: 'min(620px, 95vw)',
-              maxHeight: '90vh',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: 24,
-              borderRadius: 14,
-              background: 'var(--argon-card-bg, #1a1e28)',
-              border: '1px solid var(--argon-border, #333)',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.65)'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Key size={18} className="accent-text" />
-                <h3 style={{ margin: 0, fontSize: 16 }}>
-                  {ar ? 'إدارة كوكيز الحسابات (cookies.txt)' : 'Account Cookies Manager'}
-                </h3>
-              </div>
-              <button
-                type="button"
-                className="action-button icon-only"
-                onClick={() => setShowCookieModal(false)}
-                title={ar ? 'إغلاق' : 'Close'}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <p style={{ margin: '0 0 12px', fontSize: 12.5, opacity: 0.85, lineHeight: 1.5 }}>
-              {ar
-                ? 'تتيح الكوكيز لـ ARGON تنزيل القصص (Stories)، والريلز المقيدة، وحسابات إنستغرام الخاصة التي تتابعها، بالإضافة لمقاطع تيك توك المقفلة بدون أي مشاكل. الصق محتوى ملف cookies.txt بصيغة Netscape أو الصق رمز sessionid الخاص بإنستغرام مباشرة:'
-                : 'Cookies allow downloading Stories, restricted Reels, private accounts you follow, and locked TikTok videos. Paste your Netscape cookies.txt content or paste your Instagram sessionid token directly:'}
-            </p>
-
-            <textarea
-              dir="ltr"
-              value={cookieText}
-              onChange={(e) => setCookieText(e.target.value)}
-              placeholder={ar ? '# الصق كوكيز Netscape هنا أو الصق sessionid الخاص بـ Instagram...' : '# Paste Netscape cookies here or your Instagram sessionid...'}
-              className="argon-input"
-              rows={9}
-              style={{
-                width: '100%',
-                fontFamily: 'Consolas, monospace',
-                fontSize: 12,
-                lineHeight: 1.4,
-                resize: 'vertical',
-                minHeight: 160,
-                maxHeight: 300,
-                marginBottom: 12,
-                background: 'rgba(0,0,0,0.25)',
-                color: 'inherit'
-              }}
-            />
-
-            {cookieStatus && (
-              <div
-                style={{
-                  marginBottom: 12,
-                  padding: '8px 12px',
-                  borderRadius: 6,
-                  fontSize: 12,
-                  background: cookieStatus.includes('نجاح') || cookieStatus.includes('successfully') ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                  color: cookieStatus.includes('نجاح') || cookieStatus.includes('successfully') ? '#4ade80' : '#f87171'
-                }}
-              >
-                {cookieStatus}
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                type="button"
-                className="action-button"
-                onClick={() => {
-                  setCookieText('');
-                  void downloadManager.saveCookiesText('');
-                  setCookieStatus(ar ? 'تم مسح الكوكيز.' : 'Cookies cleared.');
-                }}
-                disabled={cookieLoading}
-                style={{ fontSize: 12 }}
-              >
-                {ar ? 'مسح الكل' : 'Clear'}
-              </button>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className="action-button"
-                  onClick={() => setShowCookieModal(false)}
-                  style={{ fontSize: 12 }}
-                >
-                  {ar ? 'إلغاء' : 'Cancel'}
-                </button>
-                <button
-                  type="button"
-                  className="action-button primary"
-                  onClick={() => void handleSaveCookies()}
-                  disabled={cookieLoading}
-                  style={{ fontSize: 12 }}
-                >
-                  {cookieLoading ? (ar ? 'جارٍ الحفظ...' : 'Saving...') : (ar ? 'حفظ وتطبيق الكوكيز' : 'Save & Apply Cookies')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <CookieModal open={showCookieModal} lang={lang} onClose={() => setShowCookieModal(false)} />
     </div>
   );
 };

@@ -18,6 +18,7 @@ import { readClipboardText } from '../core/clipboard';
 import { detectPlatform, listMediaFormats } from '../core/mediaResolver';
 import { isMagnetUri, parseTorrentFile, type TorrentMetadata } from '../core/torrent';
 import { formatBytes } from '../core/segmentation';
+import { isAndroidRuntime } from '../core/safeArea';
 import type { MediaFormatInfo, MediaMetadata, MediaMetadataInfo, QueueId } from '../types/downloader';
 
 interface Props {
@@ -481,11 +482,11 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
             <button
               type="button"
               className="text-button"
-              title={ar ? 'اختيار واستيراد ملف تورنت (.torrent) من جهازك' : 'Open a .torrent file from disk'}
+              title={ar ? 'استيراد ملف .torrent (يُنزّل سحابياً عبر Real-Debrid)' : 'Import a .torrent file (resolved via Real-Debrid)'}
               onClick={() => fileInputRef.current?.click()}
             >
               <Magnet size={13} />
-              <span>{ar ? 'ملف تورنت' : 'Torrent file'}</span>
+              <span>{ar ? 'تورنت (Real-Debrid)' : 'Torrent (Debrid)'}</span>
             </button>
 
             {isMediaPlatform && (
@@ -560,7 +561,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
                 }}
               >
                 <Magnet size={13} />
-                <span>{ar ? 'رابط تورنت Magnet' : 'BitTorrent Magnet'}</span>
+                <span>{ar ? 'ماغنت · يتطلب Real-Debrid' : 'Magnet · Requires Real-Debrid'}</span>
               </div>
             )}
           </div>
@@ -750,7 +751,9 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
                   }}
                   style={{ fontSize: 11, padding: '4px 10px', width: 'fit-content' }}
                 >
-                  {ar ? 'اقتناص الرابط المباشر عبر متصفح ARGON' : 'Sniff media via ARGON browser'}
+                  {isAndroidRuntime()
+                    ? ar ? 'اقتناص الرابط عبر متصفح ARGON' : 'Open in ARGON media sniffer'
+                    : ar ? 'فتح الصفحة في المتصفح' : 'Open page in browser'}
                 </button>
               </div>
             )}

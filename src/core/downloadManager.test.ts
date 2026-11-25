@@ -471,4 +471,32 @@ describe('DownloadManager Rust facade lifecycle', () => {
     await manager.updateYtdlpTool();
     expect(calls('update_ytdlp_tool')).toHaveLength(1);
   });
+
+  it('applies telemetryTick events without triggering full dl_snapshot IPC', async () => {
+    manager = new DownloadManager();
+    await vi.waitFor(() => expect(manager?.getRuntimeStatus()).toBe('ready'));
+    const snapshotsBefore = calls('dl_snapshot').length;
+
+    events.get('download-event')?.({
+      payload: {
+        type: 'telemetryTick',
+        data: {
+          stats: {
+            activeCount: 1,
+            queuedCount: 0,
+            completedCount: 0,
+            totalBytesDownloaded: 4096,
+            currentTotalSpeed: 2_500_000,
+            speedLimitBytesPerSec: 0
+          },
+          speedHistory: [0, 1_000_000, 2_500_000]
+        }
+      }
+    });
+
+    expect(manager.getStats().currentTotalSpeed).toBe(2_500_000);
+    expect(manager.getSpeedHistory()).toEqual([0, 1_000_000, 2_500_000]);
+    await new Promise((r) => setTimeout(r, 140));
+    expect(calls('dl_snapshot')).toHaveLength(snapshotsBefore);
+  });
 });

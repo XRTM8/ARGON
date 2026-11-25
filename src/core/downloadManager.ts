@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoRetryEnabled: true,
   maxAutoRetries: 3,
   minimizeToTray: true,
-  startWithWindows: true,
+  startWithWindows: false,
   debridEnabled: false,
   completionAction: 'shutdown',
   debridApiKey: ''
@@ -136,10 +136,27 @@ export class DownloadManager {
 
     const unlistenEvent = await listen<{
       type: string;
-      data?: { taskId?: string; filename?: string; error?: string };
+      data?: {
+        taskId?: string;
+        filename?: string;
+        error?: string;
+        stats?: DownloadStats;
+        speedHistory?: number[];
+      };
     }>('download-event', (event) => {
       const payload = event.payload;
       if (!payload) return;
+      if (payload.type === 'telemetryTick') {
+        if (payload.data?.stats) {
+          this.stats = payload.data.stats;
+        }
+        if (payload.data?.speedHistory?.length) {
+          this.speedHistory = payload.data.speedHistory;
+        }
+        this.syncAndroidNotification(Date.now());
+        this.notify(false);
+        return;
+      }
       if (payload.type === 'taskCompleted') {
         soundEngine.playCompleteChime();
         haptics.success();

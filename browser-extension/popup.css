@@ -79,6 +79,20 @@ header, .section-heading, footer, .toggle-row, .preference { justify-content: sp
 }
 .connection strong { flex: 1; font-weight: 600; font-size: 12px; white-space: nowrap; color: var(--bright); }
 .connection button { font-size: 15px; line-height: 1; }
+.pair-box {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.pair-box label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
 .dot {
   width: 7px;
   height: 7px;

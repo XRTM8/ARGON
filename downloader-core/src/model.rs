@@ -236,7 +236,7 @@ impl Default for DownloaderSettings {
             auto_retry_enabled: true,
             max_auto_retries: 3,
             minimize_to_tray: true,
-            start_with_windows: true,
+            start_with_windows: false,
             debrid_enabled: false,
             debrid_api_key: None,
             completion_action: "shutdown".to_string(),
@@ -329,6 +329,10 @@ pub struct DownloaderSnapshot {
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum DownloadEvent {
     StateChanged,
+    TelemetryTick {
+        stats: DownloadStats,
+        speed_history: Vec<f64>,
+    },
     TaskCompleted {
         task_id: String,
         filename: String,

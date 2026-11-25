@@ -55,9 +55,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     if let Some(dl) = handle
                         .state::<crate::DownloaderRuntime>()
                         .service
-                        .lock()
-                        .await
-                        .clone()
+                        .get()
                     {
                         dl.shutdown().await;
                     }

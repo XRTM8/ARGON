@@ -1,14 +1,15 @@
 import { DEFAULTS, httpUrl, isMagnetUrl, excludedHost, platformVideo, scanPageLinks } from './core.js';
-import { buildAuthHeaders, connection, sendDownload } from './bridge-client.js';
+import { buildAuthHeaders, connection, sendDownload, setBridgeToken } from './bridge-client.js';
 const $ = id => document.getElementById(id);
 let settings = await chrome.storage.local.get(DEFAULTS), language = settings.language === 'en' ? 'en' : 'ar';
-let tab, media = [], pageFiles = [], online = false, hasFfmpeg = false, busy = false;
+setBridgeToken(settings.bridgeToken || '');
+let tab, media = [], pageFiles = [], online = false, hasFfmpeg = false, needsPairing = false, busy = false;
 const sent = new Set();
 const t = (ar,en) => language === 'ar' ? ar : en;
 function message(text='',error=false){$('feedback').textContent=text;$('feedback').className=error?'error':'';}
 function labels(){
  document.documentElement.lang=language;document.documentElement.dir=language==='ar'?'rtl':'ltr';$('language').textContent=t('EN','عربي');
- for(const [id,ar,en]of [['optionsLabel','خيارات','Options'],['captureLabel','التقاط التنزيلات تلقائياً','Capture browser downloads'],['videoLabel','إظهار زر التنزيل على الفيديو','Show video download button'],['cookiesLabel','تمرير الكوكيز للمواقع المحمية','Forward cookies for gated sites'],['minSizeLabel','أقل حجم للالتقاط','Minimum capture size'],['anySize','أي حجم','Any size'],['manualLabel','رابط يدوي','Manual link'],['sendBtn','تنزيل','Download'],['privacyLabel','اكتشاف محلي','Local discovery']])$(id).textContent=t(ar,en);
+ for(const [id,ar,en]of [['optionsLabel','خيارات','Options'],['captureLabel','التقاط التنزيلات تلقائياً','Capture browser downloads'],['videoLabel','إظهار زر التنزيل على الفيديو','Show video download button'],['cookiesLabel','تمرير الكوكيز للمواقع المحمية','Forward cookies for gated sites'],['minSizeLabel','أقل حجم للالتقاط','Minimum capture size'],['anySize','أي حجم','Any size'],['manualLabel','رابط يدوي','Manual link'],['sendBtn','تنزيل','Download'],['privacyLabel','اكتشاف محلي','Local discovery'],['pairLabel','أدخل مفتاح الربط من صفحة «إضافة المتصفح» داخل ARGON','Enter Bridge Key from ARGON Browser Integration'],['saveTokenBtn','ربط','Pair']])$(id).textContent=t(ar,en);
  $('version').textContent=`v${chrome.runtime.getManifest().version}`;
  $('checkStatus').setAttribute('aria-label',t('فحص الاتصال','Check connection'));$('scanPage').setAttribute('aria-label',t('تحديث الملفات المكتشفة','Refresh detected files'));
  const host=httpUrl(tab?.url)?.hostname;$('excludeSite').hidden=!host;
@@ -27,19 +28,29 @@ function render(){
  for(const item of files){
   const row=document.createElement('div');row.className='file-item';const info=document.createElement('div');info.className='file-info';const title=document.createElement('span');title.className='file-title';title.dir='auto';title.textContent=item.filename;title.title=item.filename;
   const meta=document.createElement('span');meta.className='file-type';meta.textContent=`${item.type}${item.playlist?' · FFmpeg':''} · ${httpUrl(item.url)?.hostname||''}`;info.append(title,meta);
-  const needsTool=item.playlist&&!hasFfmpeg;const button=document.createElement('button');button.className='primary';button.textContent=needsTool?t('ثبّت FFmpeg','Install FFmpeg'):sent.has(item.url)?t('أُضيف','Added'):t('تنزيل','Download');button.disabled=busy||!online||sent.has(item.url);button.addEventListener('click',()=>needsTool?message(t('ثبّت FFmpeg من إعدادات الوسائط داخل ARGON.','Install FFmpeg from media settings in ARGON.'),true):void send(item));row.append(info,button);$('mediaList').append(row);
+  const needsTool=item.playlist&&!hasFfmpeg;const button=document.createElement('button');button.className='primary';button.textContent=needsTool?t('ثبّت FFmpeg','Install FFmpeg'):sent.has(item.url)?t('أُضيف','Added'):t('تنزيل','Download');button.disabled=busy||!online||needsPairing||sent.has(item.url);button.addEventListener('click',()=>needsTool?message(t('ثبّت FFmpeg من إعدادات الوسائط داخل ARGON.','Install FFmpeg from media settings in ARGON.'),true):void send(item));row.append(info,button);$('mediaList').append(row);
  }
 }
 async function check(){
  $('checkStatus').disabled=true;$('statusText').textContent=t('جارٍ الاتصال…','Connecting…');
- try{const ping=await connection();online=true;hasFfmpeg=!!ping.capabilities?.includes('ffmpeg-hls');$('statusText').textContent=t('متصل بـ ARGON','Connected to ARGON');$('statusDot').className='dot online';$('statusHelp').hidden=true;}
- catch(error){online=false;hasFfmpeg=false;$('statusText').textContent=t('شغّل ARGON للتنزيل','Open ARGON to download');$('statusDot').className='dot';$('statusHelp').hidden=error.message!=='update_required';$('statusHelp').textContent=t('حدّث تطبيق ARGON أولاً.','Update the ARGON app first.');}
+ try{
+  const ping=await connection();online=true;hasFfmpeg=!!ping.capabilities?.includes('ffmpeg-hls');
+  needsPairing=!!ping.authRequired&&!ping.authenticated;
+  $('pairBox').hidden=!needsPairing;
+  if(needsPairing){$('statusText').textContent=t('بانتظار مفتاح الربط','Pairing required');$('statusDot').className='dot';}
+  else{$('statusText').textContent=t('متصل بـ ARGON','Connected to ARGON');$('statusDot').className='dot online';}
+  $('statusHelp').hidden=true;
+ }
+ catch(error){online=false;hasFfmpeg=false;needsPairing=false;$('pairBox').hidden=true;$('statusText').textContent=t('شغّل ARGON للتنزيل','Open ARGON to download');$('statusDot').className='dot';$('statusHelp').hidden=error.message!=='update_required';$('statusHelp').textContent=t('حدّث تطبيق ARGON أولاً.','Update the ARGON app first.');}
  finally{$('checkStatus').disabled=false;render();}
 }
 async function send(item){
  if(busy)return;busy=true;render();
  try{const ping=await connection();const allowPlaylists=!!ping.capabilities?.includes('ffmpeg-hls');const headers=await buildAuthHeaders(item.url,tab?.url,settings,!!tab?.incognito);await sendDownload(item.url,item.platform?undefined:item.filename,tab?.url,headers,undefined,undefined,allowPlaylists,{streamKind:item.playlist?item.type:undefined});sent.add(item.url);message(t('أُضيف إلى ARGON.','Added to ARGON.'));}
- catch{message(t('تعذّر التسليم؛ شغّل ARGON وأعد المحاولة.','Could not hand off. Open ARGON and try again.'),true);}
+ catch(err){
+  if(err?.message==='unauthorized_client'){needsPairing=true;$('pairBox').hidden=false;message(t('مفتاح الربط غير صحيح أو مفقود.','Bridge Key is missing or invalid.'),true);}
+  else{message(t('تعذّر التسليم؛ شغّل ARGON وأعد المحاولة.','Could not hand off. Open ARGON and try again.'),true);}
+ }
  finally{busy=false;render();void check();}
 }
 async function scan(){
@@ -47,6 +58,14 @@ async function scan(){
  try{const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func:scanPageLinks});pageFiles=result[0]?.result||[];render();}catch{/* Restricted browser pages cannot be scanned. */}
 }
 $('checkStatus').addEventListener('click',check);$('scanPage').addEventListener('click',()=>void scan());
+$('saveTokenBtn').addEventListener('click',async()=>{
+ const token=$('bridgeTokenInput').value.trim();
+ settings.bridgeToken=token;setBridgeToken(token);
+ await chrome.storage.local.set({bridgeToken:token});
+ message('');await check();
+ if(!needsPairing&&online){$('bridgeTokenInput').value='';message(t('تم ربط الإضافة بنجاح.','Extension paired successfully.'));}
+ else if(online){message(t('مفتاح الربط غير صحيح.','Invalid Bridge Key.'),true);}
+});
 $('language').addEventListener('click',async()=>{language=language==='ar'?'en':'ar';await chrome.storage.local.set({language});labels();void check();});
 $('interceptToggle').checked=settings.autoIntercept;$('videoToggle').checked=settings.showVideoButton;$('cookiesToggle').checked=!!settings.forwardCookies;
 for(const[id,key]of [['interceptToggle','autoIntercept'],['videoToggle','showVideoButton']])$(id).addEventListener('change',async()=>{settings[key]=$(id).checked;await chrome.storage.local.set({[key]:settings[key]});});

@@ -1,0 +1,118 @@
+:root {
+  color-scheme: dark;
+  --argon-bg: #080A0F;
+  --argon-sidebar: #0B0E15;
+  --argon-panel: #111622;
+  --argon-surface: #161D2B;
+  --argon-surface-hover: #1D2638;
+  --argon-input-bg: #0A0D14;
+  --argon-border: rgba(255, 255, 255, 0.07);
+  --argon-border-hover: rgba(255, 255, 255, 0.15);
+  --argon-border-active: rgba(59, 130, 246, 0.5);
+  --argon-text: #E2E8F0;
+  --argon-bright: #F8FAFC;
+  --argon-muted: #94A3B8;
+  --argon-subtle: #64748B;
+  --argon-accent: #3B82F6;
+  --argon-accent-hover: #60A5FA;
+  --argon-accent-soft: rgba(59, 130, 246, 0.12);
+  --argon-accent-contrast: #FFFFFF;
+  --argon-cyan: var(--argon-accent);
+  --argon-emerald: #10B981;
+  --argon-amber: #F59E0B;
+  --argon-rose: #F43F5E;
+  --argon-radius: 14px;
+  --argon-radius-sm: 9px;
+  --argon-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --argon-topbar-glass: rgba(8, 10, 15, 0.85);
+  --argon-canvas: var(--argon-bg);
+  --argon-card: var(--argon-panel);
+  --argon-line: var(--argon-border);
+  --argon-border-strong: var(--argon-border-hover);
+  --argon-radius-md: var(--argon-radius);
+  --argon-accent-glow: var(--argon-accent-soft);
+  --safe-top: max(var(--native-sat, 0px), env(safe-area-inset-top, 0px));
+  --safe-bottom: max(var(--native-sab, 0px), env(safe-area-inset-bottom, 0px));
+  --safe-left: max(var(--native-sal, 0px), env(safe-area-inset-left, 0px));
+  --safe-right: max(var(--native-sar, 0px), env(safe-area-inset-right, 0px));
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --argon-bg: #F8FAFC;
+  --argon-sidebar: #F1F5F9;
+  --argon-panel: #FFFFFF;
+  --argon-surface: #F1F5F9;
+  --argon-surface-hover: #E2E8F0;
+  --argon-input-bg: #FFFFFF;
+  --argon-border: #E2E8F0;
+  --argon-border-hover: #CBD5E1;
+  --argon-border-active: rgba(37, 99, 235, 0.45);
+  --argon-text: #1E293B;
+  --argon-bright: #0F172A;
+  --argon-muted: #64748B;
+  --argon-subtle: #94A3B8;
+  --argon-accent: #2563EB;
+  --argon-accent-hover: #1D4ED8;
+  --argon-accent-soft: rgba(37, 99, 235, 0.08);
+  --argon-accent-contrast: #FFFFFF;
+  --argon-cyan: var(--argon-accent);
+  --argon-emerald: #10B981;
+  --argon-amber: #F59E0B;
+  --argon-rose: #EF4444;
+  --argon-radius: 14px;
+  --argon-radius-sm: 9px;
+  --argon-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --argon-topbar-glass: rgba(248, 250, 252, 0.92);
+  --argon-canvas: var(--argon-bg);
+  --argon-card: var(--argon-panel);
+  --argon-line: var(--argon-border);
+  --argon-border-strong: var(--argon-border-hover);
+  --argon-radius-md: var(--argon-radius);
+  --argon-accent-glow: var(--argon-accent-soft);
+}
+
+@keyframes argon-pulse {
+  0% { transform: scale(0.96); opacity: 0.85; }
+  50% { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(0.96); opacity: 0.85; }
+}
+@keyframes argon-beacon-ring {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--argon-bg);
+  color: var(--argon-text);
+  font-family: 'Plus Jakarta Sans Variable', 'Tajawal', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  background-image: 
+    radial-gradient(ellipse 70% 40% at 50% -10%, rgba(59, 130, 246, 0.08), transparent),
+    radial-gradient(circle at 100% 0%, rgba(37, 99, 235, 0.04), transparent 45%);
+  background-attachment: fixed;
+}
+:lang(ar) body {
+  font-family: 'Tajawal', 'Plus Jakarta Sans Variable', system-ui, sans-serif;
+  font-size: 14.5px;
+}
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; color: inherit; background: transparent; border: 0; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--argon-accent);
+  outline-offset: 2px;
+}
+button { transition: background-color .14s ease, color .14s ease, border-color .14s ease, transform .12s ease; }
+
+.tabular-nums { font-variant-numeric: tabular-nums; }
+.accent-text { color: var(--argon-accent); }
+.status-ok { color: var(--argon-emerald); }
+.status-warn { color: var(--argon-amber); }
+.status-danger, .danger-text { color: var(--argon-rose); }

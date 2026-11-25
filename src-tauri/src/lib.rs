@@ -17,14 +17,14 @@ use argon_downloader_core::{
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 
 #[derive(Default)]
 pub struct DownloaderRuntime {
-    pub service: Arc<Mutex<Option<Arc<DownloaderService>>>>,
+    pub service: OnceCell<Arc<DownloaderService>>,
 }
 
 pub struct TaskManager {
@@ -32,7 +32,7 @@ pub struct TaskManager {
     pub updating: AtomicBool,
     pub bridge_listening: AtomicBool,
     pub minimize_to_tray: AtomicBool,
-    pub bridge_token: String,
+    pub bridge_token: StdRwLock<String>,
 }
 
 impl Default for TaskManager {
@@ -42,82 +42,125 @@ impl Default for TaskManager {
             updating: AtomicBool::new(false),
             bridge_listening: AtomicBool::new(false),
             minimize_to_tray: AtomicBool::new(true),
-            bridge_token: argon_downloader_core::model::new_id("bridge"),
+            bridge_token: StdRwLock::new(new_bridge_secret()),
         }
     }
 }
 
-pub async fn ensure_downloader(app: &AppHandle) -> Result<Arc<DownloaderService>, String> {
-    let service_lock = app.state::<DownloaderRuntime>().service.clone();
-    let mut guard = service_lock.lock().await;
-    if let Some(ref existing) = *guard {
-        return Ok(existing.clone());
+fn new_bridge_secret() -> String {
+    format!(
+        "{}{}",
+        argon_downloader_core::model::new_id("br"),
+        argon_downloader_core::model::new_id("")
+    )
+    .replace('_', "")
+}
+
+fn load_or_create_bridge_token(app: &AppHandle) -> String {
+    let Ok(dir) = app.path().app_local_data_dir() else {
+        return new_bridge_secret();
+    };
+    let state_dir = dir.join("downloader-v2");
+    let token_path = state_dir.join("bridge.token");
+    if let Ok(existing) = std::fs::read_to_string(&token_path) {
+        let trimmed = existing.trim();
+        if trimmed.len() >= 24 && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return trimmed.to_owned();
+        }
     }
+    let fresh = new_bridge_secret();
+    let _ = std::fs::create_dir_all(&state_dir);
+    let _ = std::fs::write(&token_path, &fresh);
+    fresh
+}
+
+fn save_bridge_token(app: &AppHandle, token: &str) -> Result<(), String> {
     let state_dir = app
         .path()
         .app_local_data_dir()
         .map_err(|e| e.to_string())?
         .join("downloader-v2");
-    let default_download_dir = get_resolved_download_dir(app);
-    let is_android = cfg!(target_os = "android");
-    let app_emit = app.clone();
-    let media_hook = Arc::new(media::TauriMediaExtractor { app: app.clone() });
+    std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
+    std::fs::write(state_dir.join("bridge.token"), token).map_err(|e| e.to_string())
+}
 
-    let service = DownloaderService::new(
-        DownloaderConfig {
-            state_dir,
-            default_download_dir,
-            is_android,
-        },
-        Some(media_hook),
-        move |event| match &event {
-            DownloadEvent::StateChanged => {
-                let _ = app_emit.emit("download-state-changed", ());
-            }
-            DownloadEvent::AllIdleShutdownPending => {
-                let _ = app_emit.emit("download-event", &event);
-                let app_handle = app_emit.clone();
-                tauri::async_runtime::spawn(async move {
-                    let service_lock = app_handle.state::<DownloaderRuntime>().service.clone();
-                    let mgr_opt = service_lock.lock().await.clone();
-                    let action = match mgr_opt {
-                        Some(mgr) => mgr.settings().await.completion_action,
-                        None => "shutdown".to_string(),
-                    };
-                    let _ = trigger_os_completion_action(&action, false);
-                });
-            }
-            DownloadEvent::TaskCompleted { save_path, .. } => {
-                #[cfg(target_os = "android")]
-                {
-                    let app_pub = app_emit.clone();
-                    let path_pub = save_path.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = flow_mobile::call::<serde_json::Value>(
-                            app_pub,
-                            "publishDownload",
-                            serde_json::json!({ "path": path_pub }),
-                        )
-                        .await;
-                    });
-                }
-                #[cfg(not(target_os = "android"))]
-                let _ = save_path;
-                let _ = app_emit.emit("download-event", &event);
-            }
-            DownloadEvent::TaskFailed { .. } | DownloadEvent::MediaDownloadRequested { .. } => {
-                let _ = app_emit.emit("download-event", &event);
-            }
-        },
-    )
-    .await?;
+pub async fn ensure_downloader(app: &AppHandle) -> Result<Arc<DownloaderService>, String> {
+    let runtime = app.state::<DownloaderRuntime>();
+    let service = runtime
+        .service
+        .get_or_try_init(|| async {
+            let state_dir = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("downloader-v2");
+            let default_download_dir = get_resolved_download_dir(app);
+            let is_android = cfg!(target_os = "android");
+            let app_emit = app.clone();
+            let media_hook = Arc::new(media::TauriMediaExtractor { app: app.clone() });
 
-    let snap = service.snapshot().await;
-    app.state::<Arc<TaskManager>>()
-        .minimize_to_tray
-        .store(snap.settings.minimize_to_tray, Ordering::Relaxed);
-    *guard = Some(service.clone());
-    Ok(service)
+            let service = DownloaderService::new(
+                DownloaderConfig {
+                    state_dir,
+                    default_download_dir,
+                    is_android,
+                },
+                Some(media_hook),
+                move |event| match &event {
+                    DownloadEvent::StateChanged => {
+                        let _ = app_emit.emit("download-state-changed", ());
+                    }
+                    DownloadEvent::TelemetryTick { .. } => {
+                        let _ = app_emit.emit("download-event", &event);
+                    }
+                    DownloadEvent::AllIdleShutdownPending => {
+                        let _ = app_emit.emit("download-event", &event);
+                        let app_handle = app_emit.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let action = match app_handle.state::<DownloaderRuntime>().service.get() {
+                                Some(mgr) => mgr.settings().await.completion_action,
+                                None => "shutdown".to_string(),
+                            };
+                            let _ = trigger_os_completion_action(&action, false);
+                        });
+                    }
+                    DownloadEvent::TaskCompleted { save_path, .. } => {
+                        #[cfg(target_os = "android")]
+                        {
+                            let app_pub = app_emit.clone();
+                            let path_pub = save_path.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = flow_mobile::call::<serde_json::Value>(
+                                    app_pub,
+                                    "publishDownload",
+                                    serde_json::json!({ "path": path_pub }),
+                                )
+                                .await;
+                            });
+                        }
+                        #[cfg(not(target_os = "android"))]
+                        let _ = save_path;
+                        let _ = app_emit.emit("download-event", &event);
+                    }
+                    DownloadEvent::TaskFailed { .. } | DownloadEvent::MediaDownloadRequested { .. } => {
+                        let _ = app_emit.emit("download-event", &event);
+                    }
+                },
+            )
+            .await?;
+
+            let snap = service.snapshot().await;
+            app.state::<Arc<TaskManager>>()
+                .minimize_to_tray
+                .store(snap.settings.minimize_to_tray, Ordering::Relaxed);
+            #[cfg(desktop)]
+            {
+                let _ = tray::sync_windows_autostart(snap.settings.start_with_windows);
+            }
+            Ok::<Arc<DownloaderService>, String>(service)
+        })
+        .await?;
+    Ok(service.clone())
 }
 
 pub fn get_resolved_download_dir(app: &AppHandle) -> std::path::PathBuf {
@@ -387,10 +430,10 @@ async fn probe_url(
 
 #[tauri::command]
 async fn poll_telemetry_binary(app: AppHandle) -> Result<tauri::ipc::Response, String> {
-    let service_lock = app.state::<DownloaderRuntime>().service.clone();
-    let guard = service_lock.lock().await;
-    let bytes = guard
-        .as_ref()
+    let bytes = app
+        .state::<DownloaderRuntime>()
+        .service
+        .get()
         .map(|svc| svc.snapshot_telemetry_binary())
         .unwrap_or_else(|| vec![0x33, 0x47, 0x52, 0x41, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     Ok(tauri::ipc::Response::new(bytes))
@@ -442,14 +485,28 @@ async fn browser_bridge_status(
     app: AppHandle,
     state: tauri::State<'_, Arc<TaskManager>>,
 ) -> Result<serde_json::Value, String> {
+    let token = state.bridge_token.read().map(|g| g.clone()).unwrap_or_default();
     Ok(serde_json::json!({
         "listening": state.bridge_listening.load(Ordering::Relaxed),
         "ready": true,
         "frontendMounted": state.frontend_ready.load(Ordering::Relaxed),
         "hasFfmpeg": media::has_ffmpeg_installed(&app),
         "port": 41523,
-        "token": state.bridge_token
+        "token": token
     }))
+}
+
+#[tauri::command]
+async fn regenerate_bridge_token(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<TaskManager>>,
+) -> Result<String, String> {
+    let fresh = new_bridge_secret();
+    save_bridge_token(&app, &fresh)?;
+    if let Ok(mut guard) = state.bridge_token.write() {
+        *guard = fresh.clone();
+    }
+    Ok(fresh)
 }
 
 #[tauri::command]
@@ -747,8 +804,7 @@ fn register_native_messaging_host(app: &AppHandle) {
                 "path": exe_path.to_string_lossy(),
                 "type": "stdio",
                 "allowed_origins": [
-                    "chrome-extension://ikdgdlmiillcilhcjcbmplacomoiemhk/",
-                    "chrome-extension://*/"
+                    "chrome-extension://ikdgdlmiillcilhcjcbmplacomoiemhk/"
                 ]
             });
             if let Ok(content_str) = serde_json::to_string_pretty(&json_content) {
@@ -769,6 +825,18 @@ fn register_native_messaging_host(app: &AppHandle) {
             }
         }
     }
+}
+
+#[cfg(desktop)]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 #[cfg(desktop)]
@@ -844,8 +912,16 @@ fn start_browser_bridge(app_handle: AppHandle) {
                             token.trim().to_owned()
                         }
                     });
-                let expected_token = app.state::<Arc<TaskManager>>().bridge_token.clone();
-                let token_valid = auth_token.as_ref().is_some_and(|tok| tok == &expected_token);
+                let expected_token = app
+                    .state::<Arc<TaskManager>>()
+                    .bridge_token
+                    .read()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                let token_valid = !expected_token.is_empty()
+                    && auth_token
+                        .as_ref()
+                        .is_some_and(|tok| constant_time_eq(tok.as_bytes(), expected_token.as_bytes()));
 
                 if let Some(ref orig) = origin_header {
                     let lower = orig.to_ascii_lowercase();
@@ -935,7 +1011,8 @@ fn start_browser_bridge(app_handle: AppHandle) {
                         "app": "ARGON",
                         "version": env!("CARGO_PKG_VERSION"),
                         "capabilities": caps,
-                        "token": expected_token,
+                        "authRequired": true,
+                        "authenticated": token_valid,
                     })
                     .to_string();
                     let response = format!(
@@ -952,16 +1029,8 @@ fn start_browser_bridge(app_handle: AppHandle) {
                     request.starts_with(&format!("POST /handoff/{action} "))
                 });
                 if request.starts_with("POST /add ") || handoff_action.is_some() {
-                    let is_extension_origin = origin_header
-                        .as_deref()
-                        .map(|o| {
-                            o.starts_with("chrome-extension://")
-                                || o.starts_with("moz-extension://")
-                                || o.starts_with("safari-web-extension://")
-                        })
-                        .unwrap_or(false);
-                    if !is_extension_origin && !token_valid {
-                        let body = r#"{"error":"unauthorized_client","message":"Unauthorized client: Extension origin or valid Authorization Bearer token required"}"#;
+                    if !token_valid {
+                        let body = r#"{"error":"unauthorized_client","message":"Unauthorized client: pair the browser extension using your ARGON Bridge Key"}"#;
                         let response = format!(
                             "HTTP/1.1 401 Unauthorized\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                             cors_origin_str,
@@ -1191,6 +1260,10 @@ pub fn run() {
         .manage(flow::FlowRuntime::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            let persisted_token = load_or_create_bridge_token(app.handle());
+            if let Ok(mut guard) = app.state::<Arc<TaskManager>>().bridge_token.write() {
+                *guard = persisted_token;
+            }
             #[cfg(target_os = "android")]
             app.handle().plugin(flow_mobile::init())?;
             #[cfg(desktop)]
@@ -1281,6 +1354,7 @@ pub fn run() {
             media::load_cookies_text,
             set_browser_bridge_ready,
             browser_bridge_status,
+            regenerate_bridge_token,
             open_media_sniffer,
             parse_torrent_info,
             open_browser_test,
@@ -1305,13 +1379,7 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 tauri::async_runtime::block_on(async {
-                    let dl = app
-                        .state::<DownloaderRuntime>()
-                        .service
-                        .lock()
-                        .await
-                        .clone();
-                    if let Some(dl) = dl {
+                    if let Some(dl) = app.state::<DownloaderRuntime>().service.get() {
                         dl.shutdown().await;
                     }
                     let engine = app.state::<flow::FlowRuntime>().engine.lock().await.clone();

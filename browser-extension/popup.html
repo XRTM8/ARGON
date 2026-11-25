@@ -3,6 +3,13 @@
 <header><div class="brand"><img src="mark.svg" width="24" height="24" alt=""><strong>ARGON</strong></div><button id="language" class="quiet" aria-label="Switch language">EN</button></header>
 <div class="connection"><span id="statusDot" class="dot"></span><strong id="statusText" role="status"></strong><button id="checkStatus" class="quiet" title="Check connection" aria-label="Check connection">↻</button></div>
 <p id="statusHelp" class="muted" hidden></p>
+<div id="pairBox" class="pair-box" hidden>
+  <label for="bridgeTokenInput" id="pairLabel"></label>
+  <div class="manual-row">
+    <input id="bridgeTokenInput" type="password" dir="ltr" placeholder="br..." autocomplete="off" spellcheck="false">
+    <button id="saveTokenBtn" class="primary" type="button"></button>
+  </div>
+</div>
 <section class="page-files"><div class="section-heading"><h1 id="filesHeading"></h1><button id="scanPage" class="quiet" aria-label="Refresh detected files">↻</button></div><p id="emptyMedia" class="empty"></p><div id="mediaList"></div></section>
 <p id="feedback" role="status" aria-live="polite"></p>
 <details><summary id="optionsLabel"></summary><div class="options">

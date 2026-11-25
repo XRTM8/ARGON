@@ -4,20 +4,14 @@ import {
   AlertCircle,
   X,
   ArrowDownToLine,
-  ArrowUpRight,
-  ArrowDownLeft,
-  FolderOpen,
-  CheckCircle2,
   Puzzle,
   Pause,
   Play,
   Trash2,
-  Search,
   Sun,
   Moon,
   Command,
-  Minimize2,
-  Maximize2
+  Minimize2
 } from 'lucide-react';
 import { Header, type MainViewTab } from './components/Header';
 import { ArgonMark } from './components/ArgonMark';
@@ -27,13 +21,15 @@ import { TaskInspector } from './components/TaskInspector';
 import { CommandPalette } from './components/CommandPalette';
 import { SettingsView, type SettingsTab } from './components/SettingsView';
 import { BrowserView } from './components/BrowserView';
-import { SharingView, ClipboardView, FlowDialogs, SendDownloadDialog, flowStatus } from './components/FlowPanels';
+import { HistoryView } from './components/HistoryView';
+import { MiniWidget } from './components/MiniWidget';
+import { SharingView, ClipboardView, FlowDialogs, SendDownloadDialog } from './components/FlowPanels';
 import { ThroughputSparkline } from './components/ThroughputSparkline';
 import { downloadManager } from './core/downloadManager';
 import { updateManager } from './core/updates/updateManager';
 import { useFlow } from './core/useFlow';
 import { extractSharedUrl } from './core/downloadInput';
-import { formatBytes, formatSpeed } from './core/segmentation';
+import { formatSpeed } from './core/segmentation';
 import { consumeInitialAndroidSharedUrl, syncSystemBarTheme } from './core/safeArea';
 import type { DownloadTask, MediaMetadata, QueueId } from './types/downloader';
 import { parseTorrentFile, type TorrentMetadata } from './core/torrent';
@@ -306,114 +302,16 @@ export function App() {
   };
 
   if (miniMode) {
-    const activeTasks = tasks.filter((t) => t.status === 'downloading' || t.status === 'queued');
-    const firstActive = activeTasks[0];
-    const totalProgress =
-      firstActive && firstActive.totalBytes > 0
-        ? Math.min(100, Math.max(0, Math.round((firstActive.downloadedBytes / firstActive.totalBytes) * 100)))
-        : 0;
-
     return (
-      <div className={`argon-root argon-mini-mode ${theme === 'light' ? 'light-mode' : ''}`} dir={ar ? 'rtl' : 'ltr'}>
-        <div className="mini-widget">
-          <div className="mini-widget-header">
-            <div className="mini-brand">
-              <ArgonMark size={18} />
-              <strong className="mini-title">ARGON</strong>
-              <span className="mini-status-chip">
-                {stats.activeCount > 0
-                  ? ar
-                    ? `${stats.activeCount} نشط`
-                    : `${stats.activeCount} active`
-                  : ar
-                    ? 'جاهز'
-                    : 'Ready'}
-              </span>
-            </div>
-            <div className="mini-widget-actions">
-              <button
-                type="button"
-                className="mini-icon-btn"
-                onClick={toggleTheme}
-                title={ar ? 'تبديل المظهر' : 'Toggle theme'}
-              >
-                {theme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
-              </button>
-              <button
-                type="button"
-                className="mini-icon-btn mini-expand-btn"
-                onClick={() => void toggleMiniMode(false)}
-                title={ar ? 'استعادة الواجهة الكاملة' : 'Restore full window'}
-              >
-                <Maximize2 size={13} />
-              </button>
-            </div>
-          </div>
-
-          <div className="mini-widget-body">
-            {firstActive ? (
-              <div className="mini-task-info">
-                <span className="mini-filename" title={firstActive.filename} dir="ltr">
-                  {firstActive.filename}
-                </span>
-                <div className="mini-stats-line">
-                  <span className="mini-speed" dir="ltr">
-                    <ArrowDownToLine size={12} />
-                    {formatSpeed(stats.currentTotalSpeed)}
-                  </span>
-                  <span className="mini-percentage" dir="ltr">
-                    {totalProgress}%
-                  </span>
-                </div>
-                <div className="mini-progress-track">
-                  <div className="mini-progress-fill" style={{ width: `${totalProgress}%` }} />
-                </div>
-              </div>
-            ) : (
-              <div className="mini-idle-info">
-                <span>{ar ? 'لا توجد تنزيلات نشطة حالياً' : 'No active downloads'}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="mini-widget-footer">
-            {stats.activeCount > 0 ? (
-              <button
-                type="button"
-                className="mini-action-pill"
-                onClick={() => downloadManager.pauseAll()}
-                title={ar ? 'إيقاف مؤقت للكل' : 'Pause all'}
-              >
-                <Pause size={12} />
-                <span>{ar ? 'إيقاف مؤقت' : 'Pause'}</span>
-              </button>
-            ) : tasks.some((t) => t.status === 'paused') ? (
-              <button
-                type="button"
-                className="mini-action-pill"
-                onClick={() => downloadManager.resumeAll()}
-                title={ar ? 'استئناف الكل' : 'Resume all'}
-              >
-                <Play size={12} />
-                <span>{ar ? 'استئناف' : 'Resume'}</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="mini-action-pill"
-                onClick={() => void toggleMiniMode(false)}
-              >
-                <span>{ar ? 'فتح التنزيلات' : 'Open Downloads'}</span>
-              </button>
-            )}
-            {stats.currentTotalSpeed > 0 && (
-              <div className="mini-sparkline-wrap">
-                <ThroughputSparkline history={speedHistory} width={48} height={14} />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <MiniWidget
+        lang={lang}
+        theme={theme}
+        tasks={tasks}
+        stats={stats}
+        speedHistory={speedHistory}
+        onToggleTheme={toggleTheme}
+        onRestore={() => void toggleMiniMode(false)}
+      />
     );
   }
 
@@ -540,29 +438,6 @@ export function App() {
                     </span>
                   )}
                 </div>
-
-                <div className="view-header-actions">
-                  {stats.activeCount > 0 ? (
-                    <button className="action-button" onClick={() => downloadManager.pauseAll()} title={ar ? 'إيقاف مؤقت للكل' : 'Pause all downloads'}>
-                      <Pause size={13} />
-                      <span>{ar ? 'إيقاف الكل' : 'Pause All'}</span>
-                    </button>
-                  ) : (
-                    tasks.some((t) => t.status === 'paused') && (
-                      <button className="action-button" onClick={() => downloadManager.resumeAll()} title={ar ? 'استئناف الكل' : 'Resume all downloads'}>
-                        <Play size={13} />
-                        <span>{ar ? 'استئناف الكل' : 'Resume All'}</span>
-                      </button>
-                    )
-                  )}
-
-                  {stats.completedCount > 0 && (
-                    <button className="action-button" onClick={() => downloadManager.clearCompleted()} title={ar ? 'مسح التنزيلات المكتملة من القائمة' : 'Clear completed from list'}>
-                      <Trash2 size={13} />
-                      <span>{ar ? 'مسح المكتملة' : 'Clear Completed'}</span>
-                    </button>
-                  )}
-                </div>
               </div>
 
               {runtime !== 'ready' && (
@@ -662,7 +537,7 @@ export function App() {
 
           {activeView === 'sharing' && <SharingView lang={lang} onSwitchTab={setActiveView} />}
           {activeView === 'clipboard' && <ClipboardView lang={lang} onDownload={(url) => add(url)} onSwitchTab={setActiveView} />}
-          {activeView === 'history' && <UnifiedHistory lang={lang} tasks={tasks} />}
+          {activeView === 'history' && <HistoryView lang={lang} tasks={tasks} />}
           {activeView === 'browser' && <BrowserView lang={lang} />}
           {activeView === 'settings' && <SettingsView lang={lang} requestedTab={settingsTabRequest} />}
         </main>
@@ -699,132 +574,6 @@ export function App() {
           <strong>{ar ? 'أفلت الروابط لمراجعتها وإضافتها' : 'Drop links to review and add them'}</strong>
         </div>
       )}
-    </div>
-  );
-}
-
-function UnifiedHistory({ lang, tasks }: { lang: 'ar' | 'en'; tasks: DownloadTask[] }) {
-  const { snapshot } = useFlow();
-  const ar = lang === 'ar';
-  const [filter, setFilter] = useState('');
-  const [actionError, setActionError] = useState('');
-
-  const entries = [
-    ...tasks.map((task) => ({
-      id: task.id,
-      name: task.filename,
-      date: task.createdAt,
-      kind: 'download' as const,
-      peer: '',
-      status: task.status,
-      path: task.savePath,
-      size: task.totalBytes
-    })),
-    ...(snapshot?.transfers || []).map((transfer) => ({
-      id: `flow-${transfer.id}`,
-      name: transfer.kind === 'text' ? (ar ? 'نص الحافظة' : 'Clipboard text') : transfer.name,
-      date: transfer.createdAt,
-      kind: transfer.direction as 'send' | 'receive',
-      peer: transfer.peerName,
-      status: transfer.status,
-      path: transfer.path || undefined,
-      size: transfer.total
-    }))
-  ]
-    .sort((a, b) => b.date - a.date)
-    .filter((e) => !filter.trim() || e.name.toLowerCase().includes(filter.toLowerCase()));
-
-  return (
-    <div>
-      <div className="view-header">
-        <div className="view-header-title">
-          <h1>{ar ? 'سجل العمليات' : 'Activity Log'}</h1>
-          <span className="count-badge" dir="ltr">
-            {entries.length} {ar ? 'عنصر' : 'items'}
-          </span>
-        </div>
-
-        <div className="search-field" style={{ maxWidth: 260 }}>
-          <Search size={14} />
-          <input
-            type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder={ar ? 'بحث في السجل…' : 'Filter activity…'}
-          />
-        </div>
-      </div>
-
-      {actionError && (
-        <p className="inline-error" role="alert">
-          {actionError}
-        </p>
-      )}
-      <div className="glass-panel">
-        {entries.length > 0 ? (
-          entries.map((entry) => (
-            <article key={entry.id} className="history-row">
-              <div className="file-symbol">
-                {entry.kind === 'download' ? (
-                  <ArrowDownToLine size={16} />
-                ) : entry.kind === 'send' ? (
-                  <ArrowUpRight size={16} />
-                ) : (
-                  <ArrowDownLeft size={16} />
-                )}
-              </div>
-
-              <div>
-                <strong dir="auto">{entry.name}</strong>
-                <span>
-                  {entry.kind === 'download'
-                    ? ar ? 'تنزيل' : 'Download'
-                    : `${entry.kind === 'send' ? (ar ? 'إلى' : 'To') : ar ? 'من' : 'From'} ${entry.peer}`}{' '}
-                  · <span dir="ltr">{formatBytes(entry.size)}</span> ·{' '}
-                  {new Date(entry.date).toLocaleString(ar ? 'ar-IQ' : 'en', {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
-                </span>
-              </div>
-
-              <small className={entry.status === 'error' ? 'status-danger' : ''}>
-                {entry.kind === 'download'
-                  ? {
-                      downloading: ar ? 'جارٍ التنزيل' : 'Downloading',
-                      paused: ar ? 'متوقف' : 'Paused',
-                      queued: ar ? 'في الانتظار' : 'Queued',
-                      completed: ar ? 'مكتمل' : 'Complete',
-                      error: ar ? 'خطأ' : 'Error'
-                    }[entry.status] || entry.status
-                  : flowStatus(entry.status, lang)}
-              </small>
-
-              {entry.status === 'completed' && entry.path ? (
-                <button
-                  className="icon-button"
-                  onClick={() => {
-                    void downloadManager.openFolder(entry.path).catch((error) => setActionError(String(error)));
-                  }}
-                  aria-label={ar ? 'فتح المجلد' : 'Open folder'}
-                >
-                  <FolderOpen size={15} />
-                </button>
-              ) : entry.status === 'completed' ? (
-                <CheckCircle2 size={15} className="status-ok" />
-              ) : (
-                <span />
-              )}
-            </article>
-          ))
-        ) : (
-          <div className="quiet-empty">
-            <p>{ar ? 'لا توجد عمليات مسجلة حتى الآن.' : 'No activity yet.'}</p>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

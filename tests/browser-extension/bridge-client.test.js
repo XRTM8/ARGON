@@ -1,11 +1,12 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { buildAuthHeaders, connection, sendDownload } from '../../browser-extension/bridge-client.js';
+import { buildAuthHeaders, connection, sendDownload, setBridgeToken } from '../../browser-extension/bridge-client.js';
 
 describe('browser-extension bridge-client', () => {
   const originalFetch = globalThis.fetch;
   const originalChrome = globalThis.chrome;
 
   beforeEach(() => {
+    setBridgeToken('');
     globalThis.fetch = vi.fn();
     globalThis.chrome = {
       cookies: {
@@ -94,5 +95,23 @@ describe('browser-extension bridge-client', () => {
     expect(result.status).toBe('accepted');
     const [, options] = globalThis.fetch.mock.calls[0];
     expect(JSON.parse(options.body).url).toBe(magnet);
+  });
+
+  it('sends Authorization Bearer token from stored bridgeToken and never trusts /ping token', async () => {
+    setBridgeToken('secret_bridge_token_123');
+    globalThis.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ app: 'ARGON', status: 'ok', capabilities: ['persisted-handoff'], token: 'spoofed' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 'accepted', id: 'dl_auth' })
+      });
+
+    await connection();
+    await sendDownload('https://example.com/archive.zip');
+    const [, addOptions] = globalThis.fetch.mock.calls[1];
+    expect(addOptions.headers.Authorization).toBe('Bearer secret_bridge_token_123');
   });
 });

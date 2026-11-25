@@ -2,16 +2,36 @@ import { httpUrl, isMagnetUrl, mediaDescriptor } from './core.js';
 const BASE = 'http://127.0.0.1:41523';
 let bridgeToken = '';
 
+export function setBridgeToken(token) {
+  bridgeToken = typeof token === 'string' ? token.trim() : '';
+}
+
+async function resolveToken() {
+  if (bridgeToken) return bridgeToken;
+  if (typeof chrome !== 'undefined' && chrome.storage?.local?.get) {
+    try {
+      const stored = await chrome.storage.local.get({ bridgeToken: '' });
+      if (typeof stored?.bridgeToken === 'string' && stored.bridgeToken.trim()) {
+        bridgeToken = stored.bridgeToken.trim();
+      }
+    } catch {
+      // Ignore storage read failure
+    }
+  }
+  return bridgeToken;
+}
+
 async function request(path, payload, timeout = 6000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  const token = await resolveToken();
   try {
     const response = await fetch(`${BASE}${path}`, {
       method: payload ? 'POST' : 'GET',
       signal: controller.signal,
       headers: {
         'X-Otium-Client': 'browser-extension',
-        ...(bridgeToken ? { 'Authorization': `Bearer ${bridgeToken}` } : {}),
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         ...(payload ? { 'Content-Type': 'application/json' } : {})
       },
       ...(payload ? { body: JSON.stringify(payload) } : {})
@@ -29,13 +49,13 @@ export async function connection(allowWake = true) {
     const data = await request('/ping', null, 1800);
     if (data.app !== 'ARGON' || data.status !== 'ok') throw new Error('invalid_bridge');
     if (!data.capabilities?.includes('persisted-handoff')) throw new Error('update_required');
-    if (data.token) bridgeToken = String(data.token);
     return data;
   } catch (err) {
     if (allowWake && typeof chrome !== 'undefined' && chrome.runtime?.sendNativeMessage) {
       try {
         await new Promise((resolve) => {
           chrome.runtime.sendNativeMessage('com.otium.downloader', { action: 'wake' }, () => {
+            void chrome.runtime.lastError;
             resolve();
           });
         });
@@ -49,7 +69,7 @@ export async function connection(allowWake = true) {
           }
         }
       } catch {
-        // Native messaging fallback ignored
+        // Native messaging wake fallback ignored
       }
     }
     throw err;
