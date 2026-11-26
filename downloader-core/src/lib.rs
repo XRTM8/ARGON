@@ -1,4 +1,5 @@
 pub mod antivirus;
+pub mod db;
 pub mod debrid;
 pub mod disk;
 pub mod host_limits;

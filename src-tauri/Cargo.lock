@@ -3498,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "otium_downloader"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "arboard",
  "argon-downloader-core",

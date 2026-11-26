@@ -10,8 +10,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Magnet,
+  Cpu,
   X
 } from 'lucide-react';
+import { HuggingFaceModal } from './HuggingFaceModal';
 import { downloadManager } from '../core/downloadManager';
 import { expandWildcardPattern, extractSharedUrl, parseDownloadInput } from '../core/downloadInput';
 import { readClipboardText } from '../core/clipboard';
@@ -54,6 +56,7 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
   const [selectedFormatId, setSelectedFormatId] = useState<string>('');
   const [mediaTab, setMediaTab] = useState<'video' | 'audio'>('video');
   const [torrentMeta, setTorrentMeta] = useState<TorrentMetadata | null>(null);
+  const [showHfModal, setShowHfModal] = useState(false);
 
   const { videoFormats, audioFormats, bestVideoId, bestAudioId } = useMemo(() => {
     if (!mediaMeta || !mediaMeta.formats.length) {
@@ -479,6 +482,18 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
               <span>{ar ? 'خيارات' : 'Options'}</span>
             </button>
 
+            {!isAndroidRuntime() && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setShowHfModal(true)}
+                title={ar ? 'تنزيل نموذج من Hugging Face' : 'Download model from Hugging Face'}
+              >
+                <Cpu size={13} />
+                <span>Hugging Face</span>
+              </button>
+            )}
+
             <button
               type="button"
               className="text-button"
@@ -759,6 +774,22 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
           </output>
         )}
       </form>
+
+      <HuggingFaceModal
+        open={showHfModal}
+        lang={lang}
+        onClose={() => setShowHfModal(false)}
+        onQueueFiles={(files) => {
+          for (const f of files) {
+            onAdd(f.url, f.filename, segments, f.sha256, undefined, queueId);
+          }
+          setNotice(
+            ar
+              ? `تمت إضافة ${files.length} ملفات نموذج إلى الطابور`
+              : `Queued ${files.length} model files`
+          );
+        }}
+      />
     </section>
   );
 }

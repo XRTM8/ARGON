@@ -96,6 +96,7 @@ pub struct DownloaderService {
     pub(super) host_limits: Arc<crate::host_limits::HostLimits>,
     #[cfg(not(target_os = "android"))]
     pub(super) torrent_manager: Arc<crate::torrent_local::SharedTorrentManager>,
+    pub(super) db: crate::db::StateDb,
     pub(super) persist_lock: Mutex<()>,
     updating: AtomicBool,
     destroyed: AtomicBool,
@@ -123,8 +124,8 @@ impl DownloaderService {
         settings.max_connections_per_host = settings.max_connections_per_host.clamp(1, 16);
         settings.default_segment_count = settings.default_segment_count.clamp(1, 32);
 
-        let tasks_path = config.state_dir.join("tasks.json");
-        let mut loaded_tasks: Vec<DownloadTask> = load_json_opt(&tasks_path)?.unwrap_or_default();
+        let db = crate::db::StateDb::open(&config.state_dir)?;
+        let mut loaded_tasks: Vec<DownloadTask> = db.load_tasks()?;
         for task in &mut loaded_tasks {
             if task.status == TaskStatus::Downloading {
                 task.status = TaskStatus::Paused;
@@ -184,6 +185,7 @@ impl DownloaderService {
                 torrent_dir,
                 default_dl_dir,
             )),
+            db,
             persist_lock: Mutex::new(()),
             updating: AtomicBool::new(false),
             destroyed: AtomicBool::new(false),
@@ -825,8 +827,7 @@ impl DownloaderService {
     pub(super) async fn write_tasks(&self, state: &EngineState) -> Result<(), String> {
         let mut list: Vec<&DownloadTask> = state.tasks.values().collect();
         list.sort_by_key(|task| std::cmp::Reverse(task.created_at));
-        let bytes = serde_json::to_vec(&list).map_err(|error| error.to_string())?;
-        disk::save_json_atomic(self.config.state_dir.join("tasks.json"), bytes).await
+        self.db.compact(&list)
     }
 
     async fn save_settings(&self, settings: &DownloaderSettings) -> Result<(), String> {

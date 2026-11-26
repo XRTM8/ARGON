@@ -733,6 +733,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
 
               <div className="settings-row">
                 <div className="settings-label">
+                  <strong>{ar ? 'مجلدات الحفظ حسب الفئة' : 'Category Save Folders'}</strong>
+                  <span>{ar ? 'توجيه الملفات تلقائياً إلى مجلدات مخصصة (اتركه فارغاً لاستخدام المجلد الافتراضي)' : 'Route downloads by category (leave blank for default folder)'}</span>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, paddingBottom: 12 }}>
+                {(['programs', 'media', 'archives', 'documents', 'torrents'] as const).map((cat) => (
+                  <div key={cat} style={{ display: 'grid', gap: 4 }}>
+                    <label style={{ fontSize: 11, opacity: 0.75, textTransform: 'capitalize' }}>{cat}</label>
+                    <input
+                      dir="ltr"
+                      className="argon-input"
+                      placeholder={ar ? 'المجلد الافتراضي' : 'Default folder'}
+                      value={s.categoryDirectories?.[cat] ?? ''}
+                      onChange={(e) =>
+                        void patch({
+                          categoryDirectories: {
+                            ...(s.categoryDirectories ?? {}),
+                            [cat]: e.target.value
+                          }
+                        })
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-label">
                   <strong>{ar ? 'تكامل المتصفح' : 'Browser Integration'}</strong>
                   <span>{bridgeRepairMsg ?? (ar ? 'إصلاح ربط إضافة المتصفح (Chrome, Edge, Brave, Vivaldi, Firefox)' : 'Repair Native Messaging for Chrome, Edge, Brave, Vivaldi & Firefox')}</span>
                 </div>
