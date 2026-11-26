@@ -10,9 +10,10 @@ import {
   Share2,
   ExternalLink,
   AlertCircle,
-  Magnet
+  Magnet,
+  Archive
 } from 'lucide-react';
-import type { DownloadTask, QueueId } from '../types/downloader';
+import type { DownloadTask, QueueId, RemoteZipEntry } from '../types/downloader';
 import { formatBytes, formatSpeed, formatEta, humanizeErrorMessage } from '../core/segmentation';
 import { writeClipboardText } from '../core/clipboard';
 import { downloadManager } from '../core/downloadManager';
@@ -31,6 +32,9 @@ export function TaskInspector({ task, lang, onClose }: Props) {
   const [verifying, setVerifying] = useState(false);
   const [actionError, setActionError] = useState('');
   const [replacementUrl, setReplacementUrl] = useState('');
+  const [zipEntries, setZipEntries] = useState<RemoteZipEntry[] | null>(null);
+  const [zipLoading, setZipLoading] = useState(false);
+  const [zipStatus, setZipStatus] = useState('');
 
   const known = task.totalBytes > 0;
   const completed = task.status === 'completed';
@@ -238,7 +242,64 @@ export function TaskInspector({ task, lang, onClose }: Props) {
             </button>
           </>
         )}
+
+        {!android && task.filename.toLowerCase().endsWith('.zip') && task.url.startsWith('http') && (
+          <button
+            className="action-button"
+            disabled={zipLoading}
+            onClick={async () => {
+              setZipLoading(true);
+              setZipStatus('');
+              try {
+                const entries = await downloadManager.zipPeekList(task.url, task.headers);
+                setZipEntries(entries);
+              } catch (e) {
+                setActionError(String(e));
+              } finally {
+                setZipLoading(false);
+              }
+            }}
+          >
+            <Archive size={14} />
+            <span>{zipLoading ? (ar ? 'جارٍ القراءة…' : 'Peeking…') : ar ? 'معاينة محتوى ZIP' : 'Peek ZIP'}</span>
+          </button>
+        )}
       </div>
+
+      {zipEntries && (
+        <div className="segment-matrix" style={{ maxHeight: 160, overflowY: 'auto', marginTop: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+            {ar ? `محتويات الأرشيف (${zipEntries.length} ملف)` : `Archive Contents (${zipEntries.length} files)`}
+            {zipStatus && <span style={{ marginInlineStart: 8, opacity: 0.8 }}>{zipStatus}</span>}
+          </div>
+          {zipEntries.slice(0, 50).map((entry) => (
+            <div key={entry.index} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 11, padding: '2px 0' }}>
+              <span dir="ltr" className="ellipsis" style={{ flex: 1 }}>{entry.path}</span>
+              <span dir="ltr" style={{ opacity: 0.7 }}>{formatBytes(entry.size)}</span>
+              {entry.extractable && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={async () => {
+                    const baseDir = downloadManager.getSettings().defaultDirectory;
+                    const leaf = entry.path.split('/').pop() || `file_${entry.index}`;
+                    const dest = `${baseDir}\\${leaf}`;
+                    setZipStatus(ar ? `جارٍ استخراج ${leaf}…` : `Extracting ${leaf}…`);
+                    try {
+                      await downloadManager.zipPeekExtract(task.url, entry, dest, task.headers);
+                      setZipStatus(ar ? `تم استخراج ${leaf}` : `Extracted ${leaf}`);
+                    } catch (e) {
+                      setActionError(String(e));
+                    }
+                  }}
+                >
+                  {ar ? 'استخراج' : 'Extract'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* SHA-256 Checksum */}
       {completed && (

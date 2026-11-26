@@ -256,15 +256,32 @@ fn decayed_speed(m: &LiveTaskMetric) -> f64 {
 }
 
 pub fn build_http_client() -> Result<Client, String> {
-    Client::builder()
+    build_http_client_with_proxy("system", None)
+}
+
+pub fn build_http_client_with_proxy(proxy_mode: &str, proxy_url: Option<&str>) -> Result<Client, String> {
+    let mut builder = Client::builder()
         .user_agent(DEFAULT_USER_AGENT)
         .redirect(reqwest::redirect::Policy::limited(15))
         .connect_timeout(Duration::from_secs(15))
         .tcp_keepalive(Some(Duration::from_secs(15)))
         .pool_max_idle_per_host(16)
-        .tcp_nodelay(true)
-        .build()
-        .map_err(|e| e.to_string())
+        .tcp_nodelay(true);
+
+    match proxy_mode.trim().to_ascii_lowercase().as_str() {
+        "none" => {
+            builder = builder.no_proxy();
+        }
+        "http" | "socks5" => {
+            if let Some(raw) = proxy_url.map(str::trim).filter(|s| !s.is_empty()) {
+                let proxy = reqwest::Proxy::all(raw).map_err(|e| format!("Invalid proxy URL: {e}"))?;
+                builder = builder.proxy(proxy);
+            }
+        }
+        _ => {} // "system" uses reqwest's default system proxy detection
+    }
+
+    builder.build().map_err(|e| e.to_string())
 }
 
 pub fn build_headers(custom: Option<&HashMap<String, String>>) -> Result<header::HeaderMap, String> {

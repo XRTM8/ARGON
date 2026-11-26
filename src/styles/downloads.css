@@ -917,3 +917,9 @@ input[type=checkbox] {
 }
 .inspector-field { display: grid; gap: 6px; }
 .inspector-field label { font-size: 11px; font-weight: 600; color: var(--argon-muted); }
+
+/* Virtualized off-screen rendering optimization for large download lists */
+.download-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 72px;
+}

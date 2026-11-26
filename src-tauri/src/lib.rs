@@ -419,6 +419,84 @@ async fn dl_migrate_legacy(app: AppHandle, tasks: Vec<DownloadTask>) -> Result<u
 }
 
 #[tauri::command]
+async fn zip_peek_list(
+    app: AppHandle,
+    url: String,
+    custom_headers: Option<HashMap<String, String>>,
+) -> Result<Vec<argon_downloader_core::zip_peek::RemoteZipEntry>, String> {
+    let svc = ensure_downloader(&app).await?;
+    argon_downloader_core::zip_peek::list_remote_zip(
+        svc.http_client(),
+        &url,
+        custom_headers.as_ref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn zip_peek_extract(
+    app: AppHandle,
+    url: String,
+    entry: argon_downloader_core::zip_peek::RemoteZipEntry,
+    dest_path: String,
+    custom_headers: Option<HashMap<String, String>>,
+) -> Result<u64, String> {
+    let svc = ensure_downloader(&app).await?;
+    let dest = std::path::PathBuf::from(dest_path);
+    argon_downloader_core::zip_peek::extract_remote_zip_entry(
+        svc.http_client(),
+        &url,
+        custom_headers.as_ref(),
+        &entry,
+        &dest,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn hf_fetch_repo(
+    app: AppHandle,
+    input: String,
+    use_mirror: bool,
+    token: Option<String>,
+) -> Result<argon_downloader_core::huggingface::HfRepoSummary, String> {
+    let svc = ensure_downloader(&app).await?;
+    argon_downloader_core::huggingface::fetch_hf_repo(
+        svc.http_client(),
+        &input,
+        use_mirror,
+        token.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn antivirus_scan_file(
+    kind: Option<String>,
+    path: String,
+) -> Result<argon_downloader_core::antivirus::ScanResult, String> {
+    Ok(argon_downloader_core::antivirus::scan_file(
+        kind.as_deref().unwrap_or("auto"),
+        None,
+        std::path::Path::new(&path),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn repair_browser_integration(app: AppHandle) -> Result<Vec<String>, String> {
+    #[cfg(all(windows, desktop))]
+    {
+        Ok(register_native_messaging_host(&app))
+    }
+    #[cfg(not(all(windows, desktop)))]
+    {
+        let _ = app;
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
 async fn probe_url(
     app: AppHandle,
     url: String,
@@ -794,7 +872,8 @@ fn start_clipboard_monitor(app_handle: AppHandle) {
 }
 
 #[cfg(all(windows, desktop))]
-fn register_native_messaging_host(app: &AppHandle) {
+fn register_native_messaging_host(app: &AppHandle) -> Vec<String> {
+    let mut registered = Vec::new();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Ok(local_data) = app.path().app_local_data_dir() {
             let manifest_path = local_data.join("com.otium.downloader.json");
@@ -812,19 +891,49 @@ fn register_native_messaging_host(app: &AppHandle) {
                 let _ = std::fs::write(&manifest_path, content_str);
             }
 
+            let firefox_manifest_path = local_data.join("com.otium.downloader.firefox.json");
+            let firefox_json = serde_json::json!({
+                "name": "com.otium.downloader",
+                "description": "ARGON Native Messaging Host",
+                "path": exe_path.to_string_lossy(),
+                "type": "stdio",
+                "allowed_extensions": [
+                    "argon@xrtm8.github.io"
+                ]
+            });
+            if let Ok(ff_str) = serde_json::to_string_pretty(&firefox_json) {
+                let _ = std::fs::write(&firefox_manifest_path, ff_str);
+            }
+
             use winreg::enums::HKEY_CURRENT_USER;
             use winreg::RegKey;
             let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            let manifest_str = manifest_path.to_string_lossy().to_string();
             for subkey in [
                 r"Software\Google\Chrome\NativeMessagingHosts\com.otium.downloader",
                 r"Software\Microsoft\Edge\NativeMessagingHosts\com.otium.downloader",
+                r"Software\Chromium\NativeMessagingHosts\com.otium.downloader",
+                r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.otium.downloader",
+                r"Software\Vivaldi\NativeMessagingHosts\com.otium.downloader",
             ] {
                 if let Ok((key, _)) = hkcu.create_subkey(subkey) {
-                    let _ = key.set_value("", &manifest_path.to_string_lossy().to_string());
+                    if key.set_value("", &manifest_str).is_ok() {
+                        registered.push(subkey.to_string());
+                    }
+                }
+            }
+            let ff_subkey = r"Software\Mozilla\NativeMessagingHosts\com.otium.downloader";
+            if let Ok((key, _)) = hkcu.create_subkey(ff_subkey) {
+                if key
+                    .set_value("", &firefox_manifest_path.to_string_lossy().to_string())
+                    .is_ok()
+                {
+                    registered.push(ff_subkey.to_string());
                 }
             }
         }
     }
+    registered
 }
 
 #[cfg(desktop)]
@@ -1277,7 +1386,7 @@ pub fn run() {
                 start_browser_bridge(app.handle().clone());
                 start_clipboard_monitor(app.handle().clone());
                 #[cfg(all(windows, desktop))]
-                register_native_messaging_host(app.handle());
+                let _ = register_native_messaging_host(app.handle());
             }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -1342,6 +1451,11 @@ pub fn run() {
             dl_update_settings,
             dl_migrate_legacy,
             probe_url,
+            zip_peek_list,
+            zip_peek_extract,
+            hf_fetch_repo,
+            antivirus_scan_file,
+            repair_browser_integration,
             poll_telemetry_binary,
             get_default_download_directory,
             validate_download_directory,

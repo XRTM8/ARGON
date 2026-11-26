@@ -208,10 +208,44 @@ pub struct DownloaderSettings {
     pub debrid_api_key: Option<String>,
     #[serde(default = "default_completion_action")]
     pub completion_action: String,
+    #[serde(default = "default_proxy_mode")]
+    pub proxy_mode: String,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub antivirus_enabled: bool,
+    #[serde(default = "default_antivirus_kind")]
+    pub antivirus_kind: String,
+    #[serde(default = "default_antivirus_extensions")]
+    pub antivirus_extensions: Vec<String>,
+    #[serde(default)]
+    pub category_directories: HashMap<String, String>,
 }
 
 fn default_completion_action() -> String {
     "shutdown".to_string()
+}
+
+fn default_proxy_mode() -> String {
+    "system".to_string()
+}
+
+fn default_antivirus_kind() -> String {
+    "auto".to_string()
+}
+
+fn default_antivirus_extensions() -> Vec<String> {
+    vec![
+        "exe".into(),
+        "msi".into(),
+        "dll".into(),
+        "bat".into(),
+        "cmd".into(),
+        "ps1".into(),
+        "zip".into(),
+        "rar".into(),
+        "7z".into(),
+    ]
 }
 
 impl Default for DownloaderSettings {
@@ -240,6 +274,12 @@ impl Default for DownloaderSettings {
             debrid_enabled: false,
             debrid_api_key: None,
             completion_action: "shutdown".to_string(),
+            proxy_mode: "system".to_string(),
+            proxy_url: None,
+            antivirus_enabled: false,
+            antivirus_kind: "auto".to_string(),
+            antivirus_extensions: default_antivirus_extensions(),
+            category_directories: HashMap::new(),
         }
     }
 }
@@ -270,6 +310,12 @@ pub struct DownloaderSettingsPatch {
     pub debrid_enabled: Option<bool>,
     pub debrid_api_key: Option<String>,
     pub completion_action: Option<String>,
+    pub proxy_mode: Option<String>,
+    pub proxy_url: Option<String>,
+    pub antivirus_enabled: Option<bool>,
+    pub antivirus_kind: Option<String>,
+    pub antivirus_extensions: Option<Vec<String>>,
+    pub category_directories: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

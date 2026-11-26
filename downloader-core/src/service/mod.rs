@@ -92,6 +92,10 @@ pub struct DownloaderService {
     pub(super) active_runs: Mutex<HashMap<String, ActiveRun>>,
     pub(super) telemetry: TelemetryTracker,
     pub(super) throttle: ThrottleController,
+    pub(super) memory_budget: Arc<tokio::sync::Semaphore>,
+    pub(super) host_limits: Arc<crate::host_limits::HostLimits>,
+    #[cfg(not(target_os = "android"))]
+    pub(super) torrent_manager: Arc<crate::torrent_local::SharedTorrentManager>,
     pub(super) persist_lock: Mutex<()>,
     updating: AtomicBool,
     destroyed: AtomicBool,
@@ -155,6 +159,8 @@ impl DownloaderService {
         let throttle = ThrottleController::default();
         throttle.set_global_limit(settings.global_speed_limit_bytes);
 
+        let torrent_dir = config.state_dir.join("torrents");
+        let default_dl_dir = config.default_download_dir.clone();
         let service = Arc::new(Self {
             config,
             emit: Arc::new(emit),
@@ -171,6 +177,13 @@ impl DownloaderService {
             active_runs: Mutex::new(HashMap::new()),
             telemetry: TelemetryTracker::default(),
             throttle,
+            memory_budget: Arc::new(tokio::sync::Semaphore::new(64 * 1024 * 1024)),
+            host_limits: Arc::new(crate::host_limits::HostLimits::default()),
+            #[cfg(not(target_os = "android"))]
+            torrent_manager: Arc::new(crate::torrent_local::SharedTorrentManager::new(
+                torrent_dir,
+                default_dl_dir,
+            )),
             persist_lock: Mutex::new(()),
             updating: AtomicBool::new(false),
             destroyed: AtomicBool::new(false),
@@ -380,6 +393,24 @@ impl DownloaderService {
             }
             if let Some(v) = patch.completion_action {
                 state.settings.completion_action = v;
+            }
+            if let Some(v) = patch.proxy_mode {
+                state.settings.proxy_mode = v;
+            }
+            if let Some(v) = patch.proxy_url {
+                state.settings.proxy_url = if v.trim().is_empty() { None } else { Some(v) };
+            }
+            if let Some(v) = patch.antivirus_enabled {
+                state.settings.antivirus_enabled = v;
+            }
+            if let Some(v) = patch.antivirus_kind {
+                state.settings.antivirus_kind = v;
+            }
+            if let Some(v) = patch.antivirus_extensions {
+                state.settings.antivirus_extensions = v;
+            }
+            if let Some(v) = patch.category_directories {
+                state.settings.category_directories = v;
             }
             state.settings.clone()
         };
@@ -739,7 +770,21 @@ impl DownloaderService {
                 return p.to_path_buf();
             }
         }
-        let base = if !self.config.is_android && !settings.default_directory.trim().is_empty() {
+        let cat_key = serde_json::to_value(&task.category)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string));
+        let custom_cat_dir = if !self.config.is_android {
+            cat_key
+                .as_deref()
+                .and_then(|k| settings.category_directories.get(k))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        let base = if let Some(cat_dir) = custom_cat_dir {
+            PathBuf::from(cat_dir)
+        } else if !self.config.is_android && !settings.default_directory.trim().is_empty() {
             PathBuf::from(&settings.default_directory)
         } else {
             self.config.default_download_dir.clone()

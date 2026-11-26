@@ -28,6 +28,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
   const [toolProgress, setToolProgress] = useState<{ downloaded: number; total?: number } | null>(null);
   const [toolMessage, setToolMessage] = useState<string | null>(null);
   const [showCookieModal, setShowCookieModal] = useState(false);
+  const [bridgeRepairMsg, setBridgeRepairMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (requestedTab) setTab(requestedTab.tab);
@@ -684,6 +685,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
                   </div>
                 </div>
               )}
+
+              <div className="settings-row">
+                <div className="settings-label">
+                  <strong>{ar ? 'البروكسي (Proxy)' : 'Network Proxy'}</strong>
+                  <span>{ar ? 'توجيه التنزيلات عبر بروكسي النظام أو HTTP/SOCKS5' : 'Route downloads through system, HTTP, or SOCKS5 proxy'}</span>
+                </div>
+                <select
+                  className="argon-select"
+                  value={s.proxyMode ?? 'system'}
+                  onChange={(e) => void patch({ proxyMode: e.target.value as AppSettings['proxyMode'] })}
+                >
+                  <option value="system">{ar ? 'النظام' : 'System'}</option>
+                  <option value="none">{ar ? 'مباشر (بدون)' : 'Direct (None)'}</option>
+                  <option value="http">HTTP/HTTPS</option>
+                  <option value="socks5">SOCKS5</option>
+                </select>
+              </div>
+
+              {(s.proxyMode === 'http' || s.proxyMode === 'socks5') && (
+                <div className="settings-row" style={{ paddingTop: 0 }}>
+                  <input
+                    className="argon-input"
+                    dir="ltr"
+                    placeholder={s.proxyMode === 'socks5' ? 'socks5h://127.0.0.1:1080' : 'http://127.0.0.1:8080'}
+                    value={s.proxyUrl ?? ''}
+                    onChange={(e) => void patch({ proxyUrl: e.target.value })}
+                  />
+                </div>
+              )}
+
+              <div className="settings-row">
+                <div className="settings-label">
+                  <strong>{ar ? 'فحص الفيروسات بعد الاكتمال' : 'Post-Download Antivirus Scan'}</strong>
+                  <span>{ar ? 'فحص البرامج والمضغوطات تلقائياً عبر Windows Defender أو ClamAV' : 'Automatically scan executables and archives with Windows Defender or ClamAV'}</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(s.antivirusEnabled)}
+                  className="argon-switch"
+                  onClick={() => void patch({ antivirusEnabled: !s.antivirusEnabled })}
+                >
+                  <span className="argon-switch-thumb" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-label">
+                  <strong>{ar ? 'تكامل المتصفح' : 'Browser Integration'}</strong>
+                  <span>{bridgeRepairMsg ?? (ar ? 'إصلاح ربط إضافة المتصفح (Chrome, Edge, Brave, Vivaldi, Firefox)' : 'Repair Native Messaging for Chrome, Edge, Brave, Vivaldi & Firefox')}</span>
+                </div>
+                <button
+                  type="button"
+                  className="argon-btn-secondary"
+                  onClick={async () => {
+                    try {
+                      const keys = await downloadManager.repairBrowserIntegration();
+                      setBridgeRepairMsg(
+                        ar ? `تم تسجيل ${keys.length} متصفحات بنجاح` : `Registered ${keys.length} browser hosts`
+                      );
+                    } catch {
+                      setBridgeRepairMsg(ar ? 'تعذر الإصلاح' : 'Repair failed');
+                    }
+                  }}
+                >
+                  <RefreshCw size={14} />
+                  <span>{ar ? 'إصلاح الآن' : 'Repair'}</span>
+                </button>
+              </div>
             </>
           )}
         </section>

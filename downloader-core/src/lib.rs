@@ -1,12 +1,18 @@
+pub mod antivirus;
 pub mod debrid;
 pub mod disk;
+pub mod host_limits;
+pub mod huggingface;
 pub mod model;
 pub mod resolver;
 pub mod service;
 pub mod social;
 pub mod throttle;
 pub mod torrent;
+#[cfg(not(target_os = "android"))]
+pub mod torrent_local;
 pub mod transfer;
+pub mod zip_peek;
 
 pub use model::{
     AddTaskRequest, BrowserDownloadPayload, ChecksumInfo, ChunkStatus, Config, DownloadChunk,

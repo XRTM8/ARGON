@@ -6,8 +6,9 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "fs"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "fs", "process"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "socks"] }
+flate2 = { version = "1.1", features = ["rust_backend"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
@@ -15,8 +16,16 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 log = "0.4"
 
+[dev-dependencies]
+zip = { version = "9.5.0", default-features = false, features = ["deflate-flate2"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+librqbit = { version = "8", default-features = false }
+librqbit-core = { version = "5", features = ["sha1-crypto-hash"] }
+librqbit-sha1-wrapper = { version = "4", features = ["sha1-crypto-hash"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_SystemInformation"] }

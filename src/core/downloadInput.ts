@@ -30,7 +30,7 @@ export function parseDownloadInput(text: string) {
  */
 export function expandWildcardPattern(pattern: string, maxUrls = 100): { urls: string[]; error?: string } {
   const trimmed = pattern.trim();
-  const numMatch = trimmed.match(/\[(\d+)\.\.(\d+)\]/);
+  const numMatch = trimmed.match(/\[(\d+)(?:\.\.|-)(\d+)\]/);
   if (numMatch) {
     const startStr = numMatch[1];
     const endStr = numMatch[2];
@@ -59,7 +59,7 @@ export function expandWildcardPattern(pattern: string, maxUrls = 100): { urls: s
     return { urls };
   }
 
-  const alphaMatch = trimmed.match(/\[([a-zA-Z])\.\.([a-zA-Z])\]/);
+  const alphaMatch = trimmed.match(/\[([a-zA-Z])(?:\.\.|-)([a-zA-Z])\]/);
   if (alphaMatch) {
     const startCode = alphaMatch[1].charCodeAt(0);
     const endCode = alphaMatch[2].charCodeAt(0);

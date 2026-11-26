@@ -35,6 +35,33 @@ fn write_all_at(file: &std::fs::File, mut offset: u64, mut data: &[u8]) -> io::R
     Ok(())
 }
 
+#[cfg(windows)]
+fn set_sparse(file: &std::fs::File, sparse: bool) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::Ioctl::{FILE_SET_SPARSE_BUFFER, FSCTL_SET_SPARSE};
+
+    let input = FILE_SET_SPARSE_BUFFER { SetSparse: sparse };
+    let mut returned = 0u32;
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle() as _,
+            FSCTL_SET_SPARSE,
+            &input as *const FILE_SET_SPARSE_BUFFER as *const core::ffi::c_void,
+            std::mem::size_of::<FILE_SET_SPARSE_BUFFER>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn preallocate_file(file: &std::fs::File, len: u64) -> io::Result<()> {
     if len == 0 {
         return file.set_len(0);
@@ -45,6 +72,9 @@ fn preallocate_file(file: &std::fs::File, len: u64) -> io::Result<()> {
         use windows_sys::Win32::Storage::FileSystem::{
             FileAllocationInfo, SetFileInformationByHandle, FILE_ALLOCATION_INFO,
         };
+
+        // Mark sparse before sizing so out-of-order segment writes do not trigger NTFS zero-fill stalls.
+        let _ = set_sparse(file, true);
 
         // 1. Set logical file size
         file.set_len(len)?;
@@ -90,9 +120,10 @@ fn preallocate_file(file: &std::fs::File, len: u64) -> io::Result<()> {
 enum WriteCmd {
     Truncate { reply: oneshot::Sender<Result<(), String>> },
     Preallocate { len: u64, reply: oneshot::Sender<Result<(), String>> },
-    Write { offset: u64, buf: Vec<u8> },
+    Write { offset: u64, buf: Vec<u8>, permit: Option<tokio::sync::OwnedSemaphorePermit> },
     Flush { reply: oneshot::Sender<Result<(), String>> },
     Sync { reply: oneshot::Sender<Result<(), String>> },
+    ClearSparse { reply: oneshot::Sender<()> },
 }
 
 /// Shared single-file disk writer: one OS thread and one file handle shared across all segments of a task.
@@ -100,10 +131,18 @@ pub struct CoalescedDiskWriter {
     tx: mpsc::Sender<WriteCmd>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
     error: Arc<Mutex<Option<String>>>,
+    memory_budget: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 impl CoalescedDiskWriter {
     pub fn open(path: &Path) -> Result<Arc<Self>, String> {
+        Self::open_with_budget(path, None)
+    }
+
+    pub fn open_with_budget(
+        path: &Path,
+        memory_budget: Option<Arc<tokio::sync::Semaphore>>,
+    ) -> Result<Arc<Self>, String> {
         let file = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
@@ -148,7 +187,7 @@ impl CoalescedDiskWriter {
                             };
                             let _ = reply.send(res);
                         }
-                        WriteCmd::Write { offset, mut buf } => {
+                        WriteCmd::Write { offset, mut buf, permit } => {
                             if sticky_err.is_none() && !buf.is_empty() {
                                 if let Err(e) = write_all_at(&file, offset, &buf) {
                                     let msg = format!("Disk write failed: {e}");
@@ -158,6 +197,7 @@ impl CoalescedDiskWriter {
                                     }
                                 }
                             }
+                            drop(permit);
                             buf.clear();
                             if buf.capacity() <= WRITE_BUFFER_CAP * 2 {
                                 if let Ok(mut guard) = pool_worker.lock() {
@@ -193,12 +233,24 @@ impl CoalescedDiskWriter {
                             };
                             let _ = reply.send(res);
                         }
+                        WriteCmd::ClearSparse { reply } => {
+                            #[cfg(windows)]
+                            {
+                                let _ = set_sparse(&file, false);
+                            }
+                            let _ = reply.send(());
+                        }
                     }
                 }
             })
             .map_err(|e| format!("Cannot start disk writer: {e}"))?;
 
-        Ok(Arc::new(Self { tx, pool, error }))
+        Ok(Arc::new(Self {
+            tx,
+            pool,
+            error,
+            memory_budget,
+        }))
     }
 
     fn take_buffer(&self) -> Vec<u8> {
@@ -238,10 +290,33 @@ impl CoalescedDiskWriter {
         if buf.is_empty() {
             return Ok(());
         }
+        let permit = if let Some(ref budget) = self.memory_budget {
+            let cost = (buf.len() as u32).clamp(1, (WRITE_BUFFER_CAP * 2) as u32);
+            Some(
+                budget
+                    .clone()
+                    .acquire_many_owned(cost)
+                    .await
+                    .map_err(|_| "Disk memory budget closed".to_string())?,
+            )
+        } else {
+            None
+        };
         self.tx
-            .send(WriteCmd::Write { offset, buf })
+            .send(WriteCmd::Write {
+                offset,
+                buf,
+                permit,
+            })
             .await
             .map_err(|_| "Disk writer stopped".to_string())
+    }
+
+    pub async fn finish_sparse(&self) {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(WriteCmd::ClearSparse { reply }).await.is_ok() {
+            let _ = rx.await;
+        }
     }
 
     pub async fn flush(&self) -> Result<(), String> {
@@ -510,6 +585,11 @@ pub async fn prepare_destination_file(
     };
 
     if (fresh || reset) && total_bytes > 0 {
+        #[cfg(windows)]
+        if let Ok(std_file) = file.try_clone().await {
+            let std_file = std_file.into_std().await;
+            let _ = set_sparse(&std_file, true);
+        }
         file.set_len(total_bytes)
             .await
             .map_err(|e| format!("Cannot allocate download file: {e}"))?;

@@ -33,7 +33,7 @@ impl DownloaderService {
             .get_or_create_task_pacer(&task_id, task.speed_limit_bytes_per_sec);
 
         // 0. Optional Debrid unrestriction for locked hosts & torrents
-        let mut debrid_failure: Option<String> = None;
+        let mut _debrid_failure: Option<String> = None;
         if settings.debrid_enabled {
             if let Some(ref api_key) = settings.debrid_api_key {
                 if !api_key.trim().is_empty()
@@ -72,19 +72,62 @@ impl DownloaderService {
                             self.sync_task_metadata(&task).await?;
                         }
                         Err(e) => {
-                            debrid_failure = Some(e);
+                            _debrid_failure = Some(e);
                         }
                     }
                 }
             }
         }
 
-        // Catch unresolved torrent magnet URIs with clear diagnostic
+        // Catch unresolved torrent magnet URIs: fall back to native librqbit on desktop
         if crate::torrent::is_magnet_uri(&task.url) {
-            let reason = debrid_failure.unwrap_or_else(|| {
-                "تنزيل روابط التورنت يتطلب تفعيل خدمة Real-Debrid وإدخال مفتاح API في الإعدادات".to_string()
-            });
-            return Err(format!("تعذر تنزيل التورنت: {reason}"));
+            #[cfg(not(target_os = "android"))]
+            {
+                let out_dir = self
+                    .resolve_task_target_path(&task, &settings)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| self.config.default_download_dir.clone());
+                self.allow_root(out_dir.clone()).await;
+                let session = self.torrent_manager.session().await?;
+                let svc_ref = self.clone();
+                let tid = task_id.clone();
+                let (name, saved_path, total) = session
+                    .download_magnet(
+                        &task.url,
+                        &out_dir,
+                        cancel_flag.clone(),
+                        cancel_rx.clone(),
+                        move |downloaded, total, speed_bps| {
+                            if let Ok(mut st) = svc_ref.state.try_write() {
+                                if let Some(t) = st.tasks.get_mut(&tid) {
+                                    t.downloaded_bytes = downloaded;
+                                    if total > 0 {
+                                        t.total_bytes = total;
+                                    }
+                                    t.speed_bytes_per_sec = speed_bps;
+                                }
+                            }
+                        },
+                    )
+                    .await?;
+                task.filename = name;
+                task.save_path = Some(saved_path.to_string_lossy().into_owned());
+                task.total_bytes = total;
+                task.downloaded_bytes = total;
+                task.status = TaskStatus::Completed;
+                task.speed_bytes_per_sec = 0.0;
+                task.eta_seconds = 0;
+                task.completed_at = Some(now_ms());
+                return Ok(task);
+            }
+            #[cfg(target_os = "android")]
+            {
+                let reason = debrid_failure.unwrap_or_else(|| {
+                    "تنزيل روابط التورنت على Android يتطلب تفعيل خدمة Real-Debrid وإدخال مفتاح API في الإعدادات".to_string()
+                });
+                return Err(format!("تعذر تنزيل التورنت: {reason}"));
+            }
         }
 
         // 1. Optional platform media resolution / muxing
@@ -322,7 +365,12 @@ impl DownloaderService {
             }
             task.downloaded_bytes = 0;
             let segs = if use_range {
-                task.requested_segments
+                let host_cap = crate::host_limits::HostLimits::host_key(
+                    resource_url.unwrap_or(&effective_url),
+                )
+                .map(|h| self.host_limits.effective_limit(&h, settings.max_connections_per_host))
+                .unwrap_or(settings.max_connections_per_host);
+                task.requested_segments.min(host_cap.max(1) as u32)
             } else {
                 1
             };
@@ -470,6 +518,21 @@ impl DownloaderService {
         task.speed_bytes_per_sec = 0.0;
         task.eta_seconds = 0;
         task.completed_at = Some(now_ms());
+
+        if settings.antivirus_enabled
+            && crate::antivirus::should_scan(&settings.antivirus_extensions, &final_path)
+        {
+            match crate::antivirus::scan_file(&settings.antivirus_kind, None, &final_path).await {
+                crate::antivirus::ScanResult::Infected { detail } => {
+                    return Err(format!("Antivirus threat detected: {detail}"));
+                }
+                crate::antivirus::ScanResult::Error { detail } => {
+                    log::warn!("Antivirus scan skipped/error for {}: {detail}", final_path.display());
+                }
+                crate::antivirus::ScanResult::Clean | crate::antivirus::ScanResult::Skipped => {}
+            }
+        }
+
         Ok(task)
     }
 
@@ -486,7 +549,10 @@ impl DownloaderService {
         cancel_flag: Arc<AtomicBool>,
         cancel_rx: watch::Receiver<bool>,
     ) -> Result<(), String> {
-        let disk = CoalescedDiskWriter::open(final_path)?;
+        let disk = CoalescedDiskWriter::open_with_budget(
+            final_path,
+            Some(self.memory_budget.clone()),
+        )?;
         let use_range = resource_url.is_some();
         let validator = task.etag.clone();
 
@@ -627,7 +693,18 @@ impl DownloaderService {
         // Always sync flushed bytes on disk and persist latest chunk progress before returning.
         let disk_result = disk.sync().await;
         if errors.is_empty() && disk_result.is_ok() {
+            disk.finish_sparse().await;
             return Ok(());
+        }
+        if !errors.is_empty() && task.chunks.len() > 1 {
+            let throttled = errors.iter().any(|e| {
+                e.contains("HTTP 429") || e.contains("HTTP 503") || e.contains("HTTP 403")
+            });
+            if throttled {
+                if let Some(host) = crate::host_limits::HostLimits::host_key(url) {
+                    self.host_limits.record_refusal(&host, task.chunks.len());
+                }
+            }
         }
         if disk_result.is_ok() {
             self.sync_chunks_from_telemetry(&mut task.chunks, &task.id);

@@ -165,6 +165,40 @@ export interface AppSettings {
   debridEnabled?: boolean;
   debridApiKey?: string;
   completionAction?: 'shutdown' | 'sleep' | 'hibernate';
+  proxyMode?: 'system' | 'none' | 'http' | 'socks5';
+  proxyUrl?: string;
+  antivirusEnabled?: boolean;
+  antivirusKind?: 'auto' | 'defender' | 'clamav' | 'custom';
+  antivirusExtensions?: string[];
+  categoryDirectories?: Record<string, string>;
+}
+
+export interface RemoteZipEntry {
+  index: number;
+  path: string;
+  size: number;
+  compressedSize: number;
+  method: number;
+  encrypted: boolean;
+  extractable: boolean;
+  headerOffset: number;
+}
+
+export interface HfFileEntry {
+  path: string;
+  size: number;
+  sha256?: string;
+  downloadUrl: string;
+  quant?: string;
+  isConfig: boolean;
+}
+
+export interface HfRepoSummary {
+  repoId: string;
+  kind: string;
+  endpoint: string;
+  files: HfFileEntry[];
+  quants: string[];
 }
 
 export interface DownloaderSnapshot {

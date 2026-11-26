@@ -930,6 +930,53 @@ export class DownloadManager {
       .catch(() => {});
   }
 
+  public async zipPeekList(url: string, headers?: Record<string, string>) {
+    if (!isTauri()) throw new Error('Tauri runtime required');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<import('../types/downloader').RemoteZipEntry[]>('zip_peek_list', {
+      url,
+      customHeaders: headers ?? null
+    });
+  }
+
+  public async zipPeekExtract(
+    url: string,
+    entry: import('../types/downloader').RemoteZipEntry,
+    destPath: string,
+    headers?: Record<string, string>
+  ) {
+    if (!isTauri()) throw new Error('Tauri runtime required');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<number>('zip_peek_extract', {
+      url,
+      entry,
+      destPath,
+      customHeaders: headers ?? null
+    });
+  }
+
+  public async hfFetchRepo(input: string, useMirror = false, token?: string) {
+    if (!isTauri()) throw new Error('Tauri runtime required');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<import('../types/downloader').HfRepoSummary>('hf_fetch_repo', {
+      input,
+      useMirror,
+      token: token ?? null
+    });
+  }
+
+  public async antivirusScanFile(path: string, kind = 'auto') {
+    if (!isTauri()) throw new Error('Tauri runtime required');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<{ result: string; detail?: string }>('antivirus_scan_file', { path, kind });
+  }
+
+  public async repairBrowserIntegration(): Promise<string[]> {
+    if (!isTauri()) return [];
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<string[]>('repair_browser_integration');
+  }
+
   public destroy() {
     this.destroyed = true;
     if (this.notifyTimeout !== null) {
