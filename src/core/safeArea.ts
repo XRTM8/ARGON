@@ -78,6 +78,8 @@ export function initSafeAreaInsets(): () => void {
 export function syncSystemBarTheme(theme: 'dark' | 'light'): void {
   if (typeof document !== 'undefined') {
     document.documentElement.dataset.theme = theme;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', theme === 'light' ? '#FFFFFF' : '#000000');
   }
   try {
     window.ArgonNative?.setSystemBarTheme?.(theme === 'light');

@@ -67,7 +67,7 @@ function updateTab(id, operation) {
     else await chrome.storage.session.set({ [key]: list });
     const count = list?.filter((item) => item.supported || item.playlist).length || 0;
     await chrome.action.setBadgeText({ tabId: id, text: count ? String(count) : '' }).catch(() => {});
-    await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#2563EB' }).catch(() => {});
+    await chrome.action.setBadgeBackgroundColor({ tabId: id, color: '#9E1B42' }).catch(() => {});
     if (typeof chrome.tabs.sendMessage === 'function') void chrome.tabs.sendMessage(id, { type: 'ARGON_MEDIA_CHANGED' }).catch(() => {});
   });
   writes.set(id, next);
