@@ -1,13 +1,19 @@
 import { DEFAULTS, httpUrl, isMagnetUrl, excludedHost, platformVideo, scanPageLinks } from './core.js';
 import { buildAuthHeaders, connection, sendDownload, setBridgeToken } from './bridge-client.js';
 const $ = id => document.getElementById(id);
-let settings = await chrome.storage.local.get(DEFAULTS), language = settings.language === 'en' ? 'en' : 'ar';
+let settings = await chrome.storage.local.get(DEFAULTS), language = settings.language === 'en' ? 'en' : 'ar', theme = settings.theme === 'light' ? 'light' : 'dark';
 setBridgeToken(settings.bridgeToken || '');
 let tab, media = [], pageFiles = [], online = false, hasFfmpeg = false, needsPairing = false, busy = false;
 const sent = new Set();
 const t = (ar,en) => language === 'ar' ? ar : en;
+function applyTheme(){
+ document.documentElement.dataset.theme=theme;
+ $('themeToggle').textContent=theme==='dark'?'☀':'☾';
+ $('themeToggle').setAttribute('aria-label',theme==='dark'?t('التبديل إلى الوضع الأبيض','Switch to Light theme'):t('التبديل إلى الوضع الداكن','Switch to Dark theme'));
+}
 function message(text='',error=false){$('feedback').textContent=text;$('feedback').className=error?'error':'';}
 function labels(){
+ applyTheme();
  document.documentElement.lang=language;document.documentElement.dir=language==='ar'?'rtl':'ltr';$('language').textContent=t('EN','عربي');
  for(const [id,ar,en]of [['optionsLabel','خيارات','Options'],['captureLabel','التقاط التنزيلات تلقائياً','Capture browser downloads'],['videoLabel','إظهار زر التنزيل على الفيديو','Show video download button'],['cookiesLabel','تمرير الكوكيز للمواقع المحمية','Forward cookies for gated sites'],['minSizeLabel','أقل حجم للالتقاط','Minimum capture size'],['anySize','أي حجم','Any size'],['manualLabel','رابط يدوي','Manual link'],['sendBtn','تنزيل','Download'],['privacyLabel','اكتشاف محلي','Local discovery'],['pairLabel','أدخل مفتاح الربط من صفحة «إضافة المتصفح» داخل ARGON','Enter Bridge Key from ARGON Browser Integration'],['saveTokenBtn','ربط','Pair']])$(id).textContent=t(ar,en);
  $('version').textContent=`v${chrome.runtime.getManifest().version}`;
@@ -66,6 +72,7 @@ $('saveTokenBtn').addEventListener('click',async()=>{
  if(!needsPairing&&online){$('bridgeTokenInput').value='';message(t('تم ربط الإضافة بنجاح.','Extension paired successfully.'));}
  else if(online){message(t('مفتاح الربط غير صحيح.','Invalid Bridge Key.'),true);}
 });
+$('themeToggle').addEventListener('click',async()=>{theme=theme==='dark'?'light':'dark';await chrome.storage.local.set({theme});applyTheme();});
 $('language').addEventListener('click',async()=>{language=language==='ar'?'en':'ar';await chrome.storage.local.set({language});labels();void check();});
 $('interceptToggle').checked=settings.autoIntercept;$('videoToggle').checked=settings.showVideoButton;$('cookiesToggle').checked=!!settings.forwardCookies;
 for(const[id,key]of [['interceptToggle','autoIntercept'],['videoToggle','showVideoButton']])$(id).addEventListener('change',async()=>{settings[key]=$(id).checked;await chrome.storage.local.set({[key]:settings[key]});});

@@ -1,4 +1,4 @@
-export const DEFAULTS = { autoIntercept: false, showVideoButton: true, forwardCookies: false, excludedHosts: [], minSizeBytes: 0, language: 'ar', bridgeToken: '' };
+export const DEFAULTS = { autoIntercept: false, showVideoButton: true, forwardCookies: false, excludedHosts: [], minSizeBytes: 0, language: 'ar', theme: 'dark', bridgeToken: '' };
 
 export function platformVideo(value, title) {
   const url = httpUrl(value);

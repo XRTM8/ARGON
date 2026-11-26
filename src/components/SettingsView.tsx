@@ -159,7 +159,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ lang, requestedTab }
             <div className="settings-row">
               <div className="settings-label">
                 <strong>{ar ? 'مظهر الواجهة' : 'Interface Theme'}</strong>
-                <span>{ar ? 'وضع داكن عميق أو وضع نهاري فاتح' : 'Deep Slate Dark or Crisp Porcelain Light'}</span>
+                <span>{ar ? 'أسود AMOLED عميق أو أبيض AMOLED نقي' : 'Pure AMOLED Black or Pure AMOLED White'}</span>
               </div>
               <div className="intake-mode-tabs">
                 <button type="button" aria-pressed={theme === 'dark'} onClick={() => void patch({ theme: 'dark' })}>
