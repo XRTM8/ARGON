@@ -10,37 +10,51 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratchDir = path.join(root, '.icon-build-tmp');
 mkdirSync(scratchDir, { recursive: true });
 
-const appIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+const sharedDefs = `
   <defs>
     <linearGradient id="bg" x1="128" y1="64" x2="896" y2="960" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#161D2A"/>
-      <stop offset="100%" stop-color="#090C11"/>
+      <stop offset="0%" stop-color="#11050A"/>
+      <stop offset="100%" stop-color="#070204"/>
     </linearGradient>
-    <linearGradient id="cobalt" x1="512" y1="530" x2="512" y2="796" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#60A5FA"/>
-      <stop offset="100%" stop-color="#2563EB"/>
+    <radialGradient id="halo" cx="50%" cy="46%" r="54%">
+      <stop offset="0%" stop-color="#9E1B42" stop-opacity="0.34"/>
+      <stop offset="55%" stop-color="#72142B" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#070204" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="stroke" x1="64" y1="64" x2="960" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E02447" stop-opacity="0.48"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.06"/>
     </linearGradient>
-  </defs>
+    <linearGradient id="crimson" x1="512" y1="590" x2="512" y2="816" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E02447"/>
+      <stop offset="55%" stop-color="#9E1B42"/>
+      <stop offset="100%" stop-color="#72142B"/>
+    </linearGradient>
+  </defs>`;
+
+const emblemPaths = `
+  <circle cx="512" cy="576" r="224" fill="#FF3366" fill-opacity="0.09"/>
+  <path d="M440 208H584L832 800H688L512 376L336 800H192L440 208Z" fill="#F5F6F8"/>
+  <path d="M512 376L584 208L832 800H688L512 376Z" fill="#000000" fill-opacity="0.12"/>
+  <path d="M512 488L560 536L512 584L464 536Z" fill="#FFFFFF"/>
+  <path d="M512 509L539 536L512 563L485 536Z" fill="#FFB3C1"/>
+  <path d="M478 611H546V691H605L512 816L419 691H478V611Z" fill="url(#crimson)"/>
+  <path d="M512 611H546V691H605L512 816V611Z" fill="#72142B" fill-opacity="0.45"/>`;
+
+const appIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  ${sharedDefs}
   <rect x="48" y="48" width="928" height="928" rx="224" fill="url(#bg)"/>
-  <rect x="52" y="52" width="920" height="920" rx="220" stroke="#283448" stroke-width="8"/>
-  <path d="M464 236H560L808 788H676L512 410L348 788H216L464 236Z" fill="#F8FAFC"/>
-  <path d="M478 540H546V654H598L512 788L426 654H478V540Z" fill="url(#cobalt)"/>
+  <rect x="48" y="48" width="928" height="928" rx="224" fill="url(#halo)"/>
+  <rect x="52" y="52" width="920" height="920" rx="220" stroke="url(#stroke)" stroke-width="10"/>
+  ${emblemPaths}
 </svg>`;
 
 const fullCanvasIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
-  <defs>
-    <linearGradient id="bg" x1="128" y1="64" x2="896" y2="960" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#161D2A"/>
-      <stop offset="100%" stop-color="#090C11"/>
-    </linearGradient>
-    <linearGradient id="cobalt" x1="512" y1="530" x2="512" y2="796" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#60A5FA"/>
-      <stop offset="100%" stop-color="#2563EB"/>
-    </linearGradient>
-  </defs>
+  ${sharedDefs}
   <rect width="1024" height="1024" fill="url(#bg)"/>
-  <path d="M464 236H560L808 788H676L512 410L348 788H216L464 236Z" fill="#F8FAFC"/>
-  <path d="M478 540H546V654H598L512 788L426 654H478V540Z" fill="url(#cobalt)"/>
+  <rect width="1024" height="1024" fill="url(#halo)"/>
+  ${emblemPaths}
 </svg>`;
 
 const appIconPng = path.join(root, 'app-icon.png');
@@ -55,7 +69,7 @@ writeFileSync(
   JSON.stringify(
     {
       default: appIconPng,
-      bg_color: '#0D1117'
+      bg_color: '#070204'
     },
     null,
     2
@@ -106,4 +120,4 @@ for (const size of [16, 48, 128]) {
 await generateAndroidIcons();
 
 rmSync(scratchDir, { recursive: true, force: true });
-console.log('All corporate ARGON icons generated and synced cleanly.');
+console.log('All Obsidian Crimson Prism ARGON icons generated and synced cleanly.');

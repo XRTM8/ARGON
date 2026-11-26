@@ -36,14 +36,14 @@ export const ThroughputSparkline: React.FC<ThroughputSparklineProps> = ({
     >
       <defs>
         <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--argon-accent, #3B82F6)" stopOpacity="0.35" />
-          <stop offset="100%" stopColor="var(--argon-accent, #3B82F6)" stopOpacity="0.0" />
+          <stop offset="0%" stopColor="var(--argon-accent, #9E1B42)" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="var(--argon-accent, #9E1B42)" stopOpacity="0.0" />
         </linearGradient>
       </defs>
       <path d={areaD} fill={`url(#${gradId})`} />
       <path
         d={pathD}
-        stroke="var(--argon-accent, #3B82F6)"
+        stroke="var(--argon-accent, #9E1B42)"
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"

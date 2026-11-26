@@ -507,15 +507,11 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
 
             {torrentMeta && (
               <div
-                className="media-pill-btn"
+                className="media-pill-btn is-torrent"
                 style={{
-                  borderColor: 'rgba(234, 179, 8, 0.45)',
-                  color: '#FACC15',
-                  cursor: 'default',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '0.35rem',
-                  paddingInline: '0.6rem'
+                  gap: '0.35rem'
                 }}
                 title={torrentMeta.infoHash}
               >
@@ -550,11 +546,8 @@ export function QuickAddBar({ lang, onAdd, detectedClipboardUrl, intakeKey, onCl
 
             {!torrentMeta && isMagnet && (
               <div
-                className="media-pill-btn"
+                className="media-pill-btn is-torrent"
                 style={{
-                  borderColor: 'rgba(234, 179, 8, 0.4)',
-                  color: '#FACC15',
-                  cursor: 'default',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.35rem'

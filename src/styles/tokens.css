@@ -1,30 +1,39 @@
 :root {
   color-scheme: dark;
-  --argon-bg: #080A0F;
-  --argon-sidebar: #0B0E15;
-  --argon-panel: #111622;
-  --argon-surface: #161D2B;
-  --argon-surface-hover: #1D2638;
-  --argon-input-bg: #0A0D14;
-  --argon-border: rgba(255, 255, 255, 0.07);
-  --argon-border-hover: rgba(255, 255, 255, 0.15);
-  --argon-border-active: rgba(59, 130, 246, 0.5);
-  --argon-text: #E2E8F0;
-  --argon-bright: #F8FAFC;
-  --argon-muted: #94A3B8;
-  --argon-subtle: #64748B;
-  --argon-accent: #3B82F6;
-  --argon-accent-hover: #60A5FA;
-  --argon-accent-soft: rgba(59, 130, 246, 0.12);
-  --argon-accent-contrast: #FFFFFF;
+  --argon-bg: #000000;
+  --argon-sidebar: #0A0B0E;
+  --argon-panel: #14151B;
+  --argon-surface: #1E2028;
+  --argon-surface-hover: #282A36;
+  --argon-surface-recessed: rgba(10, 11, 14, 0.78);
+  --argon-input-bg: #0A0B0E;
+  --argon-chip-bg: rgba(255, 255, 255, 0.06);
+  --argon-border: rgba(255, 255, 255, 0.08);
+  --argon-border-hover: rgba(255, 255, 255, 0.14);
+  --argon-border-active: rgba(158, 27, 66, 0.45);
+  --argon-text: #F5F6F8;
+  --argon-bright: #FFFFFF;
+  --argon-muted: #A1A3AF;
+  --argon-subtle: #636674;
+  --argon-accent: #9E1B42;
+  --argon-accent-hover: #E02447;
+  --argon-accent-deep: #72142B;
+  --argon-accent-soft: rgba(158, 27, 66, 0.15);
+  --argon-accent-grad: linear-gradient(135deg, #9E1B42 0%, #72142B 100%);
+  --argon-accent-grad-hover: linear-gradient(135deg, #E02447 0%, #9E1B42 100%);
+  --argon-hero-bg: linear-gradient(180deg, #220810 0%, #14151B 100%);
+  --argon-hero-border: rgba(158, 27, 66, 0.52);
+  --argon-accent-contrast: #F5F6F8;
   --argon-cyan: var(--argon-accent);
   --argon-emerald: #10B981;
   --argon-amber: #F59E0B;
-  --argon-rose: #F43F5E;
-  --argon-radius: 14px;
-  --argon-radius-sm: 9px;
-  --argon-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --argon-topbar-glass: rgba(8, 10, 15, 0.85);
+  --argon-amber-text: #FBBF24;
+  --argon-rose: #E02447;
+  --argon-radius: 16px;
+  --argon-radius-lg: 22px;
+  --argon-radius-sm: 10px;
+  --argon-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --argon-topbar-glass: rgba(10, 11, 14, 0.85);
   --argon-canvas: var(--argon-bg);
   --argon-card: var(--argon-panel);
   --argon-line: var(--argon-border);
@@ -39,31 +48,40 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --argon-bg: #F8FAFC;
-  --argon-sidebar: #F1F5F9;
-  --argon-panel: #FFFFFF;
-  --argon-surface: #F1F5F9;
-  --argon-surface-hover: #E2E8F0;
+  --argon-bg: #FFFFFF;
+  --argon-sidebar: #F6F7F9;
+  --argon-panel: #F6F7F9;
+  --argon-surface: #ECEEF2;
+  --argon-surface-hover: #DFE2E8;
+  --argon-surface-recessed: #ECEEF2;
   --argon-input-bg: #FFFFFF;
-  --argon-border: #E2E8F0;
-  --argon-border-hover: #CBD5E1;
-  --argon-border-active: rgba(37, 99, 235, 0.45);
-  --argon-text: #1E293B;
-  --argon-bright: #0F172A;
-  --argon-muted: #64748B;
-  --argon-subtle: #94A3B8;
-  --argon-accent: #2563EB;
-  --argon-accent-hover: #1D4ED8;
-  --argon-accent-soft: rgba(37, 99, 235, 0.08);
+  --argon-chip-bg: rgba(15, 16, 20, 0.06);
+  --argon-border: rgba(0, 0, 0, 0.12);
+  --argon-border-hover: rgba(0, 0, 0, 0.20);
+  --argon-border-active: rgba(158, 27, 66, 0.45);
+  --argon-text: #0F1014;
+  --argon-bright: #0F1014;
+  --argon-muted: #5A606E;
+  --argon-subtle: #8B92A0;
+  --argon-accent: #72142B;
+  --argon-accent-hover: #9E1B42;
+  --argon-accent-deep: #5B0F22;
+  --argon-accent-soft: rgba(114, 20, 43, 0.10);
+  --argon-accent-grad: linear-gradient(135deg, #9E1B42 0%, #72142B 100%);
+  --argon-accent-grad-hover: linear-gradient(135deg, #B8204D 0%, #8B1538 100%);
+  --argon-hero-bg: linear-gradient(180deg, #F6F7F9 0%, #ECEEF2 100%);
+  --argon-hero-border: rgba(114, 20, 43, 0.35);
   --argon-accent-contrast: #FFFFFF;
   --argon-cyan: var(--argon-accent);
   --argon-emerald: #10B981;
-  --argon-amber: #F59E0B;
-  --argon-rose: #EF4444;
-  --argon-radius: 14px;
-  --argon-radius-sm: 9px;
-  --argon-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
-  --argon-topbar-glass: rgba(248, 250, 252, 0.92);
+  --argon-amber: #D97706;
+  --argon-amber-text: #B45309;
+  --argon-rose: #C81E3D;
+  --argon-radius: 16px;
+  --argon-radius-lg: 22px;
+  --argon-radius-sm: 10px;
+  --argon-shadow: 0 10px 28px rgba(15, 16, 20, 0.08);
+  --argon-topbar-glass: rgba(255, 255, 255, 0.94);
   --argon-canvas: var(--argon-bg);
   --argon-card: var(--argon-panel);
   --argon-line: var(--argon-border);
@@ -93,10 +111,13 @@ body {
   line-height: 1.55;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
-  background-image: 
-    radial-gradient(ellipse 70% 40% at 50% -10%, rgba(59, 130, 246, 0.08), transparent),
-    radial-gradient(circle at 100% 0%, rgba(37, 99, 235, 0.04), transparent 45%);
+  background-image:
+    radial-gradient(ellipse 70% 38% at 50% -10%, rgba(158, 27, 66, 0.08), transparent),
+    radial-gradient(circle at 100% 0%, rgba(114, 20, 43, 0.04), transparent 45%);
   background-attachment: fixed;
+}
+:root[data-theme="light"] body {
+  background-image: none;
 }
 :lang(ar) body {
   font-family: 'Tajawal', 'Plus Jakarta Sans Variable', system-ui, sans-serif;

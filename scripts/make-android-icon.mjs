@@ -10,48 +10,45 @@ const densities = [
 ];
 
 // 1. Android Adaptive Background Layer (108dp x 108dp)
-// Matches the desktop PC icon obsidian gradient (#161D2A to #090C11) with subtle cobalt ambient bloom
+// Matches Athar/DESIGN ultra-deep wine-black base (#070204) with 3 concentric Velvet Burgundy halos
 const background = `
-  <defs>
-    <linearGradient id="bg" x1="14" y1="7" x2="94" y2="101" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#161D2A"/>
-      <stop offset="100%" stop-color="#090C11"/>
-    </linearGradient>
-    <radialGradient id="highlight" cx="50%" cy="48%" r="55%">
-      <stop offset="0%" stop-color="#2563EB" stop-opacity="0.14"/>
-      <stop offset="100%" stop-color="#2563EB" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <rect width="108" height="108" fill="url(#bg)"/>
-  <rect width="108" height="108" fill="url(#highlight)"/>`;
+  <rect width="108" height="108" fill="#070204"/>
+  <circle cx="54" cy="54" r="46" fill="#9E1B42" fill-opacity="0.082"/>
+  <circle cx="54" cy="54" r="34" fill="#72142B" fill-opacity="0.145"/>
+  <circle cx="54" cy="54" r="20" fill="#9E1B42" fill-opacity="0.220"/>`;
 
 // 2. Android Adaptive Foreground Layer (108dp x 108dp)
-// Centered at (54, 53.5) with scale(0.081) - perfectly inside the 66dp-72dp launcher safe zone
-// Uses the EXACT architectural geometry, Arctic White blade, and Cobalt gradient vector from the PC icon
+// Centered at (54, 54) with scale(0.081) inside the 66dp launcher safe zone
 const foreground = `
   <defs>
-    <linearGradient id="cobalt" x1="512" y1="530" x2="512" y2="796" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#60A5FA"/>
-      <stop offset="100%" stop-color="#2563EB"/>
+    <linearGradient id="crimson" x1="512" y1="590" x2="512" y2="816" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E02447"/>
+      <stop offset="55%" stop-color="#9E1B42"/>
+      <stop offset="100%" stop-color="#72142B"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.45"/>
     </filter>
   </defs>
-  <g transform="translate(54, 53.5) scale(0.081) translate(-512, -512)" filter="url(#shadow)">
-    <path d="M464 236H560L808 788H676L512 410L348 788H216L464 236Z" fill="#F8FAFC"/>
-    <path d="M478 540H546V654H598L512 788L426 654H478V540Z" fill="url(#cobalt)"/>
+  <circle cx="54" cy="54" r="24" fill="#FF3366" fill-opacity="0.13"/>
+  <g transform="translate(54, 54) scale(0.081) translate(-512, -512)" filter="url(#shadow)">
+    <path d="M440 208H584L832 800H688L512 376L336 800H192L440 208Z" fill="#F5F6F8"/>
+    <path d="M512 376L584 208L832 800H688L512 376Z" fill="#000000" fill-opacity="0.12"/>
+    <path d="M512 488L560 536L512 584L464 536Z" fill="#FFFFFF"/>
+    <path d="M512 509L539 536L512 563L485 536Z" fill="#FFB3C1"/>
+    <path d="M478 611H546V691H605L512 816L419 691H478V611Z" fill="url(#crimson)"/>
+    <path d="M512 611H546V691H605L512 816V611Z" fill="#72142B" fill-opacity="0.45"/>
   </g>`;
 
 // 3. Android 13+ Material You Monochrome Layer
 const monochrome = `
-  <g transform="translate(54, 53.5) scale(0.081) translate(-512, -512)">
-    <path d="M464 236H560L808 788H676L512 410L348 788H216L464 236Z" fill="#FFFFFF"/>
-    <path d="M478 540H546V654H598L512 788L426 654H478V540Z" fill="#FFFFFF" opacity="0.82"/>
+  <g transform="translate(54, 54) scale(0.081) translate(-512, -512)">
+    <path d="M440 208H584L832 800H688L512 376L336 800H192L440 208Z" fill="#FFFFFF"/>
+    <path d="M512 488L560 536L512 584L464 536Z" fill="#FFFFFF"/>
+    <path d="M478 611H546V691H605L512 816L419 691H478V611Z" fill="#FFFFFF" opacity="0.82"/>
   </g>`;
 
 // 4. Legacy Launcher Icons (Square/Squircle & Round)
-// Rendered on 18..90 viewport (72dp canvas), with the PC icon's border stroke and rounded corners
 const legacySquare = `
   <defs>
     <clipPath id="squircle">
@@ -61,7 +58,7 @@ const legacySquare = `
   <g clip-path="url(#squircle)">
     ${background}
     ${foreground}
-    <rect x="18.5" y="18.5" width="71" height="71" rx="16.5" stroke="#283448" stroke-width="1" fill="none"/>
+    <rect x="18.5" y="18.5" width="71" height="71" rx="16.5" stroke="#E02447" stroke-opacity="0.35" stroke-width="1" fill="none"/>
   </g>`;
 
 const legacyRound = `
@@ -73,7 +70,7 @@ const legacyRound = `
   <g clip-path="url(#circle)">
     ${background}
     ${foreground}
-    <circle cx="54" cy="54" r="35.5" stroke="#283448" stroke-width="1" fill="none"/>
+    <circle cx="54" cy="54" r="35.5" stroke="#E02447" stroke-opacity="0.35" stroke-width="1" fill="none"/>
   </g>`;
 
 const adaptive = `<?xml version="1.0" encoding="utf-8"?>

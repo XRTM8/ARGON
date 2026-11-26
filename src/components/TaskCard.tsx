@@ -170,7 +170,7 @@ export function TaskCard({
           <div className="download-source">
             <span dir="ltr">{downloadHost(task.originalUrl || task.url)}</span>
             {(task.torrentInfo || task.category === 'torrents') && (
-              <span className="queue-pill" style={{ borderColor: 'rgba(234, 179, 8, 0.4)', color: '#FACC15' }}>
+              <span className="queue-pill is-torrent">
                 <Magnet size={10} style={{ display: 'inline', verticalAlign: 'middle', marginInlineEnd: 3 }} />
                 Torrent
               </span>
@@ -179,11 +179,7 @@ export function TaskCard({
             {queueLabel && <span className="queue-pill">{queueLabel}</span>}
             {task.status === 'queued' && (task.queuePriority ?? 0) !== 0 && (
               <span
-                className="queue-pill"
-                style={{
-                  borderColor: (task.queuePriority ?? 0) > 0 ? 'rgba(59, 130, 246, 0.4)' : 'rgba(156, 163, 175, 0.4)',
-                  color: (task.queuePriority ?? 0) > 0 ? '#60A5FA' : '#9CA3AF',
-                }}
+                className={`queue-pill ${(task.queuePriority ?? 0) > 0 ? 'is-priority-high' : 'is-priority-low'}`}
                 title={ar ? `أولوية الطابور: ${task.queuePriority}` : `Queue priority: ${task.queuePriority}`}
               >
                 {(task.queuePriority ?? 0) > 0 ? '↑ ' : '↓ '}

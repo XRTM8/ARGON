@@ -8,7 +8,7 @@ import { ArgonMark } from './ArgonMark';
 import type { DownloadStats } from '../types/downloader';
 
 export type MainViewTab = 'downloads' | 'sharing' | 'clipboard' | 'history' | 'browser' | 'settings';
-export const CURRENT_VERSION = '2.9.0';
+export const CURRENT_VERSION = '2.10.0';
 
 interface Props {
   lang: 'ar' | 'en';
@@ -63,8 +63,11 @@ export function Header({ lang, activeTab, onTabChange, stats, runtime }: Props) 
           <ArgonMark size={24} />
         </div>
         <div className="argon-brand-text">
-          <strong>{ar ? 'آرغون' : 'ARGON'}</strong>
-          <span>{ar ? 'مدير التنزيلات' : 'DOWNLOAD MANAGER'}</span>
+          <div className="argon-brand-title-row">
+            <strong>{ar ? 'آرغون' : 'ARGON'}</strong>
+            <span className="argon-version-pill" dir="ltr">v{CURRENT_VERSION}</span>
+          </div>
+          <span>{ar ? 'مدير التنزيلات السريع' : 'DOWNLOAD STUDIO'}</span>
         </div>
       </div>
 

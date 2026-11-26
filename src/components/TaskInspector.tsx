@@ -125,10 +125,10 @@ export function TaskInspector({ task, lang, onClose }: Props) {
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '76px minmax(0, 1fr)', gap: 8 }}>
               <dt style={{ color: 'var(--argon-subtle)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Magnet size={11} style={{ color: '#FACC15' }} />
+                <Magnet size={11} className="torrent-accent" />
                 BTIH
               </dt>
-              <dd style={{ margin: 0, fontFamily: 'monospace', overflowWrap: 'anywhere', color: '#FACC15' }} dir="ltr">
+              <dd className="torrent-accent" style={{ margin: 0, fontFamily: 'monospace', overflowWrap: 'anywhere' }} dir="ltr">
                 {task.torrentInfo.infoHash}
               </dd>
             </div>

@@ -61,7 +61,7 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     attachedWebView = webView
-    webView.setBackgroundColor(Color.parseColor("#0A0C10"))
+    webView.setBackgroundColor(Color.parseColor("#000000"))
     webView.addJavascriptInterface(ArgonNativeBridge(), "ArgonNative")
 
     ViewCompat.setOnApplyWindowInsetsListener(webView) { v, windowInsets ->
@@ -159,7 +159,7 @@ class MainActivity : TauriActivity() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.isAppearanceLightStatusBars = light
         controller.isAppearanceLightNavigationBars = light
-        val bg = if (light) "#F8FAFC" else "#0A0C10"
+        val bg = if (light) "#FFFFFF" else "#000000"
         attachedWebView?.setBackgroundColor(Color.parseColor(bg))
       }
     }

@@ -1,16 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <defs>
-    <linearGradient id="argon-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#151B27" />
-      <stop offset="100%" stop-color="#090C11" />
+    <linearGradient id="argon-athar-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#11050A" />
+      <stop offset="100%" stop-color="#070204" />
     </linearGradient>
-    <linearGradient id="argon-cobalt" x1="32" y1="33" x2="32" y2="49" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#60A5FA" />
-      <stop offset="100%" stop-color="#2563EB" />
+    <radialGradient id="argon-athar-halo" cx="50%" cy="46%" r="54%">
+      <stop offset="0%" stop-color="#9E1B42" stop-opacity="0.32" />
+      <stop offset="55%" stop-color="#72142B" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#070204" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="argon-athar-stroke" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E02447" stop-opacity="0.45" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.06" />
+    </linearGradient>
+    <linearGradient id="argon-athar-crimson" x1="32" y1="37" x2="32" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E02447" />
+      <stop offset="55%" stop-color="#9E1B42" />
+      <stop offset="100%" stop-color="#72142B" />
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="15" fill="url(#argon-bg)" />
-  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" stroke="#283448" stroke-width="1.5" />
-  <path d="M29 14.5H35L50.5 49H42.3L32 25.4L21.7 49H13.5L29 14.5Z" fill="#F8FAFC" />
-  <path d="M29.9 33.5H34.1V40.6H37.3L32 49L26.7 40.6H29.9V33.5Z" fill="url(#argon-cobalt)" />
+  <rect width="64" height="64" rx="16" fill="url(#argon-athar-bg)" />
+  <rect width="64" height="64" rx="16" fill="url(#argon-athar-halo)" />
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="15.25" stroke="url(#argon-athar-stroke)" stroke-width="1.25" />
+  <circle cx="32" cy="36" r="14" fill="#FF3366" fill-opacity="0.09" />
+  <path d="M27.5 13H36.5L52 50H43L32 23.5L21 50H12L27.5 13Z" fill="#F5F6F8" />
+  <path d="M32 23.5L36.5 13L52 50H43L32 23.5Z" fill="#000000" fill-opacity="0.12" />
+  <path d="M32 30.5L35 33.5L32 36.5L29 33.5Z" fill="#FFFFFF" />
+  <path d="M32 31.8L33.7 33.5L32 35.2L30.3 33.5Z" fill="#FFB3C1" />
+  <path d="M29.9 38.2H34.1V43.2H37.8L32 51L26.2 43.2H29.9V38.2Z" fill="url(#argon-athar-crimson)" />
+  <path d="M32 38.2H34.1V43.2H37.8L32 51V38.2Z" fill="#72142B" fill-opacity="0.45" />
 </svg>

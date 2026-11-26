@@ -1,16 +1,16 @@
-/* Quick Add / Intake Console */
+/* Quick Add / Intake Console (Hero Card Pattern from DESIGN) */
 .quick-add {
-  padding: 16px 18px 14px;
-  border: 1px solid var(--argon-border);
-  border-radius: var(--argon-radius);
-  background: var(--argon-panel);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 18px 20px 16px;
+  border: 1px solid var(--argon-hero-border);
+  border-radius: var(--argon-radius-lg);
+  background: var(--argon-hero-bg);
+  box-shadow: var(--argon-shadow);
   transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
 }
 .quick-add.drag-active {
-  border-color: var(--argon-accent);
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.12) 0%, rgba(59, 130, 246, 0.03) 100%);
-  box-shadow: 0 0 24px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-color: var(--argon-accent-hover);
+  background: linear-gradient(180deg, rgba(158, 27, 66, 0.22) 0%, rgba(158, 27, 66, 0.05) 100%);
+  box-shadow: 0 0 26px rgba(158, 27, 66, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 .quick-add-heading {
   display: flex;
@@ -25,14 +25,14 @@
   align-items: center;
   gap: 7px;
   color: var(--argon-bright);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 700;
 }
 .intake-mode-tabs {
   display: inline-flex;
   padding: 3px;
   border-radius: var(--argon-radius-sm);
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--argon-surface-recessed);
   border: 1px solid var(--argon-border);
   gap: 2px;
 }
@@ -41,7 +41,7 @@
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
-  border-radius: 5px;
+  border-radius: 7px;
   font-size: 11.5px;
   font-weight: 500;
   color: var(--argon-muted);
@@ -54,7 +54,7 @@
   background: var(--argon-surface);
   color: var(--argon-bright);
   border: 1px solid var(--argon-border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
 }
 
 .quick-add-row { display: flex; gap: 10px; align-items: stretch; }
@@ -72,12 +72,12 @@
   color: var(--argon-bright);
   border: 1px solid var(--argon-border);
   border-radius: var(--argon-radius-sm);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.24);
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .url-field textarea:focus, .url-field input:focus {
   border-color: var(--argon-accent);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 3px rgba(59, 130, 246, 0.18);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.24), 0 0 0 3px rgba(158, 27, 66, 0.22);
   outline: none;
 }
 .url-field > button { position: absolute; inset-inline-end: 5px; top: 5px; }
@@ -101,12 +101,22 @@
   border-radius: 9999px;
   background: var(--argon-accent-soft);
   border: 1px solid var(--argon-border-active);
-  color: var(--argon-accent);
+  color: var(--argon-accent-hover);
   font-size: 12px;
   font-weight: 600;
 }
+:root[data-theme="light"] .media-pill-btn {
+  color: var(--argon-accent);
+}
 .media-pill-btn:hover:not(:disabled) {
-  background: rgba(59, 130, 246, 0.22);
+  background: rgba(158, 27, 66, 0.24);
+}
+.media-pill-btn.is-torrent {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--argon-amber-text);
+  cursor: default;
+  padding-inline: 10px;
 }
 
 .media-probe-box {
@@ -562,13 +572,13 @@ input[type=checkbox] {
   contain: layout style paint;
 }
 .download-row:hover {
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--argon-surface);
 }
 .download-row.is-selected {
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(158, 27, 66, 0.14);
 }
 .download-row.is-inspected {
-  background: rgba(59, 130, 246, 0.07);
+  background: rgba(158, 27, 66, 0.08);
   box-shadow: inset 3px 0 0 var(--argon-accent);
 }
 :dir(rtl) .download-row.is-inspected {
@@ -641,13 +651,33 @@ input[type=checkbox] {
 }
 .queue-pill {
   padding: 2px 7px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.035);
+  border-radius: 6px;
+  background: var(--argon-chip-bg);
   border: 1px solid var(--argon-border);
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   font-family: monospace;
   color: var(--argon-muted);
+}
+.queue-pill.is-torrent {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.10);
+  color: var(--argon-amber-text);
+}
+.queue-pill.is-priority-high {
+  border-color: var(--argon-border-active);
+  background: var(--argon-accent-soft);
+  color: var(--argon-accent-hover);
+}
+:root[data-theme="light"] .queue-pill.is-priority-high {
+  color: var(--argon-accent);
+}
+.queue-pill.is-priority-low {
+  border-color: var(--argon-border-hover);
+  color: var(--argon-subtle);
+}
+.torrent-accent {
+  color: var(--argon-amber-text);
 }
 
 .download-transfer { display: grid; gap: 4px; min-width: 0; }
@@ -695,7 +725,7 @@ input[type=checkbox] {
 .row-actions { display: flex; justify-content: flex-end; gap: 3px; }
 .row-progress {
   height: 4px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--argon-chip-bg);
   margin-inline: 80px 16px;
   border-radius: 9999px;
   overflow: hidden;
@@ -705,15 +735,15 @@ input[type=checkbox] {
   width: 100%;
   height: 100%;
   border-radius: 9999px;
-  background: linear-gradient(90deg, #2563EB 0%, #3B82F6 50%, #60A5FA 100%);
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+  background: linear-gradient(90deg, #72142B 0%, #9E1B42 55%, #E02447 100%);
+  box-shadow: 0 0 10px rgba(224, 36, 71, 0.45);
   transform-origin: left center;
   will-change: transform;
   transition: transform .12s linear;
 }
 :dir(rtl) .row-progress > span {
   transform-origin: right center;
-  background: linear-gradient(-90deg, #2563EB 0%, #3B82F6 50%, #60A5FA 100%);
+  background: linear-gradient(-90deg, #72142B 0%, #9E1B42 55%, #E02447 100%);
 }
 .download-row[data-status=paused] .row-progress > span {
   background: linear-gradient(90deg, #D97706 0%, #F59E0B 100%);
