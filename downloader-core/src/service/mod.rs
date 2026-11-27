@@ -11,7 +11,7 @@ use crate::{
     model::*,
     resolver::{calculate_segments, deduplicate_filename, resolve_universal_link, sanitize_filename},
     throttle::ThrottleController,
-    transfer::{build_http_client, TelemetryTracker},
+    transfer::TelemetryTracker,
 };
 use reqwest::Client;
 use std::{
@@ -156,7 +156,10 @@ impl DownloaderService {
             }
         }
 
-        let http_client = build_http_client()?;
+        let http_client = crate::transfer::build_http_client_with_proxy(
+            &settings.proxy_mode,
+            settings.proxy_url.as_deref(),
+        )?;
         let throttle = ThrottleController::default();
         throttle.set_global_limit(settings.global_speed_limit_bytes);
 

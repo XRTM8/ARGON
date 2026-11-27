@@ -442,7 +442,26 @@ async fn zip_peek_extract(
     custom_headers: Option<HashMap<String, String>>,
 ) -> Result<u64, String> {
     let svc = ensure_downloader(&app).await?;
-    let dest = std::path::PathBuf::from(dest_path);
+    let raw_dest = std::path::PathBuf::from(&dest_path);
+    let leaf = raw_dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(argon_downloader_core::resolver::sanitize_filename)
+        .unwrap_or_else(|| format!("extracted_{}.bin", entry.index));
+    let base_dir = {
+        let dir = svc.settings().await.default_directory;
+        if dir.trim().is_empty() {
+            app.path()
+                .download_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+        } else {
+            std::path::PathBuf::from(dir)
+        }
+    };
+    let dest = base_dir.join(leaf);
+    if argon_downloader_core::disk::is_forbidden_system_path(&dest) {
+        return Err("Refusing to write into a protected system path".into());
+    }
     argon_downloader_core::zip_peek::extract_remote_zip_entry(
         svc.http_client(),
         &url,

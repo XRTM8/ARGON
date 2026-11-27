@@ -17,6 +17,7 @@ const CENTRAL_LEN: usize = 46;
 const LOCAL_LEN: usize = 30;
 const TAIL_LEN: u64 = (END_LEN + 0xFFFF + LOCATOR_LEN + ZIP64_END_LEN) as u64;
 const MAX_DIRECTORY: u64 = 16 * 1024 * 1024;
+const MAX_EXTRACT_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -223,6 +224,9 @@ pub async fn extract_remote_zip_entry(
     if !entry.extractable {
         return Err("Entry is encrypted or uses an unsupported compression method".into());
     }
+    if entry.compressed_size > MAX_EXTRACT_BYTES || entry.size > MAX_EXTRACT_BYTES {
+        return Err("Single-file ZIP extraction is limited to 128 MiB; download the full archive instead".into());
+    }
     let local_hdr = fetch_range(
         client,
         url,
@@ -269,8 +273,15 @@ pub async fn extract_remote_zip_entry(
                 Ok(payload.len() as u64)
             }
             8 => {
-                let mut decoder = DeflateDecoder::new(&payload[..]);
-                let copied = std::io::copy(&mut decoder, &mut out_file).map_err(|e| e.to_string())?;
+                use std::io::Read;
+                let decoder = DeflateDecoder::new(&payload[..]);
+                let mut bounded = decoder.take(MAX_EXTRACT_BYTES + 1);
+                let copied = std::io::copy(&mut bounded, &mut out_file).map_err(|e| e.to_string())?;
+                if copied > MAX_EXTRACT_BYTES {
+                    drop(out_file);
+                    let _ = std::fs::remove_file(&dest);
+                    return Err("Decompressed ZIP entry exceeded 128 MiB safety limit".into());
+                }
                 Ok(copied)
             }
             _ => Err("Unsupported ZIP compression method".into()),
