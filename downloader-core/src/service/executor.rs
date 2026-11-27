@@ -123,7 +123,7 @@ impl DownloaderService {
             }
             #[cfg(target_os = "android")]
             {
-                let reason = debrid_failure.unwrap_or_else(|| {
+                let reason = _debrid_failure.unwrap_or_else(|| {
                     "تنزيل روابط التورنت على Android يتطلب تفعيل خدمة Real-Debrid وإدخال مفتاح API في الإعدادات".to_string()
                 });
                 return Err(format!("تعذر تنزيل التورنت: {reason}"));
